@@ -1,0 +1,67 @@
+/* Standalone editor page chrome (src/editor/index.tsx). The page runs without
+   the shell, so the --dsw-alias-* tokens are undefined: the settings styles
+   fall back to their built-in light values, and the media query below flips
+   the same token names to dark values under prefers-color-scheme: dark. */
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--dsw-alias-bg-base, #f3f4f6);
+  color: var(--dsw-alias-label-primary, #1f2335);
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.headerMain {
+  min-width: 0;
+}
+
+/* Portal host for the settings' SaveIndicator (see src/editor/index.tsx). */
+.saveSlot {
+  flex: none;
+  padding-top: 5px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Token overrides only — every component keeps reading the same names. */
+    --dsw-alias-label-primary: #c8d0e0;
+    --dsw-alias-label-secondary: #8b93a7;
+    --dsw-alias-bg-base: #14161f;
+    --dsw-alias-bg-layer-1: #1b1e2a;
+    --dsw-alias-bg-layer-2: #222534;
+    --dsw-alias-border-l1: #2e3245;
+    --dsw-alias-border-l2: #3a3e52;
+    --dsw-alias-interactive-bg-hover: #262a3a;
+    --dsw-alias-brand-primary: #7aa2f7;
+    --dsw-alias-state-success-primary: #9ece6a;
+    --dsw-alias-state-warn-primary: #e0af68;
+    --dsw-alias-state-error-primary: #f7768e;
+  }
+}

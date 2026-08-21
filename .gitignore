@@ -1,0 +1,5 @@
+node_modules/
+lib/
+preview/preview.js
+preview/preview.js.map
+*.tsbuildinfo

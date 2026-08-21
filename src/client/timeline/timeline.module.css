@@ -1,0 +1,217 @@
+/* Visual timeline editor (V1.1 P1). Same token strategy as
+   settings.module.css: --dsw-alias-* design tokens with hex fallbacks so the
+   standalone Preview (no shell) stays visually unchanged. */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 2px;
+  /* label column width; the event overlay offsets itself by the same amount */
+  --mp-timeline-label-w: 120px;
+}
+
+.timelineToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timelineHint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+.timelineLanes {
+  position: relative;
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+}
+
+.timelineRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trackLabel {
+  width: var(--mp-timeline-label-w);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.trackProperty {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trackDelete {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.trackDelete:hover {
+  color: var(--dsw-alias-state-error-primary, #dc2626);
+}
+
+/* --- ruler --- */
+
+.ruler {
+  position: relative;
+  flex: 1;
+  height: 18px;
+}
+
+.rulerTick {
+  position: absolute;
+  top: 0;
+  padding-top: 5px;
+  font-size: 9px;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+  transform: translateX(-50%);
+}
+
+.rulerTick::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 4px;
+  border-left: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+}
+
+.rulerTick:first-child {
+  transform: none;
+}
+
+.rulerTick:first-child::before {
+  left: 0;
+}
+
+.rulerTick:last-child {
+  transform: translateX(-100%);
+}
+
+.rulerTick:last-child::before {
+  left: calc(100% - 1px);
+}
+
+/* --- keyframe lanes --- */
+
+.lane {
+  position: relative;
+  flex: 1;
+  height: 28px;
+  margin: 2px 0;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  cursor: crosshair;
+}
+
+.keyframe {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-brand-primary, #6366f1);
+  border-radius: 2px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: grab;
+}
+
+.keyframe:hover {
+  background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+}
+
+.keyframeSelected,
+.keyframeSelected:hover {
+  background: var(--dsw-alias-brand-primary, #6366f1);
+  outline: 2px solid var(--dsw-alias-brand-primary, #6366f1);
+  outline-offset: 1px;
+}
+
+/* --- event markers (full-height lines over all lanes) --- */
+
+.eventOverlay {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  /* lane left edge = lanes padding (8) + label width + row gap (8) */
+  left: calc(var(--mp-timeline-label-w) + 16px);
+  right: 8px;
+  pointer-events: none; /* lane clicks pass through; the icons re-enable */
+}
+
+.eventMarker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--dsw-alias-brand-primary, #6366f1);
+}
+
+.eventIcon {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  border: 1px solid var(--dsw-alias-brand-primary, #6366f1);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 3px;
+  cursor: grab;
+}
+
+.eventIconSelected,
+.eventIconSelected:hover {
+  background: var(--dsw-alias-brand-primary, #6366f1);
+  color: var(--dsw-alias-bg-layer-2, #ffffff);
+}
+
+/* --- inspector --- */
+
+.inspector {
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+}
+
+.inspectorTitle {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-primary, #374151);
+}
+
+.bezierGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 12px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+  margin: 2px 0;
+}

@@ -1,0 +1,457 @@
+# Implementation Notes
+
+> 本文档按里程碑持续追加，记录「规格假设 ↔ 当前 DSH 实际 API」的核实结果与差异。
+
+## M0 — DSH API Spike（2026-08-19）
+
+### 0. 环境基线（已实测）
+
+| 项 | 值 |
+| --- | --- |
+| DSH 版本 | `@deepseek-ai/dsh@0.1.0-rc.7`（`dsh --version` 实测） |
+| 安装位置 | 全局 npm：`D:\Nodejs\node_global\node_modules\@deepseek-ai\dsh` |
+| 官方包源码 | `D:\Nodejs\node_global\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\`（下文 `<official>`） |
+| `$DSH_HOME` | 未设环境变量，走默认 `C:\Users\Traveritas\.dsh`（`dsh-home-paths`：`configured > $DSH_HOME > ~/.dsh`） |
+| web profile | `%USERPROFILE%\.dsh\profiles\web\`（package.json + cordis.patch.yml + pnpm-lock.yaml） |
+| 默认监听 | `127.0.0.1:3080`（`dsh-web-app/cordis.patch.yml`，`port: !!js ctx.webStartup.port ?? 3080`） |
+| 参照插件 | `@linxin666/dsh-pet@0.2.0`、`dsh-better-sidebar@0.13.0`（均已在本机 web profile 实际运行，npm 包含完整 TS `src/`） |
+
+核实方法：读官方包编译产物 + `.d.ts` 类型定义，与两个可运行社区插件的实际实现交叉验证。**未做真机 install/boot 冒烟**（见 §7 未决项）。
+
+### 1. 插件包形态与安装（host 半加载机制）
+
+- 插件 = npm 包。`dsh plugin --profile web add <pkg>` 本质是在 profile 目录转发 `pnpm add`，随后 `reconcilePlugins` 扫描依赖，凡 package.json 声明了 `dsh.bundle.patch` 的包自动追加进 `dsh.profile.bundles`（`dsh/lib/plugin-9h8shc4d.js:46-127`）。
+- 插件包最小声明：
+
+```json
+{
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+    "./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime"] }
+  }
+}
+```
+
+- `cordis.patch.yml` 内容即一行 insert（dsh-pet / dsh-better-sidebar 完全一致）：
+
+```yaml
+- insert:
+    - id: motion-pet
+      name: 'dsh-motion-pet'
+      # config: {}  # 可选，原样传给 apply 第二参
+```
+
+- Entry 字段（`cordis-plugin-loader/src/config/entry.ts:9-22`）：`id`（树内稳定锚）、`name`（模块 specifier）、`config?`、`group?`、`disabled?`、`inject?`。`config`/`disabled` 支持 `!!js` 表达式（作用域含 `ctx`、`dshHomePath`）。
+- Patch 层叠顺序：profile 根 `cordis.yml`（空）← 各 bundle 的 `dsh.bundle.patch` ← profile `cordis.patch.yml` ← `$DSH_HOME/cordis.patch.yml` ← `--patch`。**patch 的 `config:` 是逐 key 整体替换，不是深合并** → 可变性放 `$DSH_HOME/motion-pet/config.json`，不要靠 entry config。
+- profile / home 两层 patch 文件被 watch，改动热重放，不必重启；但 `dsh plugin add` 改的是 bundles 列表，需下次 boot 生效。
+- 模块解析 baseUrl = profile 目录；裸包名还可经 `$DSH_HOME/profiles/node_modules` 平铺 symlink 兜底解析（官方安装闭包每包都有 symlink，已实测含 `dsh-home-paths`/`dsh-atomic-write` 等）→ **运行时 import 官方包可行， devDependencies 装类型即可**（dsh-pet 即此模式）。
+- `./invariant` export：monorepo 开发期诊断机制，rc.7 发布组合无任何 patch 挂载它 → **V1 不做**。
+- 社区惯例 `mountOnce`（`Symbol.for` 全局注册表防 bundle+独立安装双挂）：实现成本低，建议照做（dsh-pet `src/mount-once.ts:37-48`）。
+
+### 2. Host 半 API（cordis v4 + webserver）
+
+- Cordis 插件三形态（`cordis/lib/types/registry.d.ts:48`）：函数 / 构造器 / 对象 `{ apply(ctx, config) }`；静态元数据 `name` / `Config`（Standard Schema，可选）/ `inject` / `provide`。
+- `inject` 声明的服务全部就位前插件纤维停在 PENDING（`cordis/lib/types/fiber.d.ts:60-74`）。
+- **`apply` 的返回值即 disposer**（Effect：单个 / Promise / iterable 均可），纤维卸载时逆序执行；细粒度用 `ctx.effect(execute, label?)`。
+- `ctx.on(name, listener)` 返回 disposer，随纤维自动清理。
+- Service 基类：`class X extends Service`，`constructor(ctx, name)` 即注册为 `ctx.<name>`。
+- **WebServer 服务**（`dsh-host-webserver/lib/types/index.d.ts`）：
+
+```ts
+type WebRouteKind = 'exact' | 'prefix'   // prefix p 匹配 p 与 p/<anything>
+interface WebRoute { kind; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }
+ctx.webServer.register(route): () => void        // 重复 (kind,path) 抛错
+ctx.webServer.registerUpgrade(route): () => void // WebSocket 升级（状态推送备选通道）
+ctx.webServer.registerFallback(handler)          // 唯一席位，已被 frontend-static 占用，不可用
+ctx.webServer.tapIndex(transform)                // index.html 变换
+```
+
+  - 匹配顺序：**exact 全表 → 最长 prefix → fallback**。**没有 method 便捷方法 / 中间件 / body 解析**，全部自理（dsh-pet `src/routes.ts` 是模板：`getRoute`/`postRoute` 包装 :90-123，64KB 上限 `readJsonBody` :61-87，资产 prefix route + 白名单解析 + MIME 表 :141-278）。
+  - **无 TLS / auth / origin policy**（README 明示）。`/api` prefix 被 connection gateway 占用，但 exact 优先 → `/api/motion-pet/*` 用逐条 exact 注册安全；`/motion-pet-assets/*` 用一条 prefix。
+- 持久化官方包（healed fallback 可解析）：
+  - `@deepseek-ai/dsh-home-paths`：`dshHomePath(...segments)`、`resolveDshHome()`。
+  - `@deepseek-ai/dsh-atomic-write`：`writeFileAtomic(file, content, {mode})`（wx 临时文件 + rename；**不含 fsync**，规格要求 temp+fsync+rename → 需自补 fsync）、`withFileLock(file, op)`。
+- 官方设置面板集成（`dsh-settings` + schemastery schema → `$DSH_HOME/settings.yaml` 热重载）：**V1 不接**，按规格走自有 `/api/motion-pet/config`；V1.x 如需再补 `installSettingsSection`。
+
+### 3. Client 半 API
+
+- **入口约定**：浏览器执行的是预构建 `lib/client.js`，模块导出整体作为 cordis object plugin 应用：
+
+```ts
+export const inject = ['slots', 'locale', 'sessions'] // 服务名（非包名），就位后才执行 apply
+export function apply(ctx: Context): void | (() => void) { ... }
+```
+
+- **模块格式**（`dsh-client-modules/lib/types/client/manifest.d.ts:100-110`）：bundle 必须是
+
+```js
+window.__ModuleLoader__.load({ id: '<包名>', factory: (require) => { /* CJS 风格 body，return module.exports */ } })
+```
+
+  host 以 `/plugins/<id>/client.js?rev=<hash>` 伺服 `exports["./client"]` 指向的文件，entry graph 经 `window.__DSH_BOOT__` 注入。`require(...)` 只能命中 shell 静态模块表：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`dsh-client-ui-slots`、`dsh-client-web-react`、`dsh-client-ui-primitives`、`dsh-client-ui-attachment`、`dsh-client-schema-form`（`dsh-client-web/lib/index.js:165-176`）。**React 18.2，全插件共享 shell 实例** → peerDependencies `react ^18.2.0`，绝不打包 react。
+- **`dsh.client.inject`（包名列表）在 rc.7 是信息性元数据**（preflight 展示 / HMR diffing），真正激活排序靠模块导出的服务级 `inject`（manifest.d.ts:41-56）。两者都写。
+- **Slot 系统**（`dsh-client-ui-slots/lib/types/index.d.ts`）：
+
+```ts
+ctx.slots.register(options, component): () => void
+// options = { name, children?, store?, locale?, registrant? } + 按 kind：
+//   single → { priority? }
+//   list   → { id, order?, label?, priority? }
+//   keyed  → { key, priority? }
+//   chain  → { select, priority? }
+ctx.slots.inject(name, cb)  // 等 slot 被声明后再注册（slot 是运行时 "declaring is claiming"，必须用这个模式）
+```
+
+- **规格 §5.2 验证结果：`shell.overlay` 存在且无人占用**。`dsh-client-ui-layout/lib/types/client/index.d.ts:77`：`{ kind: 'list'; scope: 'root' }`，官方文档原文 "Frame-wide floating layer… click-through — entries opt back into pointer events… additive seat for a frame-wide surface of your own"。AppFrame 无条件渲染（`dsh-client-ui-layout/lib/client.js:234-238`，容器 `position:absolute;inset:0;z-index:20;pointer-events:none`）。**用 `ctx.slots.inject('shell.overlay', …)` + `register({ name:'shell.overlay', id, order, label }, Component)`，组件根节点自开 `pointer-events:auto`。** 不照抄 dsh-pet 的 createRoot（其注释自述是 rc.6 时代 workaround，rc.7 已过时）；走 slot 还能获得错误边界与纤维生命周期清理。
+- **设置挂点：`settings.section`**（list/root）确认存在，组件收 owner props `{ close() }`；dsh-pet 设置卡片即此模式（`src/client/index.ts:119-132`）。
+- Slot 组件框架注入 props：root scope 拿 `useSessions`/`useWorkspaces`；session scope 另拿 `useSession`/`sessionId`/`useProjection`（`dsh-client-runtime/.../client/index.d.ts:70-90`）。
+- Client 可 inject 的官方服务：`slots`、`sessions`、`workspaces`、`locale`、`settingsScope`、`remote`、`connection`、`theme`、`layout`、`modules`。
+- Store：`defineStore({ init, actions })`（`@deepseek-ai/dsh-client-runtime/client`，immer draft）→ slot 注册 `store:` 座位（按 scope 建实例）或 apply 内手动 `.create()` 单例（dsh-pet 模式，host-global 状态适用）。组件用 `useSyncExternalStore` 读。
+- **CSS Modules 零配置**：官方 tsdown client 构建把 `.module.css` 编译为哈希类名映射 + 物化时注入 `<style data-plugin-css>`，HMR 卸载自动清理。写法即 `import styles from './x.module.css'`。
+
+### 4. 状态源（agent 活动 → 宠物状态）
+
+**规格 §13.2 假设的六个事件名全部真实存在**：`session/event` ✓、`agent/status` ✓、`assistant/chunk` ✓、`tool/call` ✓、`approval/asked` ✓、`turn/end` ✓。注意前两者是 host 侧 cordis 事件名；浏览器线帧对应名是 `host/session-status`、`approval/requested`（integration 层命名按订阅侧区分）。
+
+- **Host 半订阅**（任意插件可用，dsh-pet 已验证）：
+  - `ctx.on('session/event', (session: Session, event: SessionEvent) => …)`（`dsh-session/lib/types/index.d.ts:66`）。事件词汇表 42 型（`dsh-session/lib/types/known-event-types.js`），关键的：`turn/start`、`turn/end { reason.kind: completed|aborted|blocked|error|max-tokens|interrupted }`、`step/start|end`、`assistant/chunk { chunk: StreamChunk }`（`reasoning-delta`/`text-delta`/`tool-call-delta`/…，`dsh-llm` types）、`assistant/message`、`tool/call { name, arguments }`、`tool/result`、`approval/asked|decided`（merge，`dsh-user-approval`）、`command/run|done`（merge，`dsh-commands`）、`llm/retry`（merge）。
+  - `ctx.on('agent/status', ({ agent, status: 'idle'|'running' }) => …)`（`dsh-agent/lib/types/runtime-types.d.ts:169`）；`agent/error`（:316）。
+  - 事件天然带 `session.id` 归属；host 不知道「用户正在看哪个会话」。
+- **Client 半**：两条下行 WebSocket（`/api/events.mux`、`/api/events.host`）**被 client runtime 独占，插件不能直接消费**。官方姿态是快照订阅：
+  - `ctx.sessions.list: ObservableSnapshot<SessionListState>` — `current`（当前查看会话）、每会话 `running`、`pendingInteraction?: 'approval'|'plan-review'|'question'`。
+  - 每会话 `ConversationSnapshot`（`dsh-client-runtime/.../client/sessions/conversation.d.ts:367-417`）：`running`、`partial: PartialAssistant|null`（生成中）、`runningCalls: RunningToolCall[]`（工具名）、`pending: PendingInteraction[]`（kind: approval/question）、`lastAgentError`。
+- **dsh-pet 模式**：host 半 `session/event` 全量订阅 + 每会话状态机投影（`src/event-projection.ts:71-163`，纯函数：`reasoning-delta`→thinking、`text-delta`→review、`tool/call`→tool、`turn/end` 按 reason 分派），聚合成快照，client 每 2s 轮询 `GET /api/pet/state`（hidden 停轮询、latest-wins seq 防乱序）。
+- **对本项目的路线选择**（规格数据流 `DSH → DshStateAdapter → NormalizedAgentEvent → …` 不变，变的只是 adapter 驻留侧）：
+  - **路线 A（host adapter）**：host 订阅 `session/event`+`agent/status` → 归一化 → 经自建通道给 client。通道候选：短间隔轮询（dsh-pet 已验证，2s 对动画太慢，需 300~500ms）、`webServer.registerUpgrade` WebSocket 推送、`connection.rpc`。保真度最高（有 `reasoning-delta` 粒度）。
+  - **路线 B（纯 client snapshot）**：inject `sessions`，订阅 `ConversationSnapshot`。零 host 代码、全官方、实时推送；但拿不到 reasoning/text 的 chunk 级区分，`partial` 只表示「生成中」。
+  - **暂倾向 A**（规格的 `NormalizedAgentEvent` 含 `thinking`，需要 reasoning 粒度；且所有 DSH 事件知识天然收拢在 host 侧 adapter，client 只面对自有协议）。M4 开工前先查 `PartialAssistant` 是否暴露 reasoning block 信息，若暴露则 B 也值得重新评估。通道选择（poll vs WS vs RPC）M4 定。
+- 工具名 → ActivityMode 归类表需 M4 实测（`tool/call.name`；`ask_user_question` 工具 = 提问 → waiting）。
+
+### 5. 构建与工具链（社区已验证组合）
+
+| 项 | 值（dsh-pet 实测组合） |
+| --- | --- |
+| 构建 | `tsc -b && tsdown`（`tsdown ^0.22.2`，rolldown 系） |
+| 语言 | `typescript ^6.0.3` |
+| 测试 | `vitest ^4.1.8` + `jsdom`（@testing-library/react 可选） |
+| CSS | CSS Modules + `lightningcss`（tsdown 自动处理注入） |
+| React | peerDep `^18.2.0`（external，共享 shell 实例） |
+| 类型依赖 | devDeps 装 `@deepseek-ai/cordis ^4.0.1`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-client-runtime`、`@deepseek-ai/dsh-client-ui-slots` 等同版本官方包 |
+
+### 6. 与规格的偏差 / 修正清单
+
+1. `shell.overlay` 确认存在（规格 §5.2 的待验证项**通过**）；rc.7 起应优先于社区 createRoot 模式。
+2. `ctx.slots.register(options, Component)` 签名确认；**必须配 `ctx.slots.inject(name, cb)` 使用**（slot 运行时声明，加载顺序不保证）。
+3. 事件名核对全部通过；但 browser wire 帧名不同（`approval/requested`、`host/session-status`），integration 层按订阅侧命名。
+4. **client 半没有逐条事件订阅 API**（WS 被 runtime 独占）——规格 §13.2「优先检查 client runtime 事件」的结论：官方路径是 snapshot；逐条事件只能 host 半 `ctx.on('session/event')`。→ 路线选择见 §4。
+5. `dsh.client.inject` 在 rc.7 是信息性元数据，服务依赖以模块导出 `inject`（服务名）为准。
+6. webServer 是裸 node http：method 判断、JSON body（带大小上限）、MIME 表、防 `..` 全部自己实现（照 dsh-pet `routes.ts` 模板）。
+7. `writeFileAtomic` 不含 fsync → `host/storage.ts` 在原子写外自补 fsync 以满足规格 §20。
+8. `/api` prefix 被 gateway 占用 → `/api/motion-pet/*` 必须逐条 exact 注册。
+9. `./invariant` export、schemastery 设置面板：V1 均不做（前者 rc.7 无人消费，后者与规格自有 config API 重复）。
+
+### 7. 未决项（转入后续里程碑）
+
+- [x] **tsdown client 产物格式配置**（已于 M0 补核）：官方 preset 在 monorepo `packages/client/tsdown.client.ts`（master 分支已取得），社区等价物 `zhu1090093659/dsh-web-ui` 的 `shared/tsdown.client.ts`。核心做法：client bundle 用 `format:'cjs'` + `platform:'browser'`，`outputOptions.banner/footer/intro` 包出 `__ModuleLoader__.load({id, factory})` 外壳；externals = `PLATFORM_MODULES`（react、react-dom、@deepseek-ai/cordis、dsh-client-ui-slots、dsh-client-web-react、dsh-client-ui-primitives、dsh-client-schema-form 等）+ `@deepseek-ai/dsh-client-runtime/client` 豁免项，其余一律 `noExternal` 内联；`define` 三个 NODE_ENV/env 键；CSS Modules 用 lightningcss 插件编译 + 运行时注入 `<style data-plugin-css>`。本仓库 M1 脚手架将内联一份简化版（单包，无需 monorepo 的 face/phase 机制）。M1 仍需真机构建 + 加载验证。
+- [ ] `PartialAssistant` 是否暴露 reasoning block（决定路线 A/B，M4）。
+- [ ] 状态推送通道：poll / WS（`registerUpgrade`）/ RPC 三选一（M4）。
+- [x] 真机冒烟（2026-08-19 已完成）：`dsh plugin --profile web add link:D:/Documents/JustAnotherPetPlugin/dsh-motion-pet` 成功（reconcile 自动把 `dsh-motion-pet` 追加进 profile bundles）。`dsh web` 启动无插件错误；`GET /api/motion-pet/config` 返回 smoke JSON（host 半加载 ✓、webServer exact route ✓）；`/plugins/dsh-motion-pet/client.js?rev=…` 正确伺服 `__ModuleLoader__.load` 包装产物（client 半加载 ✓）；index.html 的 `__DSH_BOOT__` 含本插件行 ✓。shell.overlay / settings.section 两个 Surface 的注册代码已随 bundle 送达，浏览器端渲染待用户目视确认。
+- [ ] 工具名 → ActivityMode 归类实测表（M4）。
+
+## M1 — Core + Timeline Engine（2026-08-19）
+
+### 落地内容
+
+- 仓库脚手架：`tsc -b && tsdown` 构建（lib 宿主 ESM / lib/client.js 浏览器工厂包 / preview/preview.js 自包含 IIFE）、`vitest run` 测试、`tsconfig.json` + `tsconfig.test.json` 双工程。tsdown 0.22 已迁移到 `deps.neverBundle/alwaysBundle` 新 API（官方 preset 的 `external/noExternal` 写法在 0.22 已弃用）。
+- `src/core/`：types / defaults / pose-resolver / state-machine / pet-state-resolver（§15 稳定器：60ms coalescing、同状态去重、active 内 activity 只刷 ambient、success/error transient）/ transition-presets（8 个内置 transition 全部为 AnimationDefinition 数据）/ ambient-presets（bounce/sway/breathe 模板 + config 映射）。
+- `src/motion/`：motion-properties（§8.2 白名单，WAAPI 映射定案为 CSS individual transform properties：scale/translate/rotate/opacity 分层合成）/ animation-definition（手写校验器）/ animation-registry（builtin:* 保护）/ timeline-compiler（事件点预切 segments、切点 easing 感知插值、段内 offset 重归一化、reduced-motion 坍缩编译）/ timeline-scheduler（段间 `await finished` 触发事件、取消走 AbortError 路径、loop/alternate 无事件时单条 Infinity WAAPI、random-interval delay-first + 可暂停 timer）/ timeline-engine / animation-handle / transition-engine（generation 守卫：被中断不得换 pose、不得报完成）/ ambient-engine（按 channel diff 重启）/ motion-director（§24 接口 + `play(definitionId)` 零分支验收口）/ motion-stage（与 renderer 的契约）。
+- `src/client/`：pet-stage.ts（PetStage：§3.4 八层 DOM、anchor 对齐数学 `computeAnchorLayout`、preload、user-scale、视口 clamp）/ PetRenderer.tsx（薄 React 封装）/ manual-state-source.ts（Preview 控制器，走真实 PetStateResolver）/ preview-session.ts（胶水层）。
+- 独立 Preview：`preview/index.html`（file:// 双击可开，IIFE 自包含）。六状态按钮全链路、transition/ambient 实时调参、replay、anchor 标记、reduced-motion 开关、自定义 AnimationDefinition 贴入即 `register + play`。
+- `docs/motion-format.md`：AnimationDefinition 用户格式文档。
+
+### 验证
+
+- `pnpm vitest run`：14 文件 / **123 用例全绿**（§29.0/§29.1 全项 + §29.3 renderer 级 + §29.4 集成流程）。
+- `pnpm run typecheck` 零错误；`pnpm run build` 三产物通过；preview 产物经 jsdom + 假 WAAPI 冒烟。
+- 规格 §36 硬性判据成立（测试锁定）：`registry.register(customDefinition)` → `motionDirector.play(id)` 无需任何专用分支。
+
+### 实现期偏差记录（规格未给数值，已在代码注释标注）
+
+1. working bounce duration 取 360ms（§11.2 未给）；success/error ambient 具体化为 breathe 0.1/3000ms 与 sway 0.6deg/5200ms + breathe 0.12/3200ms（§11.5 只有定性描述）。
+2. jump 380ms（§9.5 未给）；snap 160ms（§9.6 区间内）；celebrate/deflate keyframe 表为自行设计（§9 无表）。
+3. §29.1「generation cancellation」用例放在 tests/motion/motion-director.test.ts（generation 是 TransitionEngine 概念，core 无此物）。
+4. events + alternate 组合按「正向重跑 pass」处理（规格只定义了无事件 alternate 与有事件 loop）。
+5. 主代理抽查后加固一处：scheduler 段循环改为先查 cancel 再触发事件（原先顺序在极端时序下可能多触发一次边界事件；引擎层 generation 守卫本就兜底，此为纵深防御）。
+
+### 转入后续里程碑的遗留
+
+- MotionDirector 暂无 pause/resume（§23 hidden 处理用 stop+refreshAmbient 组合，ambient 相位会重置）——M3 如需保相位暂停再加 API。
+- PetStage position 层 viewport-fixed 的假设，M3 接 shell.overlay 拖拽时复查。
+- M0 遗留仍有效：PartialAssistant reasoning 检查、状态推送通道三选一、工具名归类表（均 M4）。
+
+## M2 — Editor + 图片导入（2026-08-19）
+
+### 落地内容
+
+- **host 半**（`src/host/`）：config.ts（loadConfig 为唯一 migration 入口 + ConfigStore）、storage.ts（temp+fsync+rename 原子写，`withFileLock` 串行化）、validation.ts（repair/validate 双模式 walker，PUT 以当前 config 为 base 合并）、assets.ts（手写 PNG/WebP(VP8/VP8L/VP8X)/JPEG(SOF 扫描) 头解析；sha256 前 16 hex 为 asset id，天然去重；磁盘名 host 生成；10MB/60MB/4096² 上限；清单 assets.json 白名单解析）、routes.ts（裸 node http 上的手写 JSON/multipart 解析与错误协议）。
+- **HTTP API**（真机逐项验证）：GET/PUT `/api/motion-pet/config`（exact）、POST/DELETE `/api/motion-pet/assets[/<id>]`（一条 prefix 内部分发）、GET `/motion-pet-assets/<id>`（prefix，白名单 + 正确 Content-Type + nosniff）。409 `ASSET_IN_USE`、415 非法类型、413 超限、404 未知/穿越。
+- **client 半**：api.ts（类型化 fetch）、stores/editor-store.ts（纯 TS 订阅模式；updateConfig 立即改 draft + 300ms debounce PUT、在飞合并 latest-wins、saving/saved/error 状态机；换图走 §19.4 顺序：上传→persistNow→删旧，409 视为正常保留）、settings/ 六面板 + GlobalBar（三栏布局 ≤920px 转纵向，CSS Modules + prefers-color-scheme——**注：该布局后续历经两轮重构：M5 换 token 主题、2026-08-20 重排为「全局卡 + 三栏 + 高级与互动卡」并迁入独立编辑器页，见文末迭代记录**）、LivePreview 复用 PetRenderer/PreviewSession/ManualStateSource（PreviewSession 新增 updateConfig 热更新与空态补 boot）。`src/client/index.ts` 移除 M0 overlay 冒烟 div，注册真实设置页（settings.section，label 'Motion Pet'）。
+- 测试：22 文件 / **200 用例**全绿（§29.2 全项经真实 http server + node fetch 覆盖）。
+
+### 真机集成验证（dsh web 实际运行）
+
+默认 config GET ✓ / 上传 PNG（id、宽高解析正确）✓ / 资产字节级一致 ✓ / PUT 引用资产 ✓ / 引用中删除 409 ✓ / 解除引用后删除 200 → 静态 404 ✓ / SVG 415 ✓ / 路径穿越 404 ✓ / 落盘 `$DSH_HOME/motion-pet/{config.json,assets.json,assets/}` ✓ / **重启 dsh web 后配置保留** ✓。设置页 UI 渲染待用户目视。
+
+### 环境事故记录（与本插件无关，但值得知晓）
+
+- M2 首次 boot 失败：社区插件 skin-center 的 `ui-skin-maid-atelier` 符号链接（→ `dsh-skins/skins/maid-atelier`）失效。根因：`dsh plugin add` 会在 profile 目录重跑 pnpm install，**不在 package.json 依赖闭包里的手动安装内容会被 prune**（该 skin 是 skin-center 按需装入 node_modules 的）。下次 boot 时 skin-center 的 legacy bridge 把托管行从 cordis.patch.yml 全部剥离（文件变为 `[]`），第三次 boot 即恢复。**教训：profile 的 node_modules 是 pnpm 全权管理的，任何插件私自往里放东西都不可靠。**
+- 测试基础设施坑：Git Bash 里 `curl -F "file=@/tmp/x.png"` 的 `@/tmp` 不经 MSYS 路径转换（Windows curl 读不到），需 `$(cygpath -m …)`。
+
+### 实现期偏差记录
+
+1. PUT 合并语义：缺失字段以当前 config 补齐；但 pose 对象一旦出现即对该 pose 有权威性（缺席的 assetId 视为清除，否则 409 流程无法解除引用）。`poses.<key>` 整个 key 缺席仍保留 base。
+2. 规格未给的内部 sanity 边界（zoom 0.2..5、period/interval 200..60000 等）为自行选择，已在 `src/host/validation.ts` 注释标注；client 滑块范围已逐字段对齐。
+3. 已知小瑕疵（不阻塞 M2 验收，列入 M5 考量）：导入新图后需再点一次状态按钮才切换（fallback 解析槽位的小滞后）；transition 在飞途中改 anchor/zoom 可能瞬时回旧值；设置页对 PetStage 的 fixed 定位用了 `!important` override（M3 给 stage 加面板内嵌模式可移除）。
+
+## M3 — Overlay（2026-08-19）
+
+### 落地内容
+
+- **shell.overlay 真实挂载**：`src/client/overlay/PetOverlay.tsx` 经 `ctx.slots.inject('shell.overlay', …)` 注册（id `motion-pet`）；无图 / `enabled=false` / 未加载完成一律不渲染（E2E「未导入图片时 Overlay 不占位」）。
+- **拖拽**：`drag-controller.ts`（纯 TS；pointerdown/capture/move/up，<4px=click、≥4px=drag、pointercancel 兜底）；默认 `right/bottom:24px`，拖后绝对定位并 300ms debounce 持久化 `overlay.x/y`；拖动与 resize 都 clamp 进视口（≥32px 可见）。click 触发 `builtin:click-pop`（新增 kind:'interaction' 的 AnimationDefinition 数据，140ms 轻微 pop，无 pose-swap event）——经 `motionDirector.play` 零分支执行。
+- **config-hub.ts**：editor 与 overlay 共享同一 config 的中枢——单次 GET 记忆化、保存成功即时 publish、3s 轮询兜底（hidden 停 / visible 即拉 / 差异才广播）；editor dirty 时忽略 poll（防回滚）。
+- **overlay-session.ts**：overlay 控制器（registry/director 生命周期、config 跟随、reducedMotion 三档 + matchMedia 监听、visibilitychange 暂停恢复）。M4 将在此注入 DSH 状态源。
+- **MotionDirector 追加 `pause()/resume()`**（纯追加）：委托 ambient pause/resume，保住循环 ambient 相位（M1 遗留项关闭）；已知空隙：在飞 transition（≤650ms）不暂停，完成时 ambient 重启被 paused 标记压制，不违反 §23。
+- **PetStage `embedded` 模式**：设置页预览改用 absolute 居中内嵌，移除了 M2 的 `!important` CSS hack；fixed 模式行为不变（overlay 用）。
+- 测试：26 文件 / **238 用例**全绿（新增 38：drag 手势、hub 发布/订阅/dirty 保护、overlay-session 渲染规则与可见性、MotionDirector pause/resume、click-pop 数据）。
+
+### 真机验证
+
+重启 `dsh web` 后：served `client.js` 含 shell.overlay 注册与 click-pop 数据 ✓；两张占位 pose（蓝/橙圆）经 API 上传并写入 config（idle/thinking）✓。overlay 拖拽/click-pop/设置页内嵌预览的**视觉效果待用户目视**。
+
+### 实现期偏差记录
+
+1. 位置持久化用全量 PUT（api.putConfig 类型为全量；host partial merge 对全量 body 语义等价），并发由 hub 广播 + dirty 保护兜底，极端 last-wins 由 poll 自愈。
+2. `builtin:click-pop` 不进 `BUILTIN_TRANSITION_DEFINITIONS`（它不是转场），由 OverlaySession 构造时注册。
+3. `embedded` 实现为「absolute 居中定尺寸方块」而非拉伸 position 层（保持 anchor/contain-fit 数学不变）。
+
+### 遗留（M4/M5）
+
+- PreviewSession 可切到 director.pause/resume（其 :197 注释已过时，行为无 bug）。
+- M4 待办不变：状态源路线 A/B（PartialAssistant reasoning 检查）、推送通道三选一、工具名归类表、overlay-session 接 DshStateSource。
+
+## M4 — DSH Agent State（2026-08-19）
+
+### 技术路线（M0「路线 A」定案落地）
+
+`DSH → host event-normalizer → NormalizedAgentEvent（§13.1 逐字）→ SSE 推送 → client state-adapter → PetStateResolver → MotionDirector → Renderer`。host 保持哑管道；状态机/稳定器全部复用 client 侧 core。
+
+- **host**：`ctx.on('session/event'/'agent/status'/'agent/error')` → `src/integration/dsh/event-normalizer.ts`（纯函数）→ `src/host/state-channel.ts`：`GET /api/motion-pet/events[?session=]`（SSE：连接即发 snapshot 帧 → 事件帧 → 25s 注释心跳；close 清理）+ `GET /api/motion-pet/state[?session=]`（JSON 快照，轮询降级用）。每会话 lastNormalized 内存 map（session/disposed 清理）。
+- **client**：`src/integration/dsh/state-adapter.ts`（EventSource + 帧解码 + §14.5 聚合 + 2s 降级轮询仅在 SSE 持续 error 时）、`dsh-state-source.ts`（拥有真 resolver，目标直喂 director）、`installCurrentSessionSource` 桥（`ctx.sessions.list` 的 `current` 变化 → 重连；client entry inject 加 `'sessions'`）。`overlay-session.ts` 经 `createStateSource` seam 接入（无 EventSource 环境回退 M3 静态 idle）。
+- `src/integration/dsh/state-protocol.ts` 为 host/client 共用的零依赖线协议（防 client bundle 内联 host 代码）。
+
+### 事件映射要点（全表见 src/integration/dsh/event-normalizer.ts 注释与 M4 测试）
+
+- turn/start→turn-start；reasoning-delta→thinking；tool/call→tool-start（**edit**＝edit/write/str_replace_editor，**command**＝bash/pwsh，其余 other——按 rc.7 安装闭包逐包 grep 核实）；ask_user_question→waiting；approval/asked→waiting；approval/decided→thinking；tool/result→回 thinking；turn/end：completed→success、error/max-tokens→error、aborted/interrupted→idle、blocked→waiting；agent/status idle→idle（running 刻意不映射，turn/start 拥有 active 面）；agent/error→error。
+- **刻意偏差**：text-delta 不映射 working——§13.1 无诚实载体，且 reasoning/text 混合流会在每个 coalesce 窗口翻转 activity 造成 ambient flap（§15 防的正是这种）；整个 model step 保持 thinking 面。
+- §14.5 优先级聚合（WAITING>ERROR>ACTIVE>SUCCESS>IDLE，平手取 ts 新）放 client adapter；host 只做 `?session=` 过滤。
+
+### 验证
+
+- 测试：32 文件 / **334 用例**全绿（新增 96；含 tests/integration/dsh-flow.test.ts 端到端主线：真 normalizer→线格式→真 adapter→真 resolver→真 director，断言与 §29.4 一致——thinking↔command 零 pose 转场、waiting 往返各一次、success celebrate 一次）。
+- 真机：重启 dsh web 后 SSE 端点 snapshot 帧 ✓、/state ✓、旧路由不受影响 ✓。设置页排版修复（两栏+预览全宽）已固化进 bundle 并经 headless Chrome 截图复核。
+- **真实 agent 驱动的视觉验收留给用户**（跑一个任务看 IDLE→ACTIVE→SUCCESS；触发一次批准看 WAITING）。
+
+### 坑位记录
+
+- `@deepseek-ai/dsh-session` 根入口会把 host 侧 `sessions: SessionStore` 增强进 cordis Context，与 client runtime 的 `sessions: ISessions` 在单一 tsc 程序里冲突——type-only import 必须走 `/types` 子路径。
+- host 重启丢 lastNormalized 内存快照：client 重连收空快照回 idle，下个 live 事件自愈（可接受降级）。
+- 降级轮询目前不随页面 hidden 暂停（罕见路径，M5 可补）。
+
+### M5 待办积累
+
+Anchor 精修、PreviewSession 切 director.pause/resume、降级轮询 hidden 联动、E2E Checklist 全量手测、主题 token 对齐 DSH 皮肤系统（当前 prefers-color-scheme 近似）。
+
+## M5 — Polish（2026-08-19）
+
+### 代码收尾
+
+- **主题对齐**：settings 样式全量迁移到 shell design tokens（`--dsw-alias-*`，已在 `dsh-client-ui-theme/lib/styles/design-platform.css` 核实明暗双套定义），全部带原色值兜底（独立 Preview 无 shell 环境不退化）；删除 `prefers-color-scheme` 近似方案。notice 底色用 `color-mix` 双声明（不支持的引擎落兜底实色）。
+- **§23 审计**：零 rAF、零每帧 layout 读写、零每帧 src；sway/breathe 单条 Infinity WAAPI；bounce 低频 timer + 一次性 WAAPI；dispose 链路全闭环（含 SSE heartbeat）。修补两处：state-adapter 降级轮询 hidden 暂停（M4 遗留）、PreviewSession.setHidden 切 director.pause/resume 保相位（M3 遗留）。
+- **编辑器瑕疵修复**：fallback 重解析滞后（director 追加 `currentTarget` 只读 getter，按请求槽位而非 stage 解析槽位重解析；overlay-session 同步镜像）、transition 在飞改 anchor/zoom 被旧姿势覆盖（M5 用 ManualStateSource onTransition 回调实现，**Release Hardening 已重构为 director 级 `whenSettled()` 统一机制**，见下节）。
+- **Anchor**：computeAnchorLayout 数学复核无误，补 2:1 非方形 + 自定义 anchor + zoom≠1 组合测试（world anchor 位移为零）。
+- 测试：32 文件 / **343 用例**全绿。
+
+### E2E Checklist（§30 全 22 项，2026-08-19 执行）
+
+执行方式：headless Chrome + CDP（自研零依赖驱动：Runtime.evaluate / Input.dispatchMouseEvent / Emulation.setEmulatedMedia / Page.captureScreenshot），共享真机 `dsh web` 实例。
+
+| 项 | 结果与证据 |
+| --- | --- |
+| plugin add / 启动无错 / Settings 出现 Motion Pet | ✓（M0 起多次；boot log 干净） |
+| 未导入图片 Overlay 不占位 | ✓ 单测锁定（live 空配置会干扰用户，跳过） |
+| 导入 Idle/Thinking 后 Overlay 出现 | ✓ 真机（用户实际导入全套 6 张） |
+| 手动 Idle→Thinking Comic Pop | ✓ CDP：img 切 thinking 资产，transition 分段执行后清理干净 |
+| Anchor 不跳 | ✓ 单测（含非方形组合，位移为零） |
+| Thinking Bounce+Sway | ✓ CDP 实测：sway Infinity 2700ms running；bounce 360ms 单次 random-interval 触发 |
+| Working 不高频弹 / Waiting / Success / Error | ✓ 用户目视验收（2026-08-19）+ e2e 测试锁定 |
+| 快速连续状态不卡 squash | ✓ CDP 六连击：0 running 动画、scale/translate 归 identity |
+| 拖动 + 位置持久化 | ✓ 用户实操（config 落盘 1751,857） |
+| Resize clamp | ✓ CDP 1200×800 → pet clamp 至恰好 32px 可见（§27 下限语义确认） |
+| Scale | ✓ scale=2 作用于 user-scale 层 |
+| 刷新/重启配置保留 | ✓ reload 后位置+scale 一致；重启保留（M2 API 级） |
+| prefers-reduced-motion | ✓ CDP 模拟：ambient 全停/恢复；reduce 下 transition 48+72ms（0.4/0.6 × 120ms 分段精确） |
+| 深浅主题 Editor 可读 | ✓ 截图（暗色皮肤 + 浅色主题均正常，token 自动跟随） |
+| 卸载后 DSH 正常 | ✓ remove → boot 干净、路由 404、manifest 无引用；重装恢复 |
+
+**CDP 测试设施坑**：`Emulation.setEmulatedMedia` 等 override 在最后一个设置它的 CDP 会话断开时被 Chrome 自动清除——模拟与探针必须在同一会话内完成（Chrome 151）。
+
+### 结论
+
+M0~M5 全部完成。V1 的 DoD（§32）逐条均已满足或有测试锁定。剩余：M6（打包发布：README、npm 包、CI、干净环境验收）。
+
+## V1 Release Hardening（2026-08-19，外部代码审查驱动的发布前收口）
+
+外部审查（桌面端 GPT，Linux 静态审查 ZIP 导出）提出 7 项 + 3 顺手修，经主代理逐条对照源码核实**全部属实**，已分两批修复。测试：33 文件 / **373 用例**全绿。
+
+### 竞态修复（第一批）
+
+1. **Overlay 中途改 Pose/Anchor 被旧 transition 覆盖**：统一为 director 级 tracking——`MotionDirector` 内部跟踪 transition promise，新增 `transitionInFlight` / `whenSettled()`（中断也正确 settle）；OverlaySession 与 PreviewSession 共用同一机制，M5 的 `ManualStateSource.onTransition` 回调机制已移除（消除两套 tracking 漂移）。竞态复现测试已实证「还原旧行为则失败」。
+2. **配置写 lost update**：host `ConfigStore.update(patch)` 以 promise 链串行化「读→validateConfigPatch 合并→原子写」；routes PUT 改调它；client 新增 `api.patchConfig(partial)`；overlay 拖拽持久化只提交 `{overlay:{x,y}}`。并发 PUT 测试锁定。跨进程 CAS/revision 留作后续项。
+3. **aggregate 陈旧终态压住其他 session**（违反 §14.5 TTL 明文）：adapter 的 per-session 条目带 `receivedAt`，success/error 按 TTL（默认 1600/1800ms，从 config.global 的 holdMs 接线）过期后视为缺席。reviewer 场景复现测试锁定。
+4. **setSession 迟到快照**：`connectionGeneration` 守卫，SSE 回调与 poll 回调发起时捕获、应用前检查。
+5. **ConfigHub poll 无 generation**：publish 递增 generation，poll 落地前检查。
+6. **mount-once flag 前置**：flag 移到 `ctx.effect` 内注册成功之后置位，中途抛错回滚路由并清 flag（已核实 cordis effect 同步执行语义，防双挂不变）。host 入口测试 3 例。
+7. **preload 失败仍标记**：仅成功路径标记 preloaded，失败 URL 会重试。
+
+### 格式与打包收口（第二批）
+
+8. **AnimationDefinition v1 校验收紧**（`validateAnimationDefinition` 四条新规则）：禁止同 property 重复 track；`transition` 恰好 1 个 pose-swap、`ambient`/`interaction` 禁止 events；eventful `alternate` 拒绝（runtime 本就跑成正向 loop，格式不承诺做不到的事）；**同层 track 每区间 easing 必须一致**（compiler 合并同层 track 为单条 WAAPI keyframe 只能取一个 easing；复用 compiler 提取出的 `easingAt`/`unionTrackTimes`/`resolveEasingCss` 精确判定，alias 与 cubic-bezier 等价归一）。**全部 12 个内置 definition 零修改通过**（数据本就一致），compiled 输出不变由既有测试锁定；仅文档示例 user:slam-land 的 JSON 做了等价规整。`docs/motion-format.md` 已写入全部 v1 限制（含 V1.1 可能放宽的说明）。
+9. **打包卫生**：tsconfig 开 `emitDeclarationOnly`、去 `declarationMap`、tsbuildinfo 钉在白名单外；`files` 收紧为五项白名单。`npm pack --dry-run`：**153 文件 / 1.0MB → 54 文件 / 608.8KB**。`private:true`/README/LICENSE 留待 M6 用户拍板。
+10. `attachStateChannel` 部分失败回滚（逐条收集 disposer，失败逆序撤销后 rethrow）。
+
+### 审查局限性说明（reviewer 自述 + 主代理核实）
+
+reviewer 环境（Linux 解压 ZIP，pnpm symlink 被展平）无法独立跑 Vitest，其结论均基于静态审查；主代理在本机逐条源码核实并修复后全量测试通过。「多事件排序路径在 V1 格式下不可达（机制保留供 V1.1）」「同 track 内重复 at 未纳入规则」两点为已知且接受的边界。
+
+### Hardening Follow-up（2026-08-19，外部审查第二轮复核）
+
+第二轮复核确认上一轮 7+3 项真实落地，新发现 1 个 P1 + 2 个 P2，再次逐条源码核实属实并修复。测试：33 文件 / **382 用例**全绿。
+
+1. **P1：配置 lost-update 只修了一半**。host 串行化只能防 partial patch 的 read-modify-write 交错，挡不住「editor dirty 期间拖拽 → editor 后到全量 PUT 带陈旧 overlay」的语义覆盖。修法（所有权分离）：editor 保存只提交 `{enabled, global, poses, states}`（不发 overlay/version），overlay 只提交 `{overlay:{x,y}}`；`savedConfig` 与 hub 广播一律用 host 返回的权威合并结果。回归测试覆盖「draft 带旧 overlay 的 editor 保存 vs overlay patch」两种顺序。
+2. **P2：aggregate 终态 TTL 无主动到期结算**（此前实现有意未加定时器，reviewer 指出正确行为应是「恢复到仍 ACTIVE 的会话」而非直接回 idle）。修法：每次 recompute 扫描未过期终态条目、按最早到期点安 one-shot timer 主动 recompute；setSession/dispose 清理。fake-timers 测试锁定「到期无新事件自动浮现次优者」。
+3. **P2：holdMs 热更新不同步进 adapter**（构造期 readonly 一次性传入）。修法：`StateAdapter.setTerminalTtls()`（变化即 recompute）+ DshStateSource passthrough + OverlaySession.updateConfig 在 holdMs 变化时同步（可选调用，不破坏既有 fake）。
+
+语义变化导致的既有测试改写：editor-store 13 例的 PUT body 断言改 patch 形状；state-adapter 3 个 TTL 用例的终态序列插入到期结算的 idle。均逐条核实符合新语义。
+
+审查方最终结论（第二轮复核后）：核心 Runtime/Format 合同可以冻结，剩余为 M6 发布工作（README、LICENSE、CI、npm package、干净环境验收）——发布决策项待用户拍板。
+
+## M6 — Packaging / Release 准备（2026-08-19）
+
+发布决策项（npm 账号、公开 registry、GitHub 仓库）待用户拍板；其余已全部备好。
+
+### 落地内容
+
+- `README.md`（中文，规格 §35 全项）：项目截图（`docs/images/` 三张真机截图：overlay、宠物特写、设置编辑器）、安装/升级/卸载、导入图片、调动画、状态说明表、兼容版本、开发/测试命令、Known limitations。
+- `LICENSE`：MIT（跟随 DSH 生态主流；发布前可换）。
+- `package.json`：version `1.0.0`、摘除 `private`、补 `license`/`keywords`/`packageManager`（pnpm@10.34.5，供 corepack 与 CI）。`repository` 字段留待 GitHub 仓库建立后补。
+- CI：`.github/workflows/ci.yml`（node 22/24 矩阵：frozen-lockfile install → typecheck → vitest → build → pack dry-run）。
+
+### 干净环境验收（tarball 安装）
+
+`npm pack`（54 文件白名单产物）→ `dsh plugin remove` → `dsh plugin add <tarball>` → 重启 `dsh web`：boot 无插件错误、config 路由 200、state 通道正常、client bundle 经 `/plugins/dsh-motion-pet/client.js` 伺服、boot manifest 含本插件 ✓。验收后已恢复 `link:` 开发安装。
+
+**坑位记录**：`remove` 一个 `link:` 安装的插件后，profile `node_modules/<pkg>` 的符号链接会残留，导致随后 tarball 安装报 `ERR_PNPM_EPERM`（pnpm 顺着残留链接解析到了开发仓库的 .pnpm）。修法：手动删除残留符号链接后重试。正式发布流程（用户从 registry 安装）不受此影响。
+
+### 剩余（发布动作本身）
+
+- `npm publish`（需要用户 npm 账号与可见性决策）；
+- 建 GitHub 仓库后补 `repository` 字段并推送触发 CI；
+- 可选：英文 README、GIF 动图。
+
+## 用户反馈迭代（2026-08-19，M6 后）
+
+### 1. 活跃状态内换图开关（用户报告「思考/工作图片不切换」）
+
+根因：规格 §15.2 的刻意默认（active 内只换 ambient 防 flap），`changePoseWithinActive` 未进配置模型。本次落地：
+- `MotionPetConfig.advanced.changePoseWithinActive`（默认 false，version 仍为 1，repair 自动补字段）。
+- **director 新增静默换图路径**：同 visualState + 不同 poseKey → 不播 enter transition，`transitions.cancel()` 推进 generation（在飞旧 transition 的 pose-swap 守卫失效）、直接 swapPose（同 url 跳过）+ 按新 activity 刷 ambient；不产生 transition instance，不影响 whenSettled/transitionInFlight 语义。
+- resolver 改为实时读共享 config 对象的字段（免 setter/重建）；editor owned patch 字段集含 advanced；设置 UI 全局区有开关（带「静默换图不播转场」提示）。
+- 测试 392→404 过程中 +10（resolver 热更新、director 三分支、validation、集成 thinking↔command 静默 swap）。
+- **已应用户预期在其 live config 开启该开关**（reasoning↔tool 现在会静默换图）。
+
+### 2. 独立全页配置编辑器（用户反馈设置弹窗太挤）
+
+- 官方 preset 的 mobileBundle 模式落地：host prefix 路由 `/motion-pet-editor/` 伺服自包含 IIFE 编辑器页（`lib/editor.js`，React 内联、零 shell 依赖，经 /api 同源通讯）——复用既有 `MotionPetSettings`（解耦为可选 `wide` prop），宽屏恢复规格 §17 三栏布局，暗色经 token 变量名覆盖（prefers-color-scheme 兜底）。
+- 设置弹窗改为精简入口卡（状态摘要 + 启用 + 缩放 +「打开完整编辑器」链接）；overlay 宠物双击打开编辑器页（会先触发两次 click-pop，可接受）。
+- 编辑器页的 hub.publish 不影响主 UI overlay（跨页面），overlay 经 3s 轮询跟进——README 已知限制已载。
+- 测试 +12（host 路由、卡片、编辑器入口冒烟、双击）。构建四产物；pack 61 文件（含 editor.js+map）。
+- 真机 CDP 验收：页面/JS/404/405 正确；三栏布局与暗色截图复核；弹窗卡片正常。
+
+当前测试总数：36 文件 / **404 用例**全绿。
+
+### 后续记录（2026-08-19 晚）
+
+- **overlay 双击打开编辑器的入口已移除**（源码 + 测试 + README）：用户计划把点击/手势反馈做成可自定义（V1.1 方案的 `interactions` 配置），双击语义不再占用。打开编辑器：设置弹窗入口卡 / 直接访问 `/motion-pet-editor/`。
+- **V1.1 时间轴编辑器初步方案**已落盘：`docs/v1.1-timeline-editor-plan.md`（地基盘点、持久化与 animationId 挂载设计、编辑器 UX、P0/P1/P2 分期、测试策略）。当前测试 403 全绿。
+
+## 终态覆盖修复 + terminalHold 选项（2026-08-20）
+
+背景：用户报告从未见过 success/error 状态；另一审查线程曾声称修复但**未落盘到本仓库**（经全仓内容级核对：其仅触发过文件 mtime 与一次重建，无任何内容变更）。本仓库独立调查并修复。
+
+### Bug 根因（真实时序回归锁已建立）
+
+`turn/end` 完成后 agent 立即发 `agent/status: idle` → 归一化为 idle 事件 → resolver 的 60ms coalescing 窗口内「最新 wins」使 idle 覆盖 pending 的 turn-end(success)（success 甚至来不及 commit）；即便 commit 了，紧随的 idle commit 也会清掉 hold。终态实际只存活几十毫秒。既有测试未抓到是因为 fixture 在 turn/end 与 idle 之间拉开了时间。
+
+### 修复与新增
+
+- **stray-idle 压制**（`pet-state-resolver.handleEvent`）：idle 事件在 (a) coalesce pending 为 turn-end(success/error) 或 (b) 当前持有 success/error 时直接丢弃；终态退场只能由 hold 定时器 / 新 activity / dismiss 产生。
+- **新语义事件 `{type:'dismiss'}`**：仅 terminal 时回 idle，否则 no-op。
+- **新配置 `advanced.terminalHold: 'timed' | 'until-interaction'`**（默认 timed 保持现状）：until-interaction 下 success/error 不启动 hold 定时器，持续到点击宠物（dismiss）或新 turn 才解除。实时读共享 config，热更新生效于下一次 terminal commit。
+- 接线：DshStateSource.dismissTerminal() → resolver；overlay 点击 = dismiss + click-pop。编辑器「高级」区新增停留方式选择（until-interaction 时停留时长输入禁用并提示）。
+- 测试 403 → **425 全绿**（36 文件；含真实时序回归锁：turn/end 紧跟 agent idle，success 仍展示满 holdMs）。
+- **已应用户需求在其 live config 开启 `terminalHold: 'until-interaction'`**。
+
+## 用户反馈迭代第二波（2026-08-20）
+
+1. **活跃内切换动画**（用户反馈静默换图太生硬）：`advanced.activityTransition: 'subtle'|'none'|'state'`（默认 subtle）。新增 `builtin:activity-swap`（170ms 淡换，pose-swap@0.4），subtle 路径复用 runEnter 全 timeline 路径（零专用分支）。
+2. **点击交互可编辑**：`interactions.click: { animation, pose }`——点击动画可选（新增 click-wiggle/click-bounce/click-spin 三个内置 interaction），可选「点击闪现姿势」（解析不到图则不变；换回由 `await finished` 驱动；真实状态目标到达立即抢占，不换回）。实现在 `MotionDirector.playInteraction()`（stage pose 簿记与 generation 归 director 所有）。
+3. **参数放宽**（用户拍板的规格偏差，已注释标注）：strength 0..3、duration 60..2000、scale 0.3..4、zoom 0.2..8、sway 0..60°、周期/间隔/停留上限 120s、最小间隔 50ms；compiler 非 transition duration clamp 同步提到 120s。
+4. **粒子特效**：`TimelineEvent` 新增 `{type:'particle', effect}`（confetti/star-burst/sparkle）——transition 允许 particle（pose-swap 仍恰好 1 个）、interaction 允许 particle、ambient 禁止事件。粒子层在 img 之上（pointer-events none），单粒子单条 WAAPI（3 帧放射+重力+淡出），上限 24/发、96 全局，零 rAF/timer；`advanced.particles` 开关（默认开）+ reduced-motion 强制不发射。celebrate 默认带 confetti。scheduler 零改动。
+5. **新内置 transition `builtin:flip`**（用户新需求：轴向旋转无缝换图）：scaleX 1→0→1、pose-swap@0.5、300ms，2D 翻牌效应。TransitionPreset 联合类型与全部下拉已包含（含 preview 页下拉补齐）。
+
+测试 425 → **473 全绿**（37 文件）。真机 CDP 验收：编辑器页点击「成功」触发 celebrate，粒子层实测 22 个粒子在飞（截图存档）。
+
+### 编辑器页排版重构（2026-08-20，用户反馈「排版挤」）
+
+- 顶部五组 flex-wrap GlobalBar 拆分为：**全局设置卡**（响应式 auto-fit 网格，标签列宽统一 96px，ms 单位后缀定宽对齐）+ **高级与互动全宽卡**（高级列：切换姿势/切换动画/停留方式/粒子特效；互动列：点击动画/闪现姿势；长提示全部降级为整行灰字，不再挤断控件）。
+- 主区域三栏保持，预览列宽屏 sticky 跟随滚动；保存指示经 createPortal 挂入页面标题栏（无宿主时回落卡片上方一行）。
+- 设置弹窗 MotionPetCard 未动。三档宽度（1600/1100/700，另抽 500 极窄）+ 暗色截图复核，无横向溢出/断裂/错位。
+- 测试 473 全绿（全部断言走文本选择器，零测试改写）；浅色模式未目视（headless Chrome 151 的 setEmulatedMedia 对 prefers-color-scheme 无效，工具链怪癖；浅色兜底色值与 M5 验收时一致）。
+
+## V1.1 P0 — 自定义动画端到端（2026-08-20）
+
+按 `docs/v1.1-timeline-editor-plan.md` 分期，P0 完成：自定义动画已端到端可用（持久化 + 挂载 + 交互引用 + 编辑器 JSON 级管理）。
+
+- **host 持久化**：`src/host/animations.ts`——`$DSH_HOME/motion-pet/animations/user_*.json` 每动画一文件；启动/GET 实时扫描（损坏/非法/非 user: 命名空间/重复 id 逐项跳过 + warnings，不阻塞）；save 全量 validateAnimationDefinition + 原子写；delete 引用保护 409 `ANIMATION_IN_USE`（引用判定：states.*.enter.animationId 与 interactions.click.animation）；id 字符集双重护栏（路径穿越结构上不可能）。
+- **API**：`GET /api/motion-pet/animations`、`PUT/DELETE /api/motion-pet/animations/<id>`（路径 id 与 body.id 不一致 400 ID_MISMATCH；builtin id PUT 400）。真机逐项 curl 验证通过（上传→列表→引用→409→解除→删除→消失）。
+- **animationId 挂载（§8.14 落地）**：`TransitionConfig.animationId?` 优先于 preset；host validation（builtin 须在清单内、user 须存在——经可选注入的 exists 检查；显式 null 清除、缺失保留 base、悬空 repair 删字段）；director resolveEnter 注册表命中优先、否则回落 preset。零专用分支。
+- **client**：config-hub 携带 customs（load/poll/publish 全链路）；两会话经共享 `syncCustomAnimations` 对账（新增 register/变更重注册/消失 unregister，只碰 user:*）；editor-store 增删改直接走 API（显式保存语义，无 debounce）；**动画库面板**（仅独立编辑器页）：内置只读列表 + 新建/克隆（Preset→Customize，`user:<uuid>`）/重命名/删除（409 中文提示引用方）+ 名称/类型/时长/repeat 表单 + tracks/events JSON 编辑域 + 实时校验禁存 + 试播（scratch id `user:0draft` 注册播放）；TransitionEditor 下拉分组内置/自定义（animationId 回显/清除）；点击动画下拉纳入 interaction customs。
+- 测试：40 文件 / **548 用例**全绿（P0 两半合计 +75）。
+- 遗留进 P1：可视化时间轴编辑（轨道/关键帧/easing 控件）、试播 strength 手感滑条。
+
+## V1.1 P1 — 可视化时间轴编辑器（2026-08-20）
+
+- **`src/client/timeline/` 组件套件**（8 文件，纯 React+TS、零 shell 依赖）：`TimelineEditor` 受控组件（`{kind, tracks, events, onChange, onValidationChange}`）+ Ruler/TrackLane/EventTrack/KeyframeInspector + 纯函数层 `timeline-model.ts`（全部编辑操作不可变、每步保持可证明合法）+ pointer 手势（3px click/drag 阈值）。
+- **交互核心**：lane 空白单击新建关键帧（值取该处曲线采样 + 继承 governing easing，插入前后动画逐位一致）；拖动改 at（0.01 吸附、clamp、碰撞拒绝回弹）；检查器编辑 at/value（固定值↔强度参数双模式）/easing（命名+别名+自定义 cubic-bezier）/删除；**同层 easing 修改自动同步同层其他轨道**（稀疏轨道自动插帧 + 恢复帧防外泄）；添加轨道按层分组且镜像同层时刻与 easing（添加即合法）；事件轨按 kind 显隐（transition 恰好 1 个 pose-swap 不可删、particle 可增删拖、ambient 无事件轨）+ 自愈按钮。
+- **动画库集成**：草稿从 JSON 字符串改为结构化 tracks/events，TimelineEditor 直驱；双通道门控（标量校验 + 时间轴校验）；**JSON 视图**保留（只读同步 + 「编辑 JSON」应用路径，粘贴外部定义仍可用）；克隆内置携带当前草稿；试播条新增**循环试播**（变更后 600ms 自动重播）与**试播强度滑条**（只作用于预览）；previewDefinition/playCustom 打通 strength 覆盖。
+- 测试：42 文件 / **588 用例**全绿（timeline-model 19 + timeline-editor 18 + 集成 5 等）。
+- 真机 CDP 验收：三轨道 lanes/⚑ 标记/检查器/自愈按钮/JSON 视图截图复核（1600/1100 两档）；真实鼠标拖关键帧生效；试播期间 transition 层 computed scale 连续采样到 24 个变化值（预览确实在播变形动画）。
+- 已知从简（代码注释在案）：移动/删除关键帧造成的同层 easing 失配只报不自动修；TimelineEditor 无 readOnly 通道（内置动画的轴上试改只能试播，保存靠克隆）。

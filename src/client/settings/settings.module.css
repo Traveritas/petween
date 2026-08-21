@@ -1,0 +1,610 @@
+/* Settings editor styles (spec §17 three-column layout, vertical on narrow
+   screens). Colors follow the shell's --dsw-alias-* design tokens (dark/light
+   and skins included); the hex fallback after each var() keeps the standalone
+   Preview — where no shell defines the tokens — visually unchanged. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1080px;
+  color: var(--dsw-alias-label-primary, #1f2335);
+  font-size: 13px;
+}
+
+/* Global settings + advanced/interactions cards (standalone editor page):
+   a responsive grid of label-aligned control rows — the old flex-wrap bar
+   squeezed five groups onto one line and broke long labels. Both cards reuse
+   .section/.sectionTitle chrome; only the grid lives here. */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 2px 24px;
+  align-items: center;
+}
+
+.cardGrid .row {
+  margin: 3px 0;
+}
+
+.cardColumn {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hintFull {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+}
+
+/* Fallback host for the SaveIndicator when no portal target is provided. */
+.saveRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.groupTitle {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.columns {
+  display: grid;
+  /* Narrow hosts (the old ~600px dialog): two columns (list + settings) with
+     the live preview full-width below. The standalone editor page adds .wide
+     on the root and gets spec §17's three columns (rules at the end). */
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.columns .preview {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+
+  .columns .preview {
+    grid-column: auto;
+  }
+}
+
+/* --- StateList (§17.1) --- */
+
+.stateList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stateItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+
+.stateItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+}
+
+.stateItemSelected,
+.stateItemSelected:hover {
+  border-color: var(--dsw-alias-brand-primary, #6366f1);
+  background: var(--dsw-alias-interactive-bg-hover, #e0e7ff);
+}
+
+.stateDotOwn {
+  color: var(--dsw-alias-state-success-primary, #16a34a);
+}
+
+.stateDotFallback {
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+.stateHint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+/* --- StateSettings panels (§17.2~17.4) --- */
+
+.stateSettings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.section {
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+}
+
+.sectionTitle {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.channelFields {
+  margin: 2px 0 8px 22px;
+}
+
+.assetRow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.assetThumb {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 6px;
+  /* checkerboard so transparent backgrounds are visible */
+  background: repeating-conic-gradient(
+      var(--dsw-alias-border-l1, #e5e7eb) 0% 25%,
+      var(--dsw-alias-bg-layer-2, #ffffff) 0% 50%
+    )
+    0 0 / 16px 16px;
+}
+
+.assetMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+/* --- shared form rows --- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 5px 0;
+  min-height: 26px;
+}
+
+/* One label column width everywhere, so controls line up across rows and
+   cards. Long labels wrap inside the column instead of pushing the control. */
+.label {
+  width: 96px;
+  flex: none;
+  color: var(--dsw-alias-label-secondary, #4b5563);
+}
+
+.row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+/* number and select share one height so mixed rows stay on the same rhythm */
+.number {
+  width: 92px;
+  height: 26px;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  color: inherit;
+}
+
+.select {
+  height: 26px;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  color: inherit;
+}
+
+.value {
+  width: 64px;
+  flex: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary, #374151);
+}
+
+/* NumberField's unit suffix: a fixed-width left-aligned column, so the "ms"
+   of every row sits at the same offset instead of drifting with the value. */
+.unit {
+  width: 30px;
+  flex: none;
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+.disabled {
+  opacity: 0.45;
+}
+
+.toggle {
+  cursor: pointer;
+}
+
+/* the toggle text takes the remaining width and wraps on its own line(s) */
+.toggle span {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint {
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.button {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+  color: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+  border-color: var(--dsw-alias-brand-primary, #a5b4fc);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- LivePreview (§17.6) --- */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.previewStage {
+  position: relative;
+  height: 260px;
+  border: 1px dashed var(--dsw-alias-border-l1, #d4d9e3);
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    var(--dsw-alias-bg-base, #fdfdff) 0%,
+    var(--dsw-alias-bg-layer-1, #eef1f6) 100%
+  );
+  overflow: hidden;
+}
+
+/* The stage root centers itself inside the preview box via PetStage's
+   embedded mode (absolute + inset:0 + margin:auto) — no override needed. */
+
+.previewStage [data-motion-pet-renderer] {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.previewButtons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.previewToolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* --- status / empty / notice / save indicator --- */
+
+.status {
+  padding: 24px 4px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.retry {
+  margin-left: 10px;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px dashed var(--dsw-alias-border-l1, #d4d9e3);
+  border-radius: 8px;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 15px;
+}
+
+/* Notice tints derive from the state/brand tokens via color-mix; the plain
+   hex declaration above each one is the exact pre-token color, kept for
+   engines without color-mix (the var() fallback alone would be solid). */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.noticeInfo {
+  background: #eff6ff;
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #1d4ed8) 8%, transparent);
+  color: var(--dsw-alias-brand-primary, #1d4ed8);
+  border: 1px solid #bfdbfe;
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary, #1d4ed8) 30%, transparent);
+}
+
+.noticeWarn {
+  background: #fffbeb;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #b45309) 10%, transparent);
+  color: var(--dsw-alias-state-warn-primary, #b45309);
+  border: 1px solid #fde68a;
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #b45309) 30%, transparent);
+}
+
+.noticeError {
+  background: #fef2f2;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #b91c1c) 8%, transparent);
+  color: var(--dsw-alias-state-error-primary, #b91c1c);
+  border: 1px solid #fecaca;
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #b91c1c) 30%, transparent);
+}
+
+.noticeDismiss {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.saveState {
+  margin-left: auto;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.saveIdle {
+  color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+.saveBusy {
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.saveOk {
+  color: var(--dsw-alias-state-success-primary, #16a34a);
+}
+
+.saveError {
+  color: var(--dsw-alias-state-error-primary, #dc2626);
+}
+
+/* --- standalone editor page (.wide, spec §17 three columns) --- */
+
+/* The page supplies the width constraint (~1200px); the root may fill it. */
+.wide {
+  max-width: none;
+}
+
+@media (min-width: 1001px) {
+  .wide .columns {
+    grid-template-columns: 170px minmax(0, 1fr) 340px;
+  }
+
+  .wide .columns .preview {
+    grid-column: auto;
+    /* follow the scroll while the settings column runs long */
+    position: sticky;
+    top: 16px;
+  }
+}
+
+/* --- Animation library (V1.1, standalone editor page) --- */
+
+.animationLibrary {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .animationLibrary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.animationNewRow {
+  margin-bottom: 6px;
+}
+
+.animationList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 430px;
+  overflow-y: auto;
+}
+
+.animationEditor {
+  min-width: 0;
+}
+
+.textInput {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  color: inherit;
+}
+
+.jsonView {
+  margin: 8px 0 2px;
+}
+
+.jsonToggle {
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  cursor: pointer;
+}
+
+.jsonToggle:hover {
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+}
+
+/* read-only JSON mirror of the draft; the editable mode reuses .jsonEditor */
+.jsonPreview {
+  margin: 4px 0;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.jsonActions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.jsonEditor {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+  color: inherit;
+  resize: vertical;
+  white-space: pre;
+}
+
+.animationErrors {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary, #b91c1c);
+}
+
+.animationActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* audition bar: 循环试播 toggle + 试播强度 slider on one flexible row */
+.auditionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.auditionRow .row {
+  margin: 0;
+  min-height: 0;
+}
+
+.auditionStrength {
+  flex: 1;
+  min-width: 240px;
+  max-width: 460px;
+}
+
+/* --- settings.section entry card (MotionPetCard) --- */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cardSummary {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.cardLink {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--dsw-alias-brand-primary, #6366f1);
+  border-radius: 6px;
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+  text-decoration: none;
+}
+
+.cardLink:hover {
+  background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+}

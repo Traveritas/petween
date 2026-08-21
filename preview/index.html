@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dsh-motion-pet preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+        color: #1f2335;
+        background: #f3f4f6;
+        /* The pet's position layer is viewport-fixed: the page itself must not
+           scroll (the control panel scrolls internally). */
+        overflow: hidden;
+      }
+      #root {
+        height: 100vh;
+      }
+      .app {
+        display: flex;
+        height: 100vh;
+      }
+      .controls {
+        width: 380px;
+        flex: none;
+        overflow-y: auto;
+        padding: 16px 20px 48px;
+        background: #ffffff;
+        border-right: 1px solid #e5e7eb;
+      }
+      .controls h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+      .controls h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #6b7280;
+        margin: 0 0 8px;
+      }
+      .controls h3 {
+        font-size: 12px;
+        margin: 14px 0 4px;
+        color: #374151;
+      }
+      .controls section {
+        padding: 12px 0;
+        border-top: 1px solid #eef0f3;
+      }
+      .controls section:first-of-type {
+        border-top: none;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 6px 0;
+      }
+      .row .label {
+        width: 92px;
+        flex: none;
+        color: #4b5563;
+      }
+      .row.slider input[type='range'] {
+        flex: 1;
+        min-width: 0;
+      }
+      .row.slider .value {
+        width: 58px;
+        flex: none;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: #374151;
+      }
+      .row.slider.disabled {
+        opacity: 0.45;
+      }
+      .row.toggle,
+      .row.radio {
+        cursor: pointer;
+      }
+      .radio {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-right: 12px;
+        cursor: pointer;
+      }
+      .state-buttons {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      button {
+        font: inherit;
+        padding: 6px 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: #f9fafb;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #eef2ff;
+        border-color: #a5b4fc;
+      }
+      button.state.active {
+        background: #e0e7ff;
+        border-color: #6366f1;
+        color: #312e81;
+      }
+      select {
+        font: inherit;
+        padding: 4px 6px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: #fff;
+      }
+      code {
+        background: #eef0f3;
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+      .hint {
+        color: #9ca3af;
+        font-size: 12px;
+        margin: 4px 0;
+      }
+      .custom-definition {
+        width: 100%;
+        height: 220px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        padding: 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        resize: vertical;
+        white-space: pre;
+      }
+      .custom-message {
+        margin: 8px 0 0;
+        padding: 8px;
+        background: #f3f4f6;
+        border-radius: 6px;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .stage-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: linear-gradient(180deg, #fdfdff 0%, #eef1f6 100%);
+      }
+      .stage-box {
+        flex: 1;
+        position: relative;
+      }
+      /* Ground line: sits exactly at the world anchor height (90% of the
+         160px stage square, bottom-centered by the flex rules below). */
+      .stage-box::after {
+        content: '';
+        position: absolute;
+        left: 12%;
+        right: 12%;
+        bottom: calc(50% - 64px);
+        border-bottom: 2px dashed #d4d9e3;
+      }
+      [data-motion-pet-renderer] {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .stage-area > .hint {
+        text-align: center;
+        padding: 8px 0 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="./preview.js"></script>
+  </body>
+</html>

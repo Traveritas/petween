@@ -98,7 +98,9 @@ afterEach(() => {
 
 /** Host side: normalize a raw session event and push it down the wire. */
 const sendSessionEvent = (type: string, data: unknown): void => {
-  const raw: RawSessionEvent = { type, time: (clock += 1000), data }
+  // Realistic epoch times (the adapter's terminal TTLs judge the event's own
+  // `ts`, so a 1970 timestamp would arrive pre-expired).
+  const raw: RawSessionEvent = { type, time: Date.now() + (clock += 1000), data }
   FakeEventSource.instance!.push(normalizeSessionEvent(SID, raw))
 }
 

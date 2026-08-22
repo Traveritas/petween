@@ -174,13 +174,14 @@ const choose = (select: HTMLSelectElement, value: string): void => {
   })
 }
 
-/** React reads input edits through the native 'input' event. */
+/** React reads input edits through the native 'input' event. NumberField only commits on blur, so the helper also fires the delegated 'focusout' to commit. */
 const type = (input: HTMLInputElement, value: string): void => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   if (setter === undefined) throw new Error('no native value setter')
   setter.call(input, value)
   act(() => {
     input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('focusout', { bubbles: true }))
   })
 }
 

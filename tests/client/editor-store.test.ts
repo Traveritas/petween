@@ -1,5 +1,5 @@
 /**
- * EditorStore tests (spec §21, §19.4): debounce coalescing, latest-wins
+ * EditorStore tests: explicit config saving, latest-wins writes
  * while a PUT is in flight, the save-state machine, failure/retry, the
  * import/remove asset flows (upload → patch PUT → delete ordering), the
  * editor/overlay ownership split (P1: saves carry only the owned sections
@@ -8,7 +8,7 @@
  * fetch involved.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigPatch } from '../../src/client/api'
+import { ApiError, type ConfigPatch, type UploadedAsset } from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
 import {
   EditorStore,
@@ -16,14 +16,17 @@ import {
   type EditorApi,
 } from '../../src/client/stores/editor-store'
 import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { MotionPetConfig } from '../../src/core/types'
+import type { AssetMeta, MotionPetConfig, PetPreset } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
-
-const DEBOUNCE_MS = 300
 
 interface ApiMocks {
   getConfig: ReturnType<typeof vi.fn>
   getAnimations: ReturnType<typeof vi.fn>
+  getPets: ReturnType<typeof vi.fn>
+  createPet: ReturnType<typeof vi.fn>
+  renamePet: ReturnType<typeof vi.fn>
+  deletePet: ReturnType<typeof vi.fn>
+  applyPet: ReturnType<typeof vi.fn>
   patchConfig: ReturnType<typeof vi.fn>
   putAnimation: ReturnType<typeof vi.fn>
   deleteAnimation: ReturnType<typeof vi.fn>
@@ -48,9 +51,55 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
   // broadcast — never the local payload).
   let serverConfig = createDefaultMotionPetConfig()
   let serverCustoms: AnimationDefinition[] = []
+  let serverPets: PetPreset[] = []
+  let petSequence = 0
   const mocks = {
     getConfig: vi.fn(async () => ({ config: structuredClone(serverConfig), assets: {} })),
     getAnimations: vi.fn(async () => ({ customs: structuredClone(serverCustoms), warnings: [] as string[] })),
+    getPets: vi.fn(async () => ({
+      pets: structuredClone(serverPets),
+      activePetId: serverConfig.activePetId,
+      warnings: [] as string[],
+    })),
+    createPet: vi.fn(async ({ name, from }: { name: string; from: 'current' | 'blank' }) => {
+      const source = from === 'current' ? serverConfig : createDefaultMotionPetConfig()
+      const pet: PetPreset = {
+        id: `pet_${++petSequence}`,
+        name,
+        createdAt: '2026-08-21T00:00:00.000Z',
+        updatedAt: '2026-08-21T00:00:00.000Z',
+        scale: source.global.scale,
+        poses: structuredClone(source.poses),
+        states: structuredClone(source.states),
+      }
+      serverPets.push(pet)
+      serverConfig.activePetId = pet.id
+      if (from === 'blank') {
+        serverConfig.global.scale = pet.scale
+        serverConfig.poses = structuredClone(pet.poses)
+        serverConfig.states = structuredClone(pet.states)
+      }
+      return { pet: structuredClone(pet), config: structuredClone(serverConfig) }
+    }),
+    renamePet: vi.fn(async (id: string, name: string) => {
+      serverPets = serverPets.map((pet) => (pet.id === id ? { ...pet, name } : pet))
+    }),
+    deletePet: vi.fn(async (id: string) => {
+      serverPets = serverPets.filter((pet) => pet.id !== id)
+      if (serverConfig.activePetId === id) serverConfig.activePetId = null
+    }),
+    applyPet: vi.fn(async (id: string) => {
+      const pet = serverPets.find((candidate) => candidate.id === id)
+      if (pet === undefined) throw new Error('unknown pet')
+      serverConfig = {
+        ...serverConfig,
+        activePetId: pet.id,
+        global: { ...serverConfig.global, scale: pet.scale },
+        poses: structuredClone(pet.poses),
+        states: structuredClone(pet.states),
+      }
+      return structuredClone(serverConfig)
+    }),
     patchConfig: vi.fn(async (patch: ConfigPatch) => {
       serverConfig = mergePatch(serverConfig, patch)
       return structuredClone(serverConfig)
@@ -87,7 +136,7 @@ afterEach(() => {
 })
 
 const loadStore = async (api: EditorApi): Promise<EditorStore> => {
-  store = new EditorStore({ api, debounceMs: DEBOUNCE_MS })
+  store = new EditorStore({ api })
   await store.load()
   return store
 }
@@ -111,8 +160,8 @@ describe('EditorStore — load', () => {
   })
 })
 
-describe('EditorStore — §21 debounced saving', () => {
-  it('coalesces a burst of edits into one PUT carrying the latest draft', async () => {
+describe('EditorStore — explicit config saving', () => {
+  it('keeps a burst of edits local until one manual save', async () => {
     const { api, mocks } = makeApi()
     await loadStore(api)
 
@@ -121,12 +170,9 @@ describe('EditorStore — §21 debounced saving', () => {
         draft.global.scale = scale
       })
     }
-    expect(store.getSnapshot().saveState).toBe('saving')
+    expect(store.getSnapshot().saveState).toBe('dirty')
     expect(mocks.patchConfig).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS - 1)
-    expect(mocks.patchConfig).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(1)
+    await store.saveConfig()
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).global?.scale).toBe(1.5)
     await flushMicrotasks()
@@ -147,13 +193,13 @@ describe('EditorStore — §21 debounced saving', () => {
     store.updateConfig((draft) => {
       draft.global.scale = 1.2
     })
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    const saving = store.saveConfig()
+    await flushMicrotasks()
     expect(patchConfig).toHaveBeenCalledTimes(1) // in flight now
 
     store.updateConfig((draft) => {
       draft.global.scale = 1.7
     })
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
     expect(patchConfig).toHaveBeenCalledTimes(1) // queued behind the in-flight PUT
 
     resolvers[0](createDefaultMotionPetConfig())
@@ -162,7 +208,7 @@ describe('EditorStore — §21 debounced saving', () => {
     expect((patchConfig.mock.calls[1][0] as ConfigPatch).global?.scale).toBe(1.7)
 
     resolvers[1](createDefaultMotionPetConfig())
-    await flushMicrotasks()
+    await saving
     expect(store.getSnapshot().saveState).toBe('saved')
   })
 
@@ -177,19 +223,17 @@ describe('EditorStore — §21 debounced saving', () => {
     store.updateConfig((draft) => {
       draft.global.scale = 1.3
     })
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
-    await flushMicrotasks()
+    await store.saveConfig()
     expect(store.getSnapshot().saveState).toBe('error')
     expect(store.getSnapshot().saveError).toBe('disk full')
 
     store.retrySave()
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
     await flushMicrotasks()
     expect(patchConfig).toHaveBeenCalledTimes(2)
     expect(store.getSnapshot().saveState).toBe('saved')
   })
 
-  it('dispose cancels the pending debounce and flushes one final write', async () => {
+  it('dispose does not persist an unsaved draft', async () => {
     const { api, mocks } = makeApi()
     await loadStore(api)
     store.updateConfig((draft) => {
@@ -198,8 +242,7 @@ describe('EditorStore — §21 debounced saving', () => {
     expect(mocks.patchConfig).not.toHaveBeenCalled()
     store.dispose()
     await flushMicrotasks()
-    expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
-    expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).global?.scale).toBe(1.9)
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
   })
 })
 
@@ -217,6 +260,9 @@ describe('EditorStore — §19.4 asset flows', () => {
     await flushMicrotasks()
 
     expect(mocks.uploadAsset).toHaveBeenCalledTimes(1)
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+    expect(mocks.deleteAsset).not.toHaveBeenCalled()
+    await store.saveConfig()
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect(mocks.deleteAsset).toHaveBeenCalledTimes(1)
     const [uploadOrder, putOrder, deleteOrder] = [
@@ -256,6 +302,135 @@ describe('EditorStore — §19.4 asset flows', () => {
     expect(mocks.uploadAsset).not.toHaveBeenCalled()
     expect(mocks.patchConfig).not.toHaveBeenCalled()
     expect(store.getSnapshot().notice?.kind).toBe('error')
+    expect(store.getSnapshot().importing).toBeNull()
+  })
+
+  it('importImage mirrors the in-flight upload on snapshot.importing and clears it after (UX-3)', async () => {
+    let resolveUpload!: (asset: UploadedAsset) => void
+    const uploadAsset = vi.fn(
+      () => new Promise<UploadedAsset>((resolve) => {
+        resolveUpload = resolve
+      }),
+    )
+    const { api } = makeApi({ uploadAsset: uploadAsset as EditorApi['uploadAsset'] })
+    await loadStore(api)
+    const pending = store.importImage('idle', pngFile())
+    await flushMicrotasks()
+    expect(store.getSnapshot().importing).toBe('idle')
+
+    resolveUpload({ id: 'aaaa1111bbbb2222', url: '/motion-pet-assets/aaaa1111bbbb2222', width: 240, height: 240 })
+    await pending
+    await flushMicrotasks()
+    expect(store.getSnapshot().importing).toBeNull()
+    expect(store.getSnapshot().config?.poses.idle.assetId).toBe('aaaa1111bbbb2222')
+    expect(store.getSnapshot().saveState).toBe('dirty')
+  })
+
+  it('a superseded import still lands its asset and revision; only importing belongs to the newest', async () => {
+    const deferred: Array<(asset: UploadedAsset) => void> = []
+    const uploadAsset = vi.fn(
+      () =>
+        new Promise<UploadedAsset>((resolve) => {
+          deferred.push(resolve)
+        }),
+    )
+    const { api } = makeApi({ uploadAsset: uploadAsset as EditorApi['uploadAsset'] })
+    await loadStore(api)
+    const first = store.importImage('idle', pngFile())
+    const second = store.importImage('thinking', pngFile())
+    await flushMicrotasks()
+    expect(store.getSnapshot().importing).toBe('thinking')
+
+    // The superseded upload resolves FIRST: its draft mutation already
+    // happened, so its asset/revision patch must still land — otherwise the
+    // snapshot falls behind the draft with no bump to heal it.
+    deferred[0]({ id: 'asset000000000001', url: '/motion-pet-assets/asset000000000001', width: 100, height: 100 })
+    await flushMicrotasks()
+    const mid = store.getSnapshot()
+    expect(mid.importing).toBe('thinking') // the newest import still owns the flag
+    expect(mid.config?.poses.idle.assetId).toBe('asset000000000001')
+    expect(mid.assets['asset000000000001']).toBeDefined()
+    expect(mid.configRevision).toBeGreaterThan(0)
+    expect(mid.saveState).toBe('dirty')
+
+    deferred[1]({ id: 'asset000000000002', url: '/motion-pet-assets/asset000000000002', width: 100, height: 100 })
+    await Promise.all([first, second])
+    await flushMicrotasks()
+    const snapshot = store.getSnapshot()
+    expect(snapshot.importing).toBeNull()
+    expect(snapshot.assets['asset000000000002']).toBeDefined()
+    expect(snapshot.config?.poses.thinking.assetId).toBe('asset000000000002')
+  })
+
+  it('edits landing during the post-save cleanup window keep saveState dirty', async () => {
+    let resolveDelete!: () => void
+    const deleteAsset = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    const { api, mocks } = makeApi({ deleteAsset: deleteAsset as EditorApi['deleteAsset'] })
+    await loadStore(api)
+    const config = store.getSnapshot().config
+    if (config === null) throw new Error('config missing')
+    config.poses.idle.assetId = 'old0000000000000'
+    await store.importImage('idle', pngFile()) // replaces old → pending delete
+    await flushMicrotasks()
+
+    const saving = store.saveConfig()
+    await flushMicrotasks() // PUT resolved; cleanup now hangs on the DELETE
+    expect(mocks.deleteAsset).toHaveBeenCalledWith('old0000000000000')
+    store.updateConfig((draft) => {
+      draft.global.scale = 2.2
+    })
+    expect(store.getSnapshot().saveState).toBe('dirty')
+
+    resolveDelete()
+    await saving
+    await flushMicrotasks()
+    // The edit after the PUT must not be clobbered to 'saved' — that would
+    // disable the save button and drop the beforeunload guard.
+    expect(store.getSnapshot().saveState).toBe('dirty')
+  })
+
+  it('removeImage during an in-flight save reports saving and is swept into the same save', async () => {
+    const resolvers: Array<(config: MotionPetConfig) => void> = []
+    const patchConfig = vi.fn(
+      () =>
+        new Promise<MotionPetConfig>((resolve) => {
+          resolvers.push(resolve)
+        }),
+    )
+    const { api, mocks } = makeApi({ patchConfig: patchConfig as unknown as EditorApi['patchConfig'] })
+    await loadStore(api)
+    await store.importImage('idle', pngFile())
+    await flushMicrotasks()
+
+    const saving = store.saveConfig()
+    await flushMicrotasks() // hanging in the first PUT
+    store.removeImage('idle')
+    expect(store.getSnapshot().saveState).toBe('saving') // not downgraded to 'dirty'
+    resolvers[0](structuredClone(store.getSnapshot().config) as MotionPetConfig)
+    await flushMicrotasks()
+    expect(mocks.patchConfig).toHaveBeenCalledTimes(2) // latest-wins sweeps the removal
+    resolvers[1](structuredClone(store.getSnapshot().config) as MotionPetConfig)
+    await saving
+    await flushMicrotasks()
+    expect(store.getSnapshot().saveState).toBe('saved')
+  })
+
+  it('a rejected upload clears importing and surfaces the error notice', async () => {
+    const uploadAsset = vi.fn(async () => {
+      throw new Error('connection reset')
+    })
+    const { api } = makeApi({ uploadAsset: uploadAsset as EditorApi['uploadAsset'] })
+    await loadStore(api)
+    await store.importImage('idle', pngFile())
+    await flushMicrotasks()
+    expect(store.getSnapshot().importing).toBeNull()
+    expect(store.getSnapshot().notice?.kind).toBe('error')
+    expect(store.getSnapshot().notice?.text).toContain('上传失败')
   })
 
   it('a failed old-asset DELETE only warns and keeps the new pose reference', async () => {
@@ -268,6 +443,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     config.poses.idle.assetId = 'old0000000000000'
 
     await store.importImage('idle', pngFile())
+    await store.saveConfig()
     await flushMicrotasks()
     expect(store.getSnapshot().config?.poses.idle.assetId).toBe('aaaa1111bbbb2222')
     expect(store.getSnapshot().notice?.kind).toBe('warn')
@@ -281,6 +457,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     config.poses.idle.assetId = 'old0000000000000'
 
     await store.removeImage('idle')
+    await store.saveConfig()
     await flushMicrotasks()
 
     const body = mocks.patchConfig.mock.calls[0][0] as ConfigPatch
@@ -298,6 +475,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     config.poses.thinking.assetId = 'shared0000000000'
 
     await store.removeImage('idle')
+    await store.saveConfig()
     await flushMicrotasks()
     expect(mocks.deleteAsset).not.toHaveBeenCalled()
   })
@@ -306,7 +484,7 @@ describe('EditorStore — §19.4 asset flows', () => {
 describe('EditorStore — editor/overlay ownership split (P1)', () => {
   it('a dirty save sends only the owned sections and broadcasts the host response', async () => {
     // Host stand-in: the drag save lands mid-edit, so the server-side config
-    // already carries overlay (500,300) when the editor's debounced save runs.
+    // already carries overlay (500,300) when the editor's explicit save runs.
     const serverConfig = createDefaultMotionPetConfig()
     serverConfig.overlay = { x: 0, y: 0 }
     const patchConfig = vi.fn(async (patch: ConfigPatch) => {
@@ -323,7 +501,7 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
       fetchConfig: vi.fn(async () => ({ config: structuredClone(serverConfig), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
-    store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    store = new EditorStore({ api, hub })
     await store.load()
 
     // an editor edit dirties the draft, which still holds overlay (0,0)
@@ -336,8 +514,7 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
     hub.publish({ config: structuredClone(serverConfig), assets: {}, customs: [] })
     expect(store.getSnapshot().config?.overlay).toEqual({ x: 0, y: 0 })
 
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
-    await flushMicrotasks()
+    await store.saveConfig()
 
     // the save carries ONLY the editor-owned sections — no overlay, no version
     expect(patchConfig).toHaveBeenCalledTimes(1)
@@ -357,14 +534,13 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
     expect(store.getSnapshot().saveState).toBe('saved')
   })
 
-  it('the advanced-section toggle travels in the debounced patch', async () => {
+  it('the advanced-section toggle travels in the explicit patch', async () => {
     const { api, mocks } = makeApi()
     await loadStore(api)
     store.updateConfig((draft) => {
       draft.advanced.changePoseWithinActive = true
     })
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
-    await flushMicrotasks()
+    await store.saveConfig()
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     const body = mocks.patchConfig.mock.calls[0][0] as ConfigPatch
     expect(body.advanced).toEqual({
@@ -376,6 +552,131 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
     // the host-merged response is adopted back into the draft
     expect(store.getSnapshot().config?.advanced.changePoseWithinActive).toBe(true)
     expect(store.getSnapshot().saveState).toBe('saved')
+  })
+})
+
+
+describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
+  it('restores the saved config, drops pending asset deletes and keeps selection/customs', async () => {
+    const custom: AnimationDefinition = {
+      version: 1,
+      id: 'user:a',
+      name: 'Custom A',
+      kind: 'interaction',
+      durationMs: 300,
+      repeat: { mode: 'once' },
+      tracks: [
+        { property: 'transition.rotation', keyframes: [{ at: 0, value: 0 }, { at: 1, value: 12 }] },
+      ],
+    }
+    const { api, mocks } = makeApi({
+      getAnimations: vi.fn(async () => ({ customs: [custom], warnings: [] as string[] })),
+    })
+    await loadStore(api)
+    store.selectState('thinking')
+    store.updateConfig((draft) => {
+      draft.poses.idle.assetId = 'old0000000000000'
+      draft.global.scale = 1.9
+    })
+    await store.removeImage('idle') // queues the replaced file for deletion
+    store.updateConfig((draft) => {
+      draft.global.scale = 2.5
+    })
+    expect(store.getSnapshot().saveState).toBe('dirty')
+
+    await store.revertConfig()
+    await flushMicrotasks()
+
+    const snapshot = store.getSnapshot()
+    expect(snapshot.saveState).toBe('idle')
+    expect(snapshot.config?.global.scale).toBe(1) // default again
+    expect(snapshot.config?.poses.idle.assetId).toBeUndefined()
+    expect(snapshot.selectedState).toBe('thinking') // the editor selection survives
+    expect(snapshot.customs.map((entry) => entry.id)).toEqual(['user:a']) // explicit-save data survives
+    expect(snapshot.notice?.kind).toBe('info')
+    expect(snapshot.notice?.text).toContain('已撤回')
+
+    // clean now: saving is a no-op and the replaced file is never deleted
+    await store.saveConfig()
+    await flushMicrotasks()
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+    expect(mocks.deleteAsset).not.toHaveBeenCalled()
+  })
+
+  it('awaits an in-flight save, then reverts to the server state', async () => {
+    const resolvers: Array<(config: MotionPetConfig) => void> = []
+    const patchConfig = vi.fn(
+      (patch: ConfigPatch) =>
+        new Promise<MotionPetConfig>((resolve) => {
+          resolvers.push(resolve)
+        }),
+    )
+    const { api, mocks } = makeApi({ patchConfig: patchConfig as EditorApi['patchConfig'] })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.7
+    })
+    const saving = store.saveConfig()
+    await flushMicrotasks()
+    expect(patchConfig).toHaveBeenCalledTimes(1) // PUT in flight
+
+    const reverting = store.revertConfig()
+    await flushMicrotasks()
+    expect(mocks.getConfig).toHaveBeenCalledTimes(1) // only the initial load — revert waits
+
+    resolvers[0](mergePatch(createDefaultMotionPetConfig(), { global: { scale: 1.7 } }))
+    await reverting
+    await saving
+    await flushMicrotasks()
+    expect(mocks.getConfig).toHaveBeenCalledTimes(2)
+    expect(store.getSnapshot().saveState).toBe('idle')
+    expect(store.getSnapshot().config?.global.scale).toBe(1)
+  })
+
+  it('a failed GET keeps the dirty draft and notices', async () => {
+    let calls = 0
+    const getConfig = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) return { config: createDefaultMotionPetConfig(), assets: {} }
+      throw new Error('network down')
+    })
+    const { api } = makeApi({ getConfig })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.9
+    })
+    await store.revertConfig()
+    expect(store.getSnapshot().saveState).toBe('dirty')
+    expect(store.getSnapshot().config?.global.scale).toBe(1.9)
+    expect(store.getSnapshot().notice?.kind).toBe('error')
+    expect(store.getSnapshot().notice?.text).toContain('撤回失败')
+  })
+
+  it('a save queued during the revert fetch aborts the revert', async () => {
+    let releaseGet!: (value: { config: MotionPetConfig; assets: Record<string, AssetMeta> }) => void
+    let calls = 0
+    const getConfig = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) return { config: createDefaultMotionPetConfig(), assets: {} as Record<string, AssetMeta> }
+      return new Promise<{ config: MotionPetConfig; assets: Record<string, AssetMeta> }>((resolve) => {
+        releaseGet = resolve
+      })
+    })
+    const { api, mocks } = makeApi({ getConfig })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.9
+    })
+    const reverting = store.revertConfig()
+    await flushMicrotasks()
+    // the user hits Save while the revert's GET is still in flight
+    void store.saveConfig()
+    releaseGet({ config: createDefaultMotionPetConfig(), assets: {} })
+    await reverting
+    await flushMicrotasks()
+    expect(store.getSnapshot().config?.global.scale).toBe(1.9) // draft untouched
+    expect(store.getSnapshot().notice?.text).toContain('已取消撤回')
+    expect(mocks.patchConfig).toHaveBeenCalledTimes(1) // the save went through
   })
 })
 
@@ -426,7 +727,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
       fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
-    store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    store = new EditorStore({ api, hub })
     await store.load()
     const seen: ConfigSnapshot[] = []
     hub.subscribe((snapshot) => seen.push(snapshot))
@@ -492,13 +793,42 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     expect(store.getSnapshot().notice?.text).toContain('点击互动')
   })
 
+  it('deleteAnimation refuses while a state custom ambient references it', async () => {
+    const config = createDefaultMotionPetConfig()
+    config.states.waiting.ambient.customAnimationId = 'user:a'
+    const ambient: AnimationDefinition = {
+      ...makeCustom('user:a'),
+      kind: 'ambient',
+      repeat: { mode: 'loop' },
+      tracks: [
+        {
+          property: 'sway.rotation',
+          keyframes: [
+            { at: 0, value: -2 },
+            { at: 1, value: 2 },
+          ],
+        },
+      ],
+    }
+    const { api, mocks } = makeApi({
+      getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
+    })
+    await loadStore(api)
+    await store.saveAnimation(ambient)
+
+    expect(await store.deleteAnimation('user:a')).toBe(false)
+    expect(mocks.deleteAnimation).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice?.text).toContain('等待')
+    expect(store.getSnapshot().notice?.text).toContain('环境动态')
+  })
+
   it('deleteAnimation removes the entry and broadcasts on success', async () => {
     const { api, mocks } = makeApi()
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
-    store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    store = new EditorStore({ api, hub })
     await store.load()
     await store.saveAnimation(makeCustom('user:a'))
 
@@ -529,7 +859,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
       fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
-    store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    store = new EditorStore({ api, hub })
     await store.load()
 
     store.updateConfig((draft) => {
@@ -541,6 +871,185 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     // customs follow the hub; the dirty draft is not rolled back
     expect(store.getSnapshot().customs.map((custom) => custom.id)).toEqual(['user:x'])
     expect(store.getSnapshot().config?.global.scale).toBe(1.7)
+  })
+})
+
+describe('EditorStore — pet presets (V1.1)', () => {
+  const preset = (id: string, name: string, scale: number): PetPreset => {
+    const config = createDefaultMotionPetConfig()
+    return {
+      id,
+      name,
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      scale,
+      poses: structuredClone(config.poses),
+      states: structuredClone(config.states),
+    }
+  }
+
+  it('loads pets in parallel and exposes the host active pointer', async () => {
+    const pet = preset('pet_a', '蓝猫', 1.4)
+    const { api } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [pet], activePetId: pet.id, warnings: [] })),
+    })
+    await loadStore(api)
+    expect(store.getSnapshot().pets.map((candidate) => candidate.name)).toEqual(['蓝猫'])
+    expect(store.getSnapshot().config?.activePetId).toBe('pet_a')
+  })
+
+  it('create current/blank and rename are immediate API actions followed by a list refresh', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+
+    expect(await store.createPetCurrent('副本')).toBe(true)
+    const id = store.getSnapshot().config?.activePetId
+    expect(id).toBe('pet_1')
+    expect(mocks.createPet).toHaveBeenCalledWith({ name: '副本', from: 'current' })
+    expect(store.getSnapshot().pets[0].name).toBe('副本')
+
+    expect(await store.renamePet(id ?? '', '改名')).toBe(true)
+    expect(mocks.renamePet).toHaveBeenCalledWith('pet_1', '改名')
+    expect(store.getSnapshot().pets[0].name).toBe('改名')
+
+    expect(await store.createPetBlank('空白')).toBe(true)
+    expect(mocks.createPet).toHaveBeenLastCalledWith({ name: '空白', from: 'blank' })
+    expect(store.getSnapshot().config?.activePetId).toBe('pet_2')
+    expect(store.getSnapshot().pets.map((candidate) => candidate.name)).toEqual(['改名', '空白'])
+  })
+
+  it('apply replaces the draft with the host config and publishes it through the hub', async () => {
+    const targetPet = preset('pet_target', '目标', 2.25)
+    const targetConfig = createDefaultMotionPetConfig()
+    targetConfig.activePetId = targetPet.id
+    targetConfig.global.scale = targetPet.scale
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [targetPet], activePetId: targetPet.id, warnings: [] })),
+      applyPet: vi.fn(async () => structuredClone(targetConfig)),
+    })
+    const hub = new ConfigHub({
+      fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+    })
+    store = new EditorStore({ api, hub })
+    await store.load()
+
+    // Force a different local selection so apply is not treated as a no-op.
+    const current = store.getSnapshot().config
+    if (current === null) throw new Error('config missing')
+    current.activePetId = null
+    expect(await store.applyPet(targetPet.id)).toBe(true)
+
+    expect(mocks.applyPet).toHaveBeenCalledWith(targetPet.id)
+    expect(store.getSnapshot().config?.global.scale).toBe(2.25)
+    expect(hub.getCurrent()?.config.activePetId).toBe(targetPet.id)
+    expect(hub.getCurrent()?.config.global.scale).toBe(2.25)
+  })
+
+  it('deleting the active preset keeps the current character and shows it as unsaved', async () => {
+    const active = preset('pet_active', '当前', 1.8)
+    const config = createDefaultMotionPetConfig()
+    config.activePetId = active.id
+    config.global.scale = active.scale
+    let deleted = false
+    const { api, mocks } = makeApi({
+      getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
+      getPets: vi.fn(async () => ({
+        pets: deleted ? [] : [active],
+        activePetId: deleted ? null : active.id,
+        warnings: [],
+      })),
+      deletePet: vi.fn(async () => {
+        deleted = true
+      }),
+    })
+    await loadStore(api)
+
+    expect(await store.deletePet(active.id)).toBe(true)
+    expect(mocks.deletePet).toHaveBeenCalledWith(active.id)
+    expect(store.getSnapshot().pets).toEqual([])
+    expect(store.getSnapshot().config?.activePetId).toBeNull()
+    expect(store.getSnapshot().config?.global.scale).toBe(1.8)
+  })
+
+  it('blocks pet switching while config changes are unsaved', async () => {
+    const target = preset('pet_target', '目标', 1)
+    const switched = createDefaultMotionPetConfig()
+    switched.activePetId = target.id
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [target], activePetId: target.id, warnings: [] })),
+      applyPet: vi.fn(async () => structuredClone(switched)),
+    })
+    await loadStore(api)
+    const config = store.getSnapshot().config
+    if (config === null) throw new Error('config missing')
+    config.activePetId = null
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.6
+    })
+
+    expect(await store.applyPet(target.id)).toBe(false)
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+    expect(mocks.applyPet).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+  })
+
+  it('rename/delete of a NON-active preset works while the draft is dirty (UX relaxation)', async () => {
+    const active = preset('pet_active', '当前', 1)
+    const other = preset('pet_other', '备用', 1.2)
+    const config = createDefaultMotionPetConfig()
+    config.activePetId = active.id
+    const { api, mocks } = makeApi({
+      getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
+      getPets: vi.fn(async () => ({ pets: [active, other], activePetId: active.id, warnings: [] })),
+    })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.6 // dirty — must not block non-active identity ops
+    })
+
+    expect(await store.renamePet(other.id, '改名备用')).toBe(true)
+    expect(mocks.renamePet).toHaveBeenCalledWith(other.id, '改名备用')
+    expect(await store.deletePet(other.id)).toBe(true)
+    expect(mocks.deletePet).toHaveBeenCalledWith(other.id)
+    // the dirty draft is untouched by both operations
+    expect(store.getSnapshot().config?.global.scale).toBe(1.6)
+    expect(store.getSnapshot().saveState).toBe('dirty')
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+
+    // the ACTIVE pet still refuses while dirty
+    expect(await store.renamePet(active.id, '改名当前')).toBe(false)
+    expect(mocks.renamePet).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+  })
+
+  it('a failed save blocks pet actions with an explicit notice instead of silence', async () => {
+    const active = preset('pet_active', '当前', 1)
+    const other = preset('pet_other', '备用', 1.2)
+    const config = createDefaultMotionPetConfig()
+    config.activePetId = active.id
+    const { api, mocks } = makeApi({
+      getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
+      getPets: vi.fn(async () => ({ pets: [active, other], activePetId: active.id, warnings: [] })),
+      patchConfig: vi.fn(async () => {
+        throw new Error('disk full')
+      }),
+    })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.6
+    })
+    await store.saveConfig()
+    expect(store.getSnapshot().saveState).toBe('error')
+
+    // the ACTIVE pet still refuses (a failed save keeps the draft dirty,
+    // so the clean-draft gate fires with its own notice)
+    expect(await store.renamePet(active.id, '改名当前')).toBe(false)
+    expect(mocks.renamePet).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+    // a NON-active target never touches the draft, so a failed save does not block it
+    expect(await store.renamePet(other.id, '改名备用')).toBe(true)
+    expect(mocks.renamePet).toHaveBeenCalledWith(other.id, '改名备用')
   })
 })
 

@@ -8,16 +8,13 @@ import type { JSX } from 'react'
 import { createPoseResolver } from '../../core/pose-resolver'
 import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
+import { STATE_LABELS } from './state-labels'
 import styles from './settings.module.css'
 
-export const STATE_LABELS: Record<PoseKey, string> = {
-  idle: '待机',
-  thinking: '思考',
-  working: '工作',
-  waiting: '等待',
-  success: '成功',
-  error: '错误',
-}
+// Re-exported for the existing import sites (MotionPetSettings, PoseEditor,
+// LivePreview); the definition lives in state-labels.ts so non-React modules
+// (the editor store) can share it without pulling in components.
+export { STATE_LABELS }
 
 export interface StateListProps {
   config: MotionPetConfig

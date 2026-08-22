@@ -10,13 +10,16 @@
  * onValidationChange (also listed inline there); this panel adds the scalar
  * validation (name / durationMs / repeat / cross-field rules) by running
  * validateAnimationDefinition on the assembled candidate. 保存/试播/克隆 all
- * require both channels clean. 试播 auditions the draft on the Live Preview
- * stage via PreviewSession.previewDefinition, with an optional strength
- * override; 循环试播 re-auditions automatically ~600ms after the last edit.
+ * require both channels clean. 试播 uses the library's own renderer and can
+ * be stopped independently; 循环试播 re-auditions automatically ~600ms after
+ * the last edit. Switching/creating/cloning/deleting with unsaved edits asks
+ * for confirmation first (the selected list entry carries a ● marker until
+ * the draft matches its saved version again).
  */
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { BUILTIN_AMBIENT_DEFINITIONS } from '../../core/ambient-presets'
 import { BUILTIN_INTERACTION_DEFINITIONS, BUILTIN_TRANSITION_DEFINITIONS } from '../../core/transition-presets'
+import type { AssetMeta, MotionPetConfig } from '../../core/types'
 import type {
   AnimationDefinition,
   AnimationKind,
@@ -27,6 +30,9 @@ import type {
 import { validateAnimationDefinition } from '../../motion/animation-definition'
 import { TimelineEditor } from '../timeline/TimelineEditor'
 import { validateTimelineDraft } from '../timeline/timeline-model'
+import { PetRenderer } from '../overlay/PetRenderer'
+import type { PetStage } from '../overlay/pet-stage'
+import { PreviewSession } from '../preview-session'
 import type { EditorStore } from '../stores/editor-store'
 import { NumberField, SelectRow, Slider, Toggle } from './controls'
 import styles from './settings.module.css'
@@ -147,12 +153,13 @@ function evaluateDraft(
 export interface AnimationLibraryProps {
   store: EditorStore
   customs: AnimationDefinition[]
-  /** Audition a (valid) draft on the Live Preview stage; strength overrides the definition default. */
-  onPreview: (definition: AnimationDefinition, options?: { strength?: number }) => void
+  config: MotionPetConfig
+  assets: Record<string, AssetMeta>
+  configRevision: number
 }
 
 export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
-  const { store, customs, onPreview } = props
+  const { store, customs, config, assets, configRevision } = props
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<DraftState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -163,6 +170,10 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   const [jsonDraft, setJsonDraft] = useState<{ text: string; errors: string[] } | null>(null)
   const [autoReplay, setAutoReplay] = useState(false)
   const [previewStrength, setPreviewStrength] = useState(1)
+  const [previewReady, setPreviewReady] = useState(false)
+  const auditionSessionRef = useRef<PreviewSession | null>(null)
+  const latestPreviewData = useRef({ config, assets, customs })
+  latestPreviewData.current = { config, assets, customs }
 
   const selected =
     selectedId === null
@@ -178,7 +189,26 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   const draftValid = evaluation?.definition != null && timelineErrors.length === 0
   const strengthBounds = selected?.parameters?.strength ?? { default: 1, min: 0, max: 1.8 }
 
-  const selectDefinition = (definition: AnimationDefinition): void => {
+  /**
+   * UX-2: the pristine draft of the current selection — the baseline for
+   * "unsaved edits" — is derived from `selected` itself: a customs entry IS
+   * its saved version (a successful save refreshes the list, which clears
+   * the marker), and builtins are immutable, so any JSON divergence from the
+   * re-derived baseline means the user edited something (builtins included —
+   * timeline tweaks on a read-only entry are audition-only until cloned).
+   */
+  const draftDirty =
+    draft !== null &&
+    selected !== undefined &&
+    JSON.stringify(draft) !== JSON.stringify(draftFrom(selected))
+
+  /** Refuse to silently discard unsaved timeline edits; false = aborted. */
+  const guardUnsavedDraft = (): boolean =>
+    !draftDirty || window.confirm('当前动画有未保存的修改，继续将丢弃这些修改。')
+
+  const applySelection = (definition: AnimationDefinition): void => {
+    auditionSessionRef.current?.stopPreviewDefinition()
+    setAutoReplay(false)
     setSelectedId(definition.id)
     setDraft(draftFrom(definition))
     setTimelineErrors(validateTimelineDraft(definition.kind, definition.tracks, definition.events ?? []))
@@ -190,11 +220,27 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     setDraft((current) => (current === null ? current : { ...current, ...patch }))
   }
 
+  /** Kind switches normalize event rules so a valid draft stays editable. */
+  const changeKind = (kind: AnimationKind): void => {
+    setDraft((current) => {
+      if (current === null || current.kind === kind) return current
+      let events = current.events
+      if (kind === 'ambient') events = []
+      if (kind === 'interaction') events = events.filter((event) => event.type !== 'pose-swap')
+      if (kind === 'transition' && !events.some((event) => event.type === 'pose-swap')) {
+        events = [...events, { at: 0.5, type: 'pose-swap' }]
+      }
+      const repeatMode = events.length > 0 && current.repeatMode === 'alternate' ? 'once' : current.repeatMode
+      return { ...current, kind, events, repeatMode }
+    })
+  }
+
   const handleNew = async (): Promise<void> => {
+    if (!guardUnsavedDraft()) return
     setBusy(true)
     try {
       const definition = newAnimationTemplate()
-      if (await store.saveAnimation(definition)) selectDefinition(definition)
+      if (await store.saveAnimation(definition)) applySelection(definition)
     } finally {
       setBusy(false)
     }
@@ -204,6 +250,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     // Clone what you see: the current draft (must be valid) becomes the copy,
     // so timeline tweaks on a built-in survive into the custom.
     if (selected === undefined || draft === null || evaluation?.definition == null || timelineErrors.length > 0) return
+    if (!guardUnsavedDraft()) return
     setBusy(true)
     try {
       const clone: AnimationDefinition = {
@@ -211,7 +258,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
         id: `user:${crypto.randomUUID()}`,
         name: `${draft.name} 副本`,
       }
-      if (await store.saveAnimation(clone)) selectDefinition(clone)
+      if (await store.saveAnimation(clone)) applySelection(clone)
     } finally {
       setBusy(false)
     }
@@ -219,6 +266,10 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
 
   const handleDelete = async (): Promise<void> => {
     if (selected === undefined || readOnly) return
+    // Two explicit gates: the unsaved-edit warning first (the edits die with
+    // the animation), then the irreversible delete itself.
+    if (draftDirty && !window.confirm('当前动画有未保存的修改，继续将丢弃这些修改。')) return
+    if (!window.confirm(`确认删除动画「${draft?.name ?? selected.name}」？此操作不可恢复。`)) return
     setBusy(true)
     try {
       if (await store.deleteAnimation(selected.id)) {
@@ -242,10 +293,42 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
 
   // --- audition (试播 / 循环试播) -------------------------------------------
 
+  const handleAuditionStage = useCallback((stage: PetStage | null): void => {
+    auditionSessionRef.current?.dispose()
+    auditionSessionRef.current = null
+    setPreviewReady(false)
+    if (stage === null) return
+    const latest = latestPreviewData.current
+    const session = new PreviewSession({
+      stage,
+      config: structuredClone(latest.config),
+      assets: latest.assets,
+      customs: latest.customs,
+      auditionOnly: true,
+    })
+    auditionSessionRef.current = session
+    void session.start().then(() => {
+      if (auditionSessionRef.current === session) setPreviewReady(true)
+    })
+  }, [])
+
+  useEffect(() => {
+    void auditionSessionRef.current?.updateConfig(config, assets)
+  }, [config, assets, configRevision])
+
+  useEffect(() => {
+    auditionSessionRef.current?.updateCustoms(customs)
+  }, [customs])
+
   const audition = (): void => {
     if (evaluation?.definition != null && timelineErrors.length === 0) {
-      onPreview(evaluation.definition, { strength: previewStrength })
+      auditionSessionRef.current?.previewDefinition(evaluation.definition, { strength: previewStrength })
     }
+  }
+
+  const stopAudition = (): void => {
+    setAutoReplay(false)
+    auditionSessionRef.current?.stopPreviewDefinition()
   }
   // Latest-callback ref so the debounce timer always auditions the live draft.
   const auditionRef = useRef(audition)
@@ -316,9 +399,16 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 className={
                   definition.id === selectedId ? `${styles.stateItem} ${styles.stateItemSelected}` : styles.stateItem
                 }
-                onClick={() => selectDefinition(definition)}
+                onClick={() => {
+                  if (guardUnsavedDraft()) applySelection(definition)
+                }}
               >
                 <span>{definition.name}</span>
+                {definition.id === selectedId && draftDirty ? (
+                  <span className={styles.dirtyDot} title="有未保存的修改">
+                    ●
+                  </span>
+                ) : null}
                 <span className={styles.stateHint}>
                   {KIND_LABELS[definition.kind]} · 内置
                 </span>
@@ -331,18 +421,36 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 className={
                   definition.id === selectedId ? `${styles.stateItem} ${styles.stateItemSelected}` : styles.stateItem
                 }
-                onClick={() => selectDefinition(definition)}
+                onClick={() => {
+                  if (guardUnsavedDraft()) applySelection(definition)
+                }}
               >
                 <span>{definition.name}</span>
+                {definition.id === selectedId && draftDirty ? (
+                  <span className={styles.dirtyDot} title="有未保存的修改">
+                    ●
+                  </span>
+                ) : null}
                 <span className={styles.stateHint}>{KIND_LABELS[definition.kind]}</span>
               </button>
             ))}
           </div>
         </div>
         <div className={styles.animationEditor}>
+          <div className={styles.animationPreview} aria-label="动画试播渲染器">
+            <div className={styles.animationPreviewStage}>
+              <PetRenderer onStage={handleAuditionStage} embedded size={220} />
+            </div>
+            <div className={styles.animationPreviewActions}>
+              <span className={styles.hint}>此渲染器只播放动画库试播。</span>
+              <button type="button" className={styles.button} disabled={!previewReady} onClick={stopAudition}>
+                ■ 停止
+              </button>
+            </div>
+          </div>
           {selected === undefined || draft === null || evaluation === null ? (
             <p className={styles.hint}>
-              在左侧选择动画查看详情。内置动画只读，可克隆为自定义后编辑；自定义动画保存后可在状态的过渡下拉与点击互动中选用。
+              在左侧选择动画查看详情。内置动画只读，可克隆为自定义后编辑；保存后可在状态的过渡、环境动态与点击互动中选用。
             </p>
           ) : (
             <>
@@ -361,9 +469,9 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 value={draft.kind}
                 options={KIND_OPTIONS}
                 disabled={readOnly}
-                onChange={(kind) => patchDraft({ kind })}
+                onChange={changeKind}
               />
-              <p className={styles.hint}>切换类型不会改动已有轨道与事件；不合法的组合会由下方校验列出，可按提示修复。</p>
+              <p className={styles.hint}>切换类型时会自动移除不适用的事件；切回过渡类型时会补充 pose-swap。</p>
               <NumberField
                 label="时长"
                 min={1}
@@ -477,7 +585,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 </ul>
               ) : null}
               <div className={styles.animationActions}>
-                <button type="button" className={styles.button} disabled={!draftValid} onClick={audition}>
+                <button type="button" className={styles.button} disabled={!draftValid || !previewReady} onClick={audition}>
                   ▶ 试播
                 </button>
                 {readOnly ? null : (

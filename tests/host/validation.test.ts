@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import type { AnimationKind } from '../../src/motion/animation-definition'
 import { ConfigValidationError, repairConfig, validateAssetId, validateConfigPatch } from '../../src/host/validation'
 
 describe('validateConfigPatch (§19.2)', () => {
@@ -273,27 +274,31 @@ describe('states.*.enter.animationId (§8.14, V1.1)', () => {
     expect(patched.states.idle.enter.animationId).toBe('builtin:jelly')
   })
 
-  it('accepts a user id that exists on disk (injected check)', () => {
-    const patched = validateConfigPatch(withAnimationId('user:pop'), undefined, { animationExists: () => true })
+  it('accepts a transition-kind user id (injected lookup)', () => {
+    const patched = validateConfigPatch(withAnimationId('user:pop'), undefined, { animationLookup: () => 'transition' })
     expect(patched.states.idle.enter.animationId).toBe('user:pop')
   })
 
-  it('accepts a user id shape-only when no existence check is injected', () => {
+  it('accepts a user id shape-only when no lookup is injected', () => {
     const patched = validateConfigPatch(withAnimationId('user:pop'))
     expect(patched.states.idle.enter.animationId).toBe('user:pop')
   })
 
-  it('throws with the field path on unknown builtin ids, missing customs and bad shapes', () => {
-    const pathsOf = (body: unknown, exists?: (id: string) => boolean): string[] => {
+  it('throws with the field path on unknown builtin ids, missing/wrong-kind customs and bad shapes', () => {
+    const pathsOf = (body: unknown, lookup?: (id: string) => AnimationKind | undefined): string[] => {
       try {
-        validateConfigPatch(body, undefined, { animationExists: exists })
+        validateConfigPatch(body, undefined, { animationLookup: lookup })
         return []
       } catch (error) {
         return (error as ConfigValidationError).issues.map((issue) => issue.path)
       }
     }
     expect(pathsOf(withAnimationId('builtin:warp'))).toEqual(['states.idle.enter.animationId'])
-    expect(pathsOf(withAnimationId('user:ghost'), () => false)).toEqual(['states.idle.enter.animationId'])
+    expect(pathsOf(withAnimationId('user:ghost'), () => undefined)).toEqual(['states.idle.enter.animationId'])
+    // Kind guard: an enter must fire pose-swap, so ambient/interaction kinds are
+    // rejected like a dangling id (a completed enter always swapped poses, §12).
+    expect(pathsOf(withAnimationId('user:float'), () => 'ambient')).toEqual(['states.idle.enter.animationId'])
+    expect(pathsOf(withAnimationId('user:wiggle'), () => 'interaction')).toEqual(['states.idle.enter.animationId'])
     expect(pathsOf(withAnimationId('../evil'))).toEqual(['states.idle.enter.animationId'])
     expect(pathsOf(withAnimationId(42))).toEqual(['states.idle.enter.animationId'])
   })
@@ -311,14 +316,15 @@ describe('states.*.enter.animationId (§8.14, V1.1)', () => {
     expect(cleared.states.idle.enter.preset).toBe(base.states.idle.enter.preset)
   })
 
-  it('repair drops an animationId whose custom animation is gone (preset fallback)', () => {
-    const repaired = repairConfig(withAnimationId('user:ghost'), { animationExists: () => false })
+  it('repair drops an animationId whose custom animation is gone or wrong-kind (preset fallback)', () => {
+    const repaired = repairConfig(withAnimationId('user:ghost'), { animationLookup: () => undefined })
     expect(repaired.states.idle.enter.animationId).toBeUndefined()
     expect(repaired.states.idle.enter.preset).toBe('soft') // untouched fields survive
+    expect(repairConfig(withAnimationId('user:float'), { animationLookup: () => 'ambient' }).states.idle.enter.animationId).toBeUndefined()
   })
 
-  it('repair keeps a resolvable animationId and never throws on bad shapes', () => {
-    expect(repairConfig(withAnimationId('user:pop'), { animationExists: () => true }).states.idle.enter.animationId).toBe(
+  it('repair keeps a resolvable transition-kind animationId and never throws on bad shapes', () => {
+    expect(repairConfig(withAnimationId('user:pop'), { animationLookup: () => 'transition' }).states.idle.enter.animationId).toBe(
       'user:pop',
     )
     expect(repairConfig(withAnimationId('builtin:flip')).states.idle.enter.animationId).toBe('builtin:flip')
@@ -332,6 +338,94 @@ describe('states.*.enter.animationId (§8.14, V1.1)', () => {
       global: { transition: { preset: 'jelly', strength: 1, durationMs: 380, animationId: 'user:pop' } },
     })
     expect(patched.global.transition).not.toHaveProperty('animationId')
+  })
+})
+
+describe('states.*.ambient.customAnimationId (V1.1 custom ambient)', () => {
+  const withAmbientId = (customAnimationId: unknown): Record<string, unknown> => ({
+    version: 1,
+    states: { idle: { ambient: { customAnimationId } } },
+  })
+
+  it('accepts an ambient-kind user animation and preserves it across unrelated patches', () => {
+    const patched = validateConfigPatch(withAmbientId('user:float'), undefined, { animationLookup: () => 'ambient' })
+    expect(patched.states.idle.ambient.customAnimationId).toBe('user:float')
+    expect(validateConfigPatch({ enabled: false }, patched).states.idle.ambient.customAnimationId).toBe('user:float')
+  })
+
+  it('explicit null clears the reference', () => {
+    const base = createDefaultMotionPetConfig()
+    base.states.idle.ambient.customAnimationId = 'user:float'
+    expect(validateConfigPatch(withAmbientId(null), base).states.idle.ambient.customAnimationId).toBeUndefined()
+  })
+
+  it('rejects builtins, malformed ids, missing and wrong-kind custom files with the exact field path', () => {
+    for (const value of ['builtin:sway', '../float', 42]) {
+      expect(() => validateConfigPatch(withAmbientId(value))).toThrowError(ConfigValidationError)
+      try {
+        validateConfigPatch(withAmbientId(value))
+      } catch (error) {
+        expect((error as ConfigValidationError).issues.map((issue) => issue.path)).toEqual([
+          'states.idle.ambient.customAnimationId',
+        ])
+      }
+    }
+    expect(() =>
+      validateConfigPatch(withAmbientId('user:missing'), undefined, { animationLookup: () => undefined }),
+    ).toThrowError(ConfigValidationError)
+    // Kind guard: only ambient-kind customs are valid ambient mounts.
+    expect(() =>
+      validateConfigPatch(withAmbientId('user:pop'), undefined, { animationLookup: () => 'transition' }),
+    ).toThrowError(ConfigValidationError)
+  })
+
+  it('repair drops a dangling or wrong-kind reference and keeps a resolvable one', () => {
+    expect(
+      repairConfig(withAmbientId('user:float'), { animationLookup: () => 'ambient' }).states.idle.ambient.customAnimationId,
+    ).toBe('user:float')
+    expect(
+      repairConfig(withAmbientId('user:missing'), { animationLookup: () => undefined }).states.idle.ambient.customAnimationId,
+    ).toBeUndefined()
+    expect(
+      repairConfig(withAmbientId('user:pop'), { animationLookup: () => 'transition' }).states.idle.ambient.customAnimationId,
+    ).toBeUndefined()
+  })
+})
+
+describe('activePetId (V1.1 pet presets)', () => {
+  it('defaults to null when the field is missing (old config files need no migration)', () => {
+    expect(repairConfig({ version: 1 }).activePetId).toBeNull()
+    expect(createDefaultMotionPetConfig().activePetId).toBeNull()
+    // patch semantics: an absent field keeps the base value
+    const base = createDefaultMotionPetConfig()
+    base.activePetId = 'pet_abc123'
+    expect(validateConfigPatch({ enabled: false }, base).activePetId).toBe('pet_abc123')
+  })
+
+  it('accepts a pet id or an explicit null in strict mode', () => {
+    expect(validateConfigPatch({ activePetId: 'pet_lx3ab9f2' }).activePetId).toBe('pet_lx3ab9f2')
+    const base = createDefaultMotionPetConfig()
+    base.activePetId = 'pet_abc123'
+    expect(validateConfigPatch({ activePetId: null }, base).activePetId).toBeNull()
+  })
+
+  it('rejects malformed values with the field path in strict mode', () => {
+    for (const bad of ['user:x', 'pet_', 'pet_a/b', 'Kitty', 42, true]) {
+      try {
+        validateConfigPatch({ activePetId: bad })
+        expect.unreachable(String(bad))
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigValidationError)
+        expect((error as ConfigValidationError).issues.map((issue) => issue.path)).toEqual(['activePetId'])
+      }
+    }
+  })
+
+  it('repair falls back instead of throwing on malformed values', () => {
+    expect(repairConfig({ activePetId: 'user:x' }).activePetId).toBeNull()
+    expect(repairConfig({ activePetId: 42 }).activePetId).toBeNull()
+    expect(repairConfig({ activePetId: 'pet_ok123' }).activePetId).toBe('pet_ok123')
+    expect(repairConfig({ activePetId: null }).activePetId).toBeNull()
   })
 })
 

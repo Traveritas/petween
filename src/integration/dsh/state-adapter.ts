@@ -13,7 +13,10 @@
  *   session's latest event. Success/error are TTL'd (§14.5: they are
  *   transient holds, not permanent states): an expired terminal entry counts
  *   as absent, so a session that finished long ago cannot suppress another
- *   session's live activity forever. Expiry is not only evaluated when an
+ *   session's live activity forever. The TTL clock is the event's own `ts`
+ *   (host timestamp), so a snapshot replay after a reconnect/poll cannot
+ *   revive a terminal that already ended — only a genuinely fresh terminal
+ *   holds. Expiry is not only evaluated when an
  *   event arrives: every recompute arms a one-shot timer for the earliest
  *   live terminal expiry, so a suppressed session surfaces (or the pet
  *   returns to idle) even when no further event ever comes. The TTLs
@@ -264,14 +267,25 @@ export class StateAdapter {
     return null
   }
 
+  /**
+   * A terminal entry's freshness clock is its OWN `ts`, not the receipt time:
+   * a snapshot/poll replay (SSE reconnect, /state fallback) re-delivers the
+   * session's last event, and a success/error that ended minutes ago must not
+   * parade as a fresh terminal hold ("ghost celebration"). `receivedAt` stays
+   * on the entry for non-terminal freshness semantics only.
+   */
+  private terminalExpired(event: NormalizedAgentEvent, ttl: number, now: number): boolean {
+    return now - event.ts >= ttl
+  }
+
   /** Pick the §14.5 winner and emit it when the aggregate actually changed. */
   private recompute(): void {
     const now = Date.now()
     let winner: NormalizedAgentEvent | null = null
     let winnerRank = -1
-    for (const { event, receivedAt } of this.sessions.values()) {
+    for (const { event } of this.sessions.values()) {
       const ttl = this.terminalTtl(event)
-      if (ttl !== null && now - receivedAt >= ttl) continue // expired terminal counts as absent
+      if (ttl !== null && this.terminalExpired(event, ttl, now)) continue // expired terminal counts as absent
       const rank = rankOf(event)
       if (rank > winnerRank || (rank === winnerRank && winner !== null && event.ts >= winner.ts)) {
         winner = event
@@ -296,16 +310,17 @@ export class StateAdapter {
    * A live terminal entry expires on its own: arm a one-shot recompute for
    * the earliest expiry so the runner-up surfaces (or the pet idles) without
    * waiting for the next event. Re-armed by every recompute; cleared by
-   * setSession/dispose.
+   * setSession/dispose. The expiry instant is derived from the event's own
+   * `ts` (same clock as the recompute check above).
    */
   private scheduleTerminalExpiry(now: number): void {
     this.clearTerminalExpiry()
     if (this.disposed) return
     let earliest: number | null = null
-    for (const { event, receivedAt } of this.sessions.values()) {
+    for (const { event } of this.sessions.values()) {
       const ttl = this.terminalTtl(event)
-      if (ttl === null || now - receivedAt >= ttl) continue // non-terminal or already expired
-      const expiresAt = receivedAt + ttl
+      if (ttl === null || this.terminalExpired(event, ttl, now)) continue // non-terminal or already expired
+      const expiresAt = event.ts + ttl
       if (earliest === null || expiresAt < earliest) earliest = expiresAt
     }
     if (earliest === null) return

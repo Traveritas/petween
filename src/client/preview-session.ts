@@ -11,6 +11,7 @@
  * hidden pages must not run timers or animations).
  */
 import { createPoseResolver } from '../core/pose-resolver'
+import { stateSlotFor } from '../core/state-machine'
 import type { AssetMeta, MotionPetConfig, PoseKey, ResolvedPose } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
@@ -33,6 +34,8 @@ export interface PreviewSessionOptions {
   customs?: AnimationDefinition[]
   registry?: AnimationRegistry
   coalesceMs?: number
+  /** Static boot for the animation-library renderer: show idle without its enter/ambient motion. */
+  auditionOnly?: boolean
 }
 
 export class PreviewSession {
@@ -45,6 +48,8 @@ export class PreviewSession {
   private assets: Record<string, AssetMeta>
   private resolvePose: (poseKey: PoseKey) => ResolvedPose | null
   private readonly customInstances = new Set<TimelineInstance>()
+  private readonly auditionOnly: boolean
+  private previewInstance: TimelineInstance | null = null
   private mediaQuery: MediaQueryList | null = null
   private hidden = false
   private disposed = false
@@ -54,10 +59,10 @@ export class PreviewSession {
 
   constructor(options: PreviewSessionOptions) {
     this.stage = options.stage
+    this.auditionOnly = options.auditionOnly ?? false
     this.config = options.config
     this.assets = options.assets
     this.registry = options.registry ?? createBuiltinRegistry()
-    if (options.customs !== undefined) this.updateCustoms(options.customs)
     this.resolvePose = createPoseResolver(options.config.poses, options.assets)
     this.director = new MotionDirector({
       stage: options.stage,
@@ -66,6 +71,7 @@ export class PreviewSession {
       // Indirection: updateConfig swaps the resolver on config hot-edits.
       resolvePose: (poseKey) => this.resolvePose(poseKey),
     })
+    if (options.customs !== undefined) this.updateCustoms(options.customs)
     this.source = new ManualStateSource({
       config: options.config,
       director: this.director,
@@ -133,7 +139,7 @@ export class PreviewSession {
     this.stage.setUserScale(this.config.global.scale)
     if (this.config.global.reducedMotion !== previousReducedMotion) {
       this.applyReducedMotion()
-    } else if (JSON.stringify(this.config.states) !== previousStates) {
+    } else if (!this.auditionOnly && JSON.stringify(this.config.states) !== previousStates) {
       this.director.refreshAmbient()
     }
 
@@ -142,7 +148,8 @@ export class PreviewSession {
       await this.start()
       return
     }
-    await this.refreshCurrentPose()
+    if (this.auditionOnly) await this.refreshAuditionPose()
+    else await this.refreshCurrentPose()
   }
 
   private async boot(): Promise<void> {
@@ -161,14 +168,38 @@ export class PreviewSession {
     if (this.resolvePose(this.config.states.idle.pose) === null) {
       return // §2.1: no image at all → nothing to show
     }
-    await this.director.setTarget({
-      visualState: 'idle',
-      poseKey: this.config.states.idle.pose,
-      reason: 'session-switch',
-    })
+    if (this.auditionOnly) {
+      const pose = this.resolvePose(this.config.states.idle.pose)
+      if (pose !== null) this.stage.swapPose(pose)
+    } else {
+      await this.director.setTarget({
+        visualState: 'idle',
+        poseKey: this.config.states.idle.pose,
+        reason: 'session-switch',
+      })
+    }
     this.started = true
     // A config edit may have landed while the boot preload was in flight.
-    await this.refreshCurrentPose()
+    if (this.auditionOnly) await this.refreshAuditionPose()
+    else await this.refreshCurrentPose()
+  }
+
+  /** Keep the animation-library renderer on the configured idle pose. */
+  private async refreshAuditionPose(): Promise<void> {
+    const next = this.resolvePose(this.config.states.idle.pose)
+    if (next === null) return
+    const current = this.stage.currentPose
+    if (
+      current !== null &&
+      next.asset.url === current.asset.url &&
+      next.anchor.x === current.anchor.x &&
+      next.anchor.y === current.anchor.y &&
+      next.zoom === current.zoom
+    ) {
+      return
+    }
+    await this.stage.preload([next])
+    if (!this.disposed) this.stage.swapPose(next)
   }
 
   /**
@@ -214,7 +245,7 @@ export class PreviewSession {
     const effective = setting === 'always' || (setting === 'system' && system)
     this.stage.setReducedMotion(effective)
     // Re-evaluate the ambient profile: under reduce, ambient stays off.
-    this.director.refreshAmbient()
+    if (!this.auditionOnly) this.director.refreshAmbient()
   }
 
   /** Re-applies the current target's ambient profile after a config edit. */
@@ -244,6 +275,28 @@ export class PreviewSession {
     })
   }
 
+  /**
+   * UX: preview the ENTER transition of the EDITED state slot, not whatever
+   * the stage happens to show. When the session already shows that slot the
+   * state machine would dedupe a redundant sendState (§15.1 — nothing would
+   * play), so the director's current target is replayed directly. Otherwise
+   * the slot is pushed through the ManualStateSource: the switch itself runs
+   * the new state's enter transition through the real resolver → director
+   * path (§16.2), pose fallback chains included. Caveat: a thinking↔working
+   * hop inside `active` follows advanced.activityTransition (the full enter
+   * only plays on 'state'; 'subtle'/'none' swap more quietly) — clicking
+   * preview again once the slot matches replays the full enter.
+   */
+  replayStateEnter(slot: PoseKey): void {
+    if (this.disposed) return
+    const current = this.director.currentTarget
+    if (current !== null && stateSlotFor(current) === slot) {
+      this.replayEnter()
+      return
+    }
+    sendStateSlot(this.source, slot)
+  }
+
   /** §36 hatch demo: play any registered definition; tracked for cancel/dispose. */
   playCustom(definitionId: string, options: PlayOptions = {}): TimelineInstance {
     const instance = this.director.play(definitionId, options)
@@ -258,9 +311,12 @@ export class PreviewSession {
    */
   updateCustoms(customs: AnimationDefinition[]): void {
     if (this.disposed) return
+    const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     for (const warning of syncCustomAnimations(this.registry, customs)) {
       console.warn(`motion-pet: ${warning}`)
     }
+    const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
+    if (before !== after) this.director.refreshAmbient()
   }
 
   /**
@@ -274,12 +330,24 @@ export class PreviewSession {
   previewDefinition(definition: AnimationDefinition, options: { strength?: number } = {}): TimelineInstance {
     if (this.disposed) throw new Error('preview session is disposed')
     assertValidAnimationDefinition(definition)
+    this.stopPreviewDefinition()
     if (this.registry.get(DRAFT_ANIMATION_ID) !== undefined) this.registry.unregister(DRAFT_ANIMATION_ID)
     this.registry.register({ ...definition, id: DRAFT_ANIMATION_ID })
-    return this.playCustom(
+    const instance = this.playCustom(
       DRAFT_ANIMATION_ID,
       options.strength === undefined ? {} : { params: { strength: options.strength } },
     )
+    this.previewInstance = instance
+    return instance
+  }
+
+  /** Cancel the current audition, including loop/random-interval timelines. */
+  stopPreviewDefinition(): void {
+    const instance = this.previewInstance
+    if (instance === null) return
+    instance.dispose()
+    this.customInstances.delete(instance)
+    this.previewInstance = null
   }
 
   dispose(): void {
@@ -291,6 +359,7 @@ export class PreviewSession {
     }
     for (const instance of this.customInstances) instance.dispose()
     this.customInstances.clear()
+    this.previewInstance = null
     this.source.dispose()
     this.director.dispose()
     this.mediaQuery = null
@@ -302,5 +371,33 @@ export class PreviewSession {
 
   private readonly handleVisibilityChange = (): void => {
     this.setHidden(document.visibilityState === 'hidden')
+  }
+}
+
+/**
+ * Editor pose slot → the semantic event that drives the real state machine.
+ * Single source of truth for the LivePreview state buttons and
+ * replayStateEnter — the reduction to visual targets stays the resolver's job.
+ */
+export function sendStateSlot(source: ManualStateSource, slot: PoseKey): void {
+  switch (slot) {
+    case 'idle':
+      source.sendState('idle')
+      break
+    case 'thinking':
+      source.sendState('active', 'thinking')
+      break
+    case 'working':
+      source.sendState('active', 'working')
+      break
+    case 'waiting':
+      source.sendState('waiting')
+      break
+    case 'success':
+      source.sendState('success')
+      break
+    case 'error':
+      source.sendState('error')
+      break
   }
 }

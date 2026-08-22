@@ -63,6 +63,7 @@ const GLOBAL_PRESET_OPTIONS: ReadonlyArray<{ value: Exclude<TransitionPreset, 'g
   { value: 'jelly', label: '果冻 Jelly' },
   { value: 'jump', label: '跳跃 Jump' },
   { value: 'snap', label: '闪现 Snap' },
+  { value: 'flip', label: '翻转 Flip' },
   { value: 'celebrate', label: '庆祝 Celebrate' },
   { value: 'deflate', label: '泄气 Deflate' },
 ]
@@ -113,11 +114,44 @@ const FLASH_POSE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 
 export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
   const { snapshot, store } = props
+  // UX: 撤回修改 drops the unsaved draft and returns to the last saved
+  // config — the same confirm pattern as pet deletion. Offered in the dirty
+  // AND error branches (a failed save may be exactly what the user wants to
+  // give up on); disabled while a save is in flight (the PUT may still land).
+  const revert = (): void => {
+    if (!window.confirm('放弃所有未保存的修改，恢复到上次保存的状态？')) return
+    void store.revertConfig()
+  }
+  const revertButton = (disabled: boolean): JSX.Element => (
+    <button type="button" className={styles.button} disabled={disabled} onClick={revert}>
+      撤回修改
+    </button>
+  )
   switch (snapshot.saveState) {
     case 'saving':
-      return <span className={`${styles.saveState} ${styles.saveBusy}`}>保存中…</span>
+      return (
+        <span className={`${styles.saveState} ${styles.saveBusy}`}>
+          <button type="button" className={styles.button} disabled>保存中…</button>
+          {revertButton(true)}
+        </span>
+      )
+    case 'dirty':
+      return (
+        <span className={`${styles.saveState} ${styles.saveBusy}`}>
+          <span>有未保存修改</span>
+          <button type="button" className={styles.button} onClick={() => void store.saveConfig()}>
+            保存修改
+          </button>
+          {revertButton(false)}
+        </span>
+      )
     case 'saved':
-      return <span className={`${styles.saveState} ${styles.saveOk}`}>已保存</span>
+      return (
+        <span className={`${styles.saveState} ${styles.saveOk}`}>
+          <span>已保存</span>
+          <button type="button" className={styles.button} disabled>保存修改</button>
+        </span>
+      )
     case 'error':
       return (
         <span className={`${styles.saveState} ${styles.saveError}`}>
@@ -125,10 +159,15 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
           <button type="button" className={styles.button} onClick={() => store.retrySave()}>
             重试
           </button>
+          {revertButton(false)}
         </span>
       )
     default:
-      return <span className={`${styles.saveState} ${styles.saveIdle}`} />
+      return (
+        <span className={`${styles.saveState} ${styles.saveIdle}`}>
+          <button type="button" className={styles.button} disabled>保存修改</button>
+        </span>
+      )
   }
 }
 
@@ -139,12 +178,100 @@ function NoticeBar(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX
   const kindClass =
     notice.kind === 'error' ? styles.noticeError : notice.kind === 'warn' ? styles.noticeWarn : styles.noticeInfo
   return (
-    <div className={`${styles.notice} ${kindClass}`} role="status">
+    <div
+      className={`${styles.notice} ${kindClass}`}
+      // Errors are assertive (screen readers interrupt); info/warn stay polite.
+      role={notice.kind === 'error' ? 'alert' : 'status'}
+    >
       <span>{notice.text}</span>
       <button type="button" className={styles.noticeDismiss} aria-label="关闭提示" onClick={() => store.clearNotice()}>
         ✕
       </button>
     </div>
+  )
+}
+
+/** Named character preset controls, shown only in the standalone editor. */
+function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
+  const { snapshot, store } = props
+  const config = snapshot.config
+  if (config === null) return <></>
+  const active = snapshot.pets.find((pet) => pet.id === config.activePetId)
+
+  const askName = (title: string, initial: string): string | null => {
+    const value = window.prompt(title, initial)?.trim()
+    return value === undefined || value === '' ? null : value
+  }
+
+  return (
+    <section className={styles.section} aria-label="宠物预设">
+      <h2 className={styles.sectionTitle}>宠物</h2>
+      <div className={styles.petToolbar}>
+        <label className={styles.petSelectLabel}>
+          <span className={styles.label}>当前宠物</span>
+          <select
+            className={styles.select}
+            value={config.activePetId ?? ''}
+            onChange={(event) => {
+              if (event.target.value !== '') void store.applyPet(event.target.value)
+            }}
+          >
+            <option value="">未保存的当前配置</option>
+            {snapshot.pets.map((pet) => (
+              <option key={pet.id} value={pet.id}>
+                {pet.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className={styles.petActions}>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => {
+              const name = askName('新建当前宠物的副本', active === undefined ? '新宠物' : `${active.name} 副本`)
+              if (name !== null) void store.createPetCurrent(name)
+            }}
+          >
+            新建副本
+          </button>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => {
+              const name = askName('新建空白宠物', '新宠物')
+              if (name !== null) void store.createPetBlank(name)
+            }}
+          >
+            新建空白
+          </button>
+          <button
+            type="button"
+            className={styles.button}
+            disabled={active === undefined}
+            onClick={() => {
+              if (active === undefined) return
+              const name = askName('重命名宠物', active.name)
+              if (name !== null) void store.renamePet(active.id, name)
+            }}
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            className={styles.button}
+            disabled={active === undefined}
+            onClick={() => {
+              if (active === undefined || !window.confirm(`确认删除宠物「${active.name}」？当前配置会继续保留。`)) return
+              void store.deletePet(active.id)
+            }}
+          >
+            删除
+          </button>
+        </div>
+      </div>
+      <p className={styles.hint}>点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。</p>
+    </section>
   )
 }
 
@@ -359,6 +486,19 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const sessionRef = useRef<PreviewSession | null>(null)
 
+  // UX: an unsaved draft (or a failed/in-flight save) must only leave the page
+  // through an explicit browser confirmation. Clean states register nothing.
+  useEffect(() => {
+    if (snapshot.saveState !== 'dirty' && snapshot.saveState !== 'saving' && snapshot.saveState !== 'error') return
+    const guard = (event: BeforeUnloadEvent): void => {
+      event.preventDefault()
+      // Legacy Chromium/IE only show the prompt when returnValue is assigned.
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', guard)
+    return () => window.removeEventListener('beforeunload', guard)
+  }, [snapshot.saveState])
+
   // The PreviewSession binds to the Live Preview's PetStage; it must be
   // disposed BEFORE the stage DOM goes (PetRenderer's onStage(null) contract).
   const handleStage = useCallback(
@@ -392,15 +532,12 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
     sessionRef.current?.replayEnter()
   }, [])
 
-  // Animation library 试播: audition the edited draft on the preview stage
-  // (options.strength rides the 试播强度 slider, overriding the draft default).
-  const previewDefinition = useCallback((definition: AnimationDefinition, options?: { strength?: number }) => {
-    try {
-      sessionRef.current?.previewDefinition(definition, options)
-    } catch (error) {
-      console.error('motion-pet: animation preview failed', error)
-    }
-  }, [])
+  // UX: the transition panel's 预览进入动画 previews the EDITED state, not
+  // whatever the stage currently shows — see PreviewSession.replayStateEnter.
+  // The LivePreview toolbar button keeps replaying the shown state.
+  const previewEditedEnter = useCallback(() => {
+    sessionRef.current?.replayStateEnter(snapshot.selectedState)
+  }, [snapshot.selectedState])
 
   // The save indicator lives in the editor page header when the page supplies
   // a portal host; otherwise (tests, hypothetical narrow hosts) it falls back
@@ -443,10 +580,17 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
     return (
       <div className={rootClass}>
         {saveIndicator}
+        {props.wide === true ? <PetPresetCard snapshot={snapshot} store={store} /> : null}
         <div className={styles.empty}>
           <h2 className={styles.emptyTitle}>Motion Pet</h2>
-          <p className={styles.hint}>请先导入至少一张图片（推荐透明背景的 PNG 或 WebP，正方形画布）。</p>
-          <FileImportButton label="导入图片" onFile={(file) => void store.importImage(snapshot.selectedState, file)} />
+          <p className={styles.hint}>
+            请先导入至少一张图片（将作为「待机」姿势；推荐透明背景的 PNG 或 WebP，正方形画布）。
+          </p>
+          <FileImportButton
+            label="导入图片"
+            busy={snapshot.importing !== null}
+            onFile={(file) => void store.importImage(snapshot.selectedState, file)}
+          />
         </div>
         <NoticeBar snapshot={snapshot} store={store} />
       </div>
@@ -456,6 +600,7 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
   return (
     <div className={rootClass}>
       {saveIndicator}
+      {props.wide === true ? <PetPresetCard snapshot={snapshot} store={store} /> : null}
       <GlobalCard config={config} store={store} />
       <NoticeBar snapshot={snapshot} store={store} />
       <div className={styles.columns}>
@@ -466,15 +611,26 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
           onSelect={(state) => store.selectState(state)}
         />
         <div className={styles.stateSettings}>
-          <PoseEditor state={snapshot.selectedState} config={config} assets={snapshot.assets} store={store} />
+          <PoseEditor
+            state={snapshot.selectedState}
+            config={config}
+            assets={snapshot.assets}
+            importing={snapshot.importing === snapshot.selectedState}
+            store={store}
+          />
           <TransitionEditor
             state={snapshot.selectedState}
             config={config}
             customs={snapshot.customs}
             store={store}
-            onReplay={replayEnter}
+            onReplay={previewEditedEnter}
           />
-          <AmbientEditor state={snapshot.selectedState} config={config} store={store} />
+          <AmbientEditor
+            state={snapshot.selectedState}
+            config={config}
+            customs={snapshot.customs}
+            store={store}
+          />
         </div>
         <LivePreview
           config={config}
@@ -487,7 +643,13 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
       </div>
       <AdvancedCard config={config} customs={snapshot.customs} store={store} />
       {props.wide === true ? (
-        <AnimationLibrary store={store} customs={snapshot.customs} onPreview={previewDefinition} />
+        <AnimationLibrary
+          store={store}
+          customs={snapshot.customs}
+          config={config}
+          assets={snapshot.assets}
+          configRevision={snapshot.configRevision}
+        />
       ) : null}
     </div>
   )

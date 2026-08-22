@@ -8,6 +8,8 @@
  * - prefix `/api/motion-pet/assets`     POST (base path) / DELETE `<id>` subpath
  * - exact  `/api/motion-pet/animations` GET (V1.1)
  * - prefix `/api/motion-pet/animations` PUT / DELETE `<id>` subpath (V1.1)
+ * - exact  `/api/motion-pet/pets`       GET / POST (V1.1)
+ * - prefix `/api/motion-pet/pets`       PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
  * - prefix `/motion-pet-assets`         GET / HEAD `<id>` subpath (static)
  *
  * The `/api` prefix belongs to the connection gateway, but exact routes win
@@ -19,16 +21,18 @@
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { AssetMeta, MotionPetConfig } from '../core/types'
+import type { AssetMeta, MotionPetConfig, PoseKey } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
+import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
 import { ConfigValidationError, validateAssetId } from './validation'
 
 const CONFIG_PATH = '/api/motion-pet/config'
 const ASSETS_PATH = '/api/motion-pet/assets'
 const ANIMATIONS_PATH = '/api/motion-pet/animations'
+const PETS_PATH = '/api/motion-pet/pets'
 const STATIC_PATH = '/motion-pet-assets'
 
 const JSON_BODY_LIMIT = 64 * 1024 // M0 §2: dsh-pet's readJsonBody precedent
@@ -55,6 +59,12 @@ export interface RoutesDeps {
   listAnimations(): Promise<{ customs: AnimationDefinition[]; warnings: string[] }>
   saveAnimation(definition: AnimationDefinition): Promise<void>
   deleteAnimation(id: string, referencedBy: (animationId: string) => boolean): Promise<void>
+  /** Pet presets (V1.1): live directory scan plus identity/slice mutations. */
+  listPets(): Promise<{ pets: PetPreset[]; warnings: string[] }>
+  createPet(name: unknown, slice: unknown): Promise<PetPreset>
+  readPet(id: string): Promise<PetPreset>
+  renamePet(id: string, name: unknown): Promise<PetPreset>
+  deletePet(id: string): Promise<void>
 }
 
 /** Minimal slice of the host context the routes register against. */
@@ -132,6 +142,16 @@ function mapError(res: ServerResponse, error: unknown): void {
         return
       default:
         sendError(res, 400, 'INVALID_ANIMATION', error.message, error.details)
+        return
+    }
+  }
+  if (error instanceof PetError) {
+    switch (error.code) {
+      case 'NOT_FOUND':
+        sendError(res, 404, 'NOT_FOUND', error.message)
+        return
+      default:
+        sendError(res, 400, 'INVALID_PRESET', error.message)
         return
     }
   }
@@ -280,8 +300,15 @@ async function handleAssets(
     if (req.method !== 'DELETE') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected DELETE')
     const id = safeDecode(pathname.slice(ASSETS_PATH.length + 1))
     if (id === null || validateAssetId(id) === null) throw new HttpError(404, 'NOT_FOUND', 'unknown asset')
-    const config = await deps.loadConfig()
-    await deps.deleteAsset(id, (assetId) => POSE_KEYS.some((key) => config.poses[key]?.assetId === assetId))
+    // An asset referenced by ANY preset's poses is as protected as one
+    // referenced by the live config (V1.1 pet presets).
+    const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+    await deps.deleteAsset(
+      id,
+      (assetId) =>
+        POSE_KEYS.some((key) => config.poses[key]?.assetId === assetId) ||
+        pets.some((pet) => POSE_KEYS.some((key) => pet.poses[key]?.assetId === assetId)),
+    )
     sendJson(res, 200, { deleted: id })
     return
   }
@@ -295,10 +322,15 @@ async function handleAnimationsIndex(req: IncomingMessage, res: ServerResponse, 
   sendJson(res, 200, { customs, warnings })
 }
 
-/** A config references an animation via a state enter or the click interaction. */
+/** A state references an animation via its enter or custom ambient timeline. */
+function stateReferencesAnimation(state: MotionPetConfig['states'][PoseKey], id: string): boolean {
+  return state.enter.animationId === id || state.ambient.customAnimationId === id
+}
+
+/** A config references an animation via a state timeline or the click interaction. */
 function animationReferenced(config: MotionPetConfig, id: string): boolean {
   if (config.interactions.click.animation === id) return true
-  return POSE_KEYS.some((key) => config.states[key].enter.animationId === id)
+  return POSE_KEYS.some((key) => stateReferencesAnimation(config.states[key], id))
 }
 
 async function handleAnimations(
@@ -329,8 +361,117 @@ async function handleAnimations(
     return
   }
   if (req.method === 'DELETE') {
+    const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+    await deps.deleteAnimation(
+      id,
+      (animationId) =>
+        animationReferenced(config, animationId) ||
+        pets.some((pet) => POSE_KEYS.some((key) => stateReferencesAnimation(pet.states[key], animationId))),
+    )
+    sendJson(res, 200, { deleted: id })
+    return
+  }
+  throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected PUT or DELETE')
+}
+
+/** Config patch that applies a preset: the character slice plus the active pointer. */
+function applyPatchFor(pet: PetPreset): Record<string, unknown> {
+  // Optional animation references use patch semantics where an absent field
+  // means "keep current". A preset application is authoritative, so encode
+  // absent references as null to clear ids owned by the previous pet.
+  const states = Object.fromEntries(
+    POSE_KEYS.map((key) => {
+      const state = pet.states[key]
+      return [
+        key,
+        {
+          ...state,
+          enter: { ...state.enter, animationId: state.enter.animationId ?? null },
+          ambient: { ...state.ambient, customAnimationId: state.ambient.customAnimationId ?? null },
+        },
+      ]
+    }),
+  )
+  return { activePetId: pet.id, poses: pet.poses, states, global: { scale: pet.scale } }
+}
+
+async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
+  if (req.method === 'GET') {
+    const [{ pets, warnings }, config] = await Promise.all([deps.listPets(), deps.loadConfig()])
+    sendJson(res, 200, { pets, activePetId: config.activePetId, warnings })
+    return
+  }
+  if (req.method === 'POST') {
+    const body = await readBody(req, JSON_BODY_LIMIT)
+    let raw: unknown
+    try {
+      raw = JSON.parse(body.toString('utf8'))
+    } catch {
+      throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
+    }
+    const source = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    if (source.from !== 'current' && source.from !== 'blank') {
+      throw new HttpError(400, 'INVALID_REQUEST', 'expected "from" to be "current" or "blank"')
+    }
     const config = await deps.loadConfig()
-    await deps.deleteAnimation(id, (animationId) => animationReferenced(config, animationId))
+    if (source.from === 'current') {
+      // Save the current slice as a preset and adopt it as the active pet.
+      const pet = await deps.createPet(source.name, petSliceFromConfig(config))
+      const updated = await deps.updateConfig({ activePetId: pet.id })
+      sendJson(res, 200, { pet, config: updated })
+      return
+    }
+    // from=blank: create an empty named preset and apply it.
+    const pet = await deps.createPet(source.name, {})
+    const updated = await deps.updateConfig(applyPatchFor(pet))
+    sendJson(res, 200, { pet, config: updated })
+    return
+  }
+  throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET or POST')
+}
+
+async function handlePets(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: RoutesDeps,
+  pathname: string,
+): Promise<void> {
+  if (!pathname.startsWith(`${PETS_PATH}/`)) {
+    // The exact route owns the bare path; anything else lacks the <id>.
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected PUT, POST or DELETE with a pet id')
+  }
+  const sub = safeDecode(pathname.slice(PETS_PATH.length + 1))
+  if (sub === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+  if (sub.endsWith('/apply')) {
+    const id = validatePetId(sub.slice(0, -'/apply'.length))
+    if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+    if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected POST')
+    const pet = await deps.readPet(id)
+    const updated = await deps.updateConfig(applyPatchFor(pet))
+    sendJson(res, 200, { config: updated })
+    return
+  }
+  const id = validatePetId(sub)
+  if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+  if (req.method === 'PUT') {
+    const body = await readBody(req, JSON_BODY_LIMIT)
+    let raw: unknown
+    try {
+      raw = JSON.parse(body.toString('utf8'))
+    } catch {
+      throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
+    }
+    const name = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).name : undefined
+    // Name validation happens in the store (INVALID_PRESET → 400).
+    const pet = await deps.renamePet(id, name)
+    sendJson(res, 200, { pet })
+    return
+  }
+  if (req.method === 'DELETE') {
+    await deps.deletePet(id)
+    // The pet keeps showing as unsaved edits: drop only the active pointer.
+    const config = await deps.loadConfig()
+    if (config.activePetId === id) await deps.updateConfig({ activePetId: null })
     sendJson(res, 200, { deleted: id })
     return
   }
@@ -369,12 +510,41 @@ async function handleStatic(
 
 type Handler = (req: IncomingMessage, res: ServerResponse, pathname: string) => Promise<void>
 
+/**
+ * §20 defense-in-depth: browser writes must be same-origin. CORS "simple"
+ * requests (multipart/form-data POST, text/plain POST) never preflight, so a
+ * malicious page could otherwise upload assets, create pets or apply presets
+ * cross-origin with side effects landing even though the response is blocked.
+ * Non-browser clients (no Sec-Fetch-Site / Origin metadata — curl, the future
+ * CLI) stay allowed; GETs/HEADs are read-only and never guarded.
+ */
+function rejectsCrossOriginWrite(req: IncomingMessage): boolean {
+  const method = (req.method ?? 'GET').toUpperCase()
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string') return site === 'cross-site'
+  const origin = req.headers.origin
+  if (typeof origin === 'string') {
+    try {
+      // Same-origin writes carry an Origin matching the Host header; 'null'
+      // (file://, sandboxed iframes) and foreign hosts are rejected.
+      return new URL(origin).host !== req.headers.host
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
 /** Register all routes; the returned disposer unregisters every one. */
 export function registerRoutes(host: RoutesHost, deps: RoutesDeps): () => void {
   const wrap =
     (handler: Handler): WebRoute['handler'] =>
     async (req, res) => {
       try {
+        if (rejectsCrossOriginWrite(req)) {
+          throw new HttpError(403, 'CROSS_ORIGIN', 'cross-origin writes are not allowed')
+        }
         await handler(req, res, parsePathname(req.url))
       } catch (error) {
         mapError(res, error)
@@ -396,6 +566,16 @@ export function registerRoutes(host: RoutesHost, deps: RoutesDeps): () => void {
       kind: 'prefix',
       path: ANIMATIONS_PATH,
       handler: wrap((req, res, pathname) => handleAnimations(req, res, deps, pathname)),
+    }),
+    host.webServer.register({
+      kind: 'exact',
+      path: PETS_PATH,
+      handler: wrap((req, res) => handlePetsIndex(req, res, deps)),
+    }),
+    host.webServer.register({
+      kind: 'prefix',
+      path: PETS_PATH,
+      handler: wrap((req, res, pathname) => handlePets(req, res, deps, pathname)),
     }),
     host.webServer.register({
       kind: 'prefix',

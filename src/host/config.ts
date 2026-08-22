@@ -8,6 +8,7 @@
  */
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { MotionPetConfig } from '../core/types'
+import type { AnimationKind } from '../motion/animation-definition'
 import { readJsonFile, writeJsonAtomic } from './storage'
 import { repairConfig, validateConfigPatch, type ConfigValidationOptions } from './validation'
 
@@ -23,24 +24,32 @@ export function loadConfig(raw: unknown, options: ConfigValidationOptions = {}):
 export interface ConfigStoreOptions {
   /** Defaults to `$DSH_HOME/motion-pet/config.json` (spec §18.1). */
   configPath?: string
-  /** Custom-animation existence check for states.*.enter.animationId (V1.1). */
-  animationExists?: (id: string) => boolean
+  /** Custom-animation kind lookup for animation mounts (V1.1). */
+  animationLookup?: (id: string) => AnimationKind | undefined
+  /**
+   * Post-save hook (pet-preset mirror, V1.1): runs inside the serialized
+   * update, after the atomic config write. A failure is warned and swallowed
+   * — the config is authoritative, the mirror is secondary.
+   */
+  onSaved?: (config: MotionPetConfig) => Promise<void>
 }
 
 export class ConfigStore {
   readonly configPath: string
-  private readonly animationExists?: (id: string) => boolean
+  private readonly animationLookup?: (id: string) => AnimationKind | undefined
+  private readonly onSaved?: (config: MotionPetConfig) => Promise<void>
   /** Serializes update() so concurrent writes never lose each other's fields. */
   private writeChain: Promise<unknown> = Promise.resolve()
 
   constructor(options: ConfigStoreOptions = {}) {
     this.configPath = options.configPath ?? defaultConfigPath()
-    this.animationExists = options.animationExists
+    this.animationLookup = options.animationLookup
+    this.onSaved = options.onSaved
   }
 
   /** Load + repair; defaults when the file is missing or corrupt. */
   async load(): Promise<MotionPetConfig> {
-    return loadConfig(await readJsonFile(this.configPath), { animationExists: this.animationExists })
+    return loadConfig(await readJsonFile(this.configPath), { animationLookup: this.animationLookup })
   }
 
   /** Atomic save (temp + fsync + rename, see host/storage.ts). */
@@ -56,8 +65,15 @@ export class ConfigStore {
    */
   update(patch: unknown): Promise<MotionPetConfig> {
     const run = this.writeChain.then(async () => {
-      const config = validateConfigPatch(patch, await this.load(), { animationExists: this.animationExists })
+      const config = validateConfigPatch(patch, await this.load(), { animationLookup: this.animationLookup })
       await this.save(config)
+      if (this.onSaved !== undefined) {
+        try {
+          await this.onSaved(config)
+        } catch (error) {
+          console.warn('motion-pet: pet preset mirror failed', error)
+        }
+      }
       return config
     })
     // A failed update (invalid patch, disk error) must not poison the queue.

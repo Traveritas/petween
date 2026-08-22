@@ -28,6 +28,7 @@ import type {
 } from '../core/types'
 import { POSE_KEYS, TRANSITION_DURATION_LIMITS, TRANSITION_STRENGTH_LIMITS } from '../core/types'
 import { createDefaultMotionPetConfig } from '../core/defaults'
+import type { AnimationKind } from '../motion/animation-definition'
 import { BUILTIN_TRANSITION_DEFINITIONS } from '../core/transition-presets'
 
 export interface FieldIssue {
@@ -66,6 +67,8 @@ const ACTIVITY_TRANSITION_VALUES = ['subtle', 'none', 'state'] as const
 const BUILTIN_TRANSITION_IDS: ReadonlySet<string> = new Set(BUILTIN_TRANSITION_DEFINITIONS.map((definition) => definition.id))
 /** Shape mirror of host/animations.ts (kept local so validation stays fs-free). */
 const USER_ANIMATION_ID_RE = /^user:[A-Za-z0-9][A-Za-z0-9_-]*$/
+/** Shape mirror of host/pets.ts (kept local so validation stays fs-free). */
+const PET_ID_RE = /^pet_[a-z0-9]+$/
 
 interface Range {
   min: number
@@ -91,16 +94,18 @@ type Mode = 'strict' | 'repair'
 /** Optional injections for checks that need host state (custom animations on disk). */
 export interface ConfigValidationOptions {
   /**
-   * Existence check for `user:*` animation ids referenced by
-   * states.*.enter.animationId. Absent = shape-only validation.
+   * Kind lookup for `user:*` animation ids referenced by the config: mounts
+   * are kind-checked at the interface (enter needs a transition, ambient
+   * needs an ambient), so a wrong-kind id is rejected like a dangling one.
+   * Undefined = the id is unknown; absent injection = shape-only validation.
    */
-  animationExists?: (id: string) => boolean
+  animationLookup?: (id: string) => AnimationKind | undefined
 }
 
 interface Walk {
   mode: Mode
   issues: FieldIssue[]
-  animationExists?: (id: string) => boolean
+  animationLookup?: (id: string) => AnimationKind | undefined
 }
 
 function fail(walk: Walk, path: string, message: string): void {
@@ -184,6 +189,19 @@ function nullablePoseField(value: unknown, fallback: PoseKey | null, path: strin
   return fallback
 }
 
+/**
+ * activePetId (V1.1): a `pet_*` preset id or explicit null (unsaved edits).
+ * Shape only — a dangling id (preset deleted out-of-band) is tolerated, the
+ * client matches it against the pet list.
+ */
+function nullablePetIdField(value: unknown, fallback: string | null, path: string, walk: Walk): string | null {
+  if (value === undefined) return fallback
+  if (value === null) return null
+  if (typeof value === 'string' && PET_ID_RE.test(value)) return value
+  fail(walk, path, 'expected a "pet_<name>" id or null')
+  return fallback
+}
+
 function anchorField(value: unknown, fallback: PoseAnchor, path: string, walk: Walk): PoseAnchor {
   const source = objectField(value, path, walk)
   return {
@@ -209,8 +227,9 @@ function poseField(value: unknown, fallback: PoseConfig, path: string, walk: Wal
 
 /**
  * §8.14 animationId: `builtin:*` must name a known built-in transition,
- * `user:*` must exist on disk when an existence check is injected. Invalid
- * input records an issue (strict) or drops the field (repair → preset
+ * `user:*` must exist on disk AND be transition-kind when a lookup is
+ * injected (an enter without pose-swap would break the §12 swap invariant).
+ * Invalid input records an issue (strict) or drops the field (repair → preset
  * semantics; the repair base never carries an animationId).
  */
 function animationIdField(value: unknown, fallback: string | undefined, path: string, walk: Walk): string | undefined {
@@ -226,11 +245,37 @@ function animationIdField(value: unknown, fallback: string | undefined, path: st
     return fallback
   }
   if (USER_ANIMATION_ID_RE.test(value)) {
-    if (walk.animationExists === undefined || walk.animationExists(value)) return value
-    fail(walk, path, `unknown custom animation: ${value}`)
+    if (walk.animationLookup === undefined) return value
+    const kind = walk.animationLookup(value)
+    if (kind === 'transition') return value
+    fail(walk, path, kind === undefined ? `unknown custom animation: ${value}` : `not a transition animation: ${value}`)
     return fallback
   }
   fail(walk, path, 'expected a builtin:* or user:* animation id')
+  return fallback
+}
+
+/**
+ * A per-state custom ambient reference: only persisted ambient-kind user
+ * definitions are valid (a transition/interaction mounted here would never
+ * loop as an ambient profile).
+ */
+function ambientAnimationIdField(
+  value: unknown,
+  fallback: string | undefined,
+  path: string,
+  walk: Walk,
+): string | undefined {
+  if (value === undefined) return fallback
+  if (value === null) return undefined
+  if (typeof value !== 'string' || !USER_ANIMATION_ID_RE.test(value)) {
+    fail(walk, path, 'expected a user:* animation id or null')
+    return fallback
+  }
+  if (walk.animationLookup === undefined) return value
+  const kind = walk.animationLookup(value)
+  if (kind === 'ambient') return value
+  fail(walk, path, kind === undefined ? `unknown custom animation: ${value}` : `not an ambient animation: ${value}`)
   return fallback
 }
 
@@ -294,11 +339,19 @@ function breatheField(value: unknown, fallback: BreatheConfig, path: string, wal
 
 function ambientField(value: unknown, fallback: AmbientConfig, path: string, walk: Walk): AmbientConfig {
   const source = objectField(value, path, walk)
-  return {
+  const ambient: AmbientConfig = {
     bounce: bounceField(source.bounce, fallback.bounce, `${path}.bounce`, walk),
     sway: swayField(source.sway, fallback.sway, `${path}.sway`, walk),
     breathe: breatheField(source.breathe, fallback.breathe, `${path}.breathe`, walk),
   }
+  const customAnimationId = ambientAnimationIdField(
+    source.customAnimationId,
+    fallback.customAnimationId,
+    `${path}.customAnimationId`,
+    walk,
+  )
+  if (customAnimationId !== undefined) ambient.customAnimationId = customAnimationId
+  return ambient
 }
 
 function stateField(value: unknown, fallback: StateAppearance, path: string, walk: Walk): StateAppearance {
@@ -327,7 +380,7 @@ function poseRecordField<V>(
 }
 
 function buildConfig(raw: unknown, base: MotionPetConfig, mode: Mode, options: ConfigValidationOptions = {}): MotionPetConfig {
-  const walk: Walk = { mode, issues: [], animationExists: options.animationExists }
+  const walk: Walk = { mode, issues: [], animationLookup: options.animationLookup }
   const source = objectField(raw ?? undefined, '', walk)
   // Version handling is decided by loadConfig (spec §18.3); here the v1 tag
   // is only enforced, never migrated.
@@ -403,6 +456,7 @@ function buildConfig(raw: unknown, base: MotionPetConfig, mode: Mode, options: C
         pose: nullablePoseField(clickSource.pose, base.interactions.click.pose, 'interactions.click.pose', walk),
       },
     },
+    activePetId: nullablePetIdField(source.activePetId, base.activePetId, 'activePetId', walk),
   }
   if (walk.issues.length > 0) throw new ConfigValidationError(walk.issues)
   return config

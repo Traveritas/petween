@@ -46,6 +46,8 @@ export class DragController {
   private startPosition: DragPoint = { x: 0, y: 0 }
   private last: DragPoint = { x: 0, y: 0 }
   private dragging = false
+  /** The handle's cursor before the drag grabbed it; null = not overriding. */
+  private cursorBeforeDrag: string | null = null
   private disposed = false
 
   constructor(options: DragControllerOptions) {
@@ -102,6 +104,7 @@ export class DragController {
     if (!this.dragging) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
       this.dragging = true
+      this.setDraggingCursor(true)
     }
     this.last = this.clamp({ x: this.startPosition.x + dx, y: this.startPosition.y + dy })
     this.options.onMove(this.last.x, this.last.y)
@@ -144,8 +147,27 @@ export class DragController {
     }
     this.activePointerId = null
     this.dragging = false
+    this.setDraggingCursor(false)
     window.removeEventListener('pointermove', this.handlePointerMove)
     window.removeEventListener('pointerup', this.handlePointerUp)
     window.removeEventListener('pointercancel', this.handlePointerCancel)
+  }
+
+  /**
+   * UX affordance: while actually dragging, the handle shows 'grabbing'; any
+   * other time (click, hover, after release) it keeps whatever cursor it had
+   * before ('grab' on the stage's interactive element). Save/restore so the
+   * controller never permanently re-styles a handle it does not own.
+   */
+  private setDraggingCursor(dragging: boolean): void {
+    const style = this.options.handle.style
+    if (dragging) {
+      if (this.cursorBeforeDrag === null) this.cursorBeforeDrag = style.cursor
+      style.cursor = 'grabbing'
+      return
+    }
+    if (this.cursorBeforeDrag === null) return
+    style.cursor = this.cursorBeforeDrag
+    this.cursorBeforeDrag = null
   }
 }

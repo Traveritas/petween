@@ -158,6 +158,34 @@ describe('PetStateResolver — coalescing (§15.3)', () => {
     await send({ type: 'waiting' })
     expect(targets.map((next) => next.visualState)).toEqual(['active', 'waiting'])
   })
+
+  it('a sustained stream cannot starve the commit: forced at the 200ms cap since the first pending event', async () => {
+    // Events every 50ms keep resetting the 60ms trailing window; without the
+    // cap the commit would be postponed forever (t=210, then t=270, …).
+    resolver.handleEvent({ type: 'turn-start' }) // t=0: first uncommitted event
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await vi.advanceTimersByTimeAsync(50)
+      resolver.handleEvent({ type: 'activity', mode: 'thinking' }) // t=50/100/150
+    }
+    await vi.advanceTimersByTimeAsync(49) // t=199: still coalescing
+    expect(targets).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1) // t=200: the cap forces exactly one commit
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({ visualState: 'active', activityMode: 'thinking' })
+  })
+
+  it('the cap commits repeatedly under a nonstop stream (never more than 200ms apart)', async () => {
+    resolver.handleEvent({ type: 'turn-start' })
+    // 500ms of back-to-back events, one every 40ms; alternating types so each
+    // forced commit is a real state change (identical states would dedupe).
+    for (let tick = 1; tick <= 12; tick += 1) {
+      await vi.advanceTimersByTimeAsync(40)
+      resolver.handleEvent(tick % 2 === 1 ? { type: 'waiting' } : { type: 'turn-start' })
+    }
+    await vi.advanceTimersByTimeAsync(200)
+    expect(targets.length).toBeGreaterThanOrEqual(3) // several commits despite no quiet gap
+    expect(targets.every((next) => next.visualState === 'active' || next.visualState === 'waiting')).toBe(true)
+  })
 })
 
 describe('PetStateResolver — stray-idle suppression (§14.4)', () => {

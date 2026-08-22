@@ -14,20 +14,14 @@ import { useEffect, useState, type JSX, type MutableRefObject } from 'react'
 import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
 import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
-import type { PreviewSession } from '../preview-session'
+import { sendStateSlot, type PreviewSession } from '../preview-session'
 import { Toggle } from './controls'
 import { STATE_LABELS } from './StateList'
 import styles from './settings.module.css'
 
-/** Button → semantic intent; the reduction to visual targets is the resolver's job. */
-const STATE_BUTTONS: ReadonlyArray<{ state: PoseKey; send: (session: PreviewSession) => void }> = [
-  { state: 'idle', send: (session) => session.source.sendState('idle') },
-  { state: 'thinking', send: (session) => session.source.sendState('active', 'thinking') },
-  { state: 'working', send: (session) => session.source.sendState('active', 'working') },
-  { state: 'waiting', send: (session) => session.source.sendState('waiting') },
-  { state: 'success', send: (session) => session.source.sendState('success') },
-  { state: 'error', send: (session) => session.source.sendState('error') },
-]
+/** Preview state buttons; sendStateSlot maps them to semantic events (the
+ * reduction to visual targets stays the resolver's job). */
+const STATE_BUTTONS: readonly PoseKey[] = ['idle', 'thinking', 'working', 'waiting', 'success', 'error']
 
 export interface LivePreviewProps {
   config: MotionPetConfig
@@ -56,17 +50,17 @@ export function LivePreview(props: LivePreviewProps): JSX.Element {
         <PetRenderer onStage={onStage} showAnchorMarker={showAnchor} embedded />
       </div>
       <div className={styles.previewButtons}>
-        {STATE_BUTTONS.map((button) => (
+        {STATE_BUTTONS.map((state) => (
           <button
-            key={button.state}
+            key={state}
             type="button"
             className={styles.button}
             onClick={() => {
               const session = sessionRef.current
-              if (session !== null) button.send(session)
+              if (session !== null) sendStateSlot(session.source, state)
             }}
           >
-            {STATE_LABELS[button.state]}
+            {STATE_LABELS[state]}
           </button>
         ))}
       </div>

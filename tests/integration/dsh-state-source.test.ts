@@ -109,7 +109,7 @@ describe('DshStateSource', () => {
     const stream = lastSource()
     stream.message({ kind: 'event', event: { type: 'turn-start', ts: 1 } })
     await vi.advanceTimersByTimeAsync(60)
-    stream.message({ kind: 'event', event: { type: 'success', ts: 2 } })
+    stream.message({ kind: 'event', event: { type: 'success', ts: Date.now() } })
     await vi.advanceTimersByTimeAsync(60)
     expect(targets).toHaveLength(2)
     expect(targets[1]).toMatchObject({ visualState: 'success', reason: 'terminal-success' })
@@ -123,7 +123,7 @@ describe('DshStateSource', () => {
     config.global.errorHoldMs = 100 // short hold: the aggregate TTL follows it
     const source = makeSource() // no bridge → aggregate stream
     const stream = lastSource()
-    stream.message({ kind: 'event', event: { type: 'error', sessionId: 's1', ts: 1 } })
+    stream.message({ kind: 'event', event: { type: 'error', sessionId: 's1', ts: Date.now() } })
     await vi.advanceTimersByTimeAsync(60) // resolver coalescing
     expect(targets.map((target) => target.visualState)).toEqual(['error'])
 
@@ -140,7 +140,7 @@ describe('DshStateSource', () => {
     const stream = lastSource()
     stream.message({ kind: 'event', event: { type: 'thinking', sessionId: 's1', ts: 1 } })
     await vi.advanceTimersByTimeAsync(60)
-    stream.message({ kind: 'event', event: { type: 'error', sessionId: 's2', ts: 2 } })
+    stream.message({ kind: 'event', event: { type: 'error', sessionId: 's2', ts: Date.now() } })
     await vi.advanceTimersByTimeAsync(60)
     expect(targets.map((target) => target.visualState)).toEqual(['active', 'error'])
 
@@ -155,7 +155,7 @@ describe('DshStateSource', () => {
   it('dismissTerminal releases a held success through the real resolver; no-op outside a terminal', async () => {
     const source = makeSource()
     const stream = lastSource()
-    stream.message({ kind: 'event', event: { type: 'success', sessionId: 's1', ts: 1 } })
+    stream.message({ kind: 'event', event: { type: 'success', sessionId: 's1', ts: Date.now() } })
     await vi.advanceTimersByTimeAsync(60)
     expect(targets).toHaveLength(1)
     expect(targets[0]).toMatchObject({ visualState: 'success', reason: 'terminal-success' })
@@ -176,7 +176,7 @@ describe('DshStateSource', () => {
     const stream = lastSource()
     // Same session: the idle replaces the success entry and reaches the
     // resolver inside the coalescing window — it must be dropped.
-    stream.message({ kind: 'event', event: { type: 'success', sessionId: 's1', ts: 1 } })
+    stream.message({ kind: 'event', event: { type: 'success', sessionId: 's1', ts: Date.now() } })
     stream.message({ kind: 'event', event: { type: 'idle', sessionId: 's1', ts: 2 } })
     await vi.advanceTimersByTimeAsync(60)
     expect(targets).toHaveLength(1)

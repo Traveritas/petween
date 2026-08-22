@@ -16,10 +16,10 @@
  * path with zero dedicated branches. playInteraction() (§28) rides on it.
  *
  * §23 hidden-tab policy: pause()/resume() freeze ambient loops/timers and
- * in-flight play() instances in place (phase preserved — no restart jump on
- * return). An enter transition already in flight is finite (≤2000ms) and runs
- * to completion; if it completes while paused, its ambient restart is started
- * pre-paused by the AmbientEngine, so nothing animates while hidden.
+ * in-flight play() instances AND enter transitions in place (phase preserved —
+ * no restart jump on a return). Anything started while paused begins
+ * pre-paused, so nothing animates while hidden; an enter that completes only
+ * after resume restarts its ambient then, already unpaused.
  */
 import { BUILTIN_ACTIVITY_SWAP, BUILTIN_CLICK_POP, transitionDefinitionId } from '../core/transition-presets'
 import { stateSlotFor } from '../core/state-machine'
@@ -37,9 +37,9 @@ import { clamp } from './math'
 import { AmbientEngine } from './ambient-engine'
 import type { TimelineInstance } from './animation-handle'
 import type { AnimationRegistry } from './animation-registry'
+import type { MotionStage } from './motion-stage'
 import { TimelineEngine, type PlayOptions } from './timeline-engine'
 import { TransitionEngine } from './transition-engine'
-import type { MotionStage } from './motion-stage'
 
 export interface MotionDirectorOptions {
   stage: MotionStage
@@ -63,6 +63,33 @@ const ACTIVITY_SWAP_ENTER: ResolvedEnter = {
   durationMs: BUILTIN_ACTIVITY_SWAP.durationMs,
 }
 
+/**
+ * §23: the transition path's engine view. TransitionEngine.play creates its
+ * TimelineInstance internally (generation guard + pose-swap events), so the
+ * director cannot reach it through the play() bookkeeping — this view reports
+ * every created instance back, letting pause()/resume() freeze an in-flight
+ * enter transition exactly like play() instances. Pure side channel: it adds
+ * the registration and changes no execution semantics.
+ */
+class EnterReportingEngine extends TimelineEngine {
+  private readonly reportInstance: (instance: TimelineInstance) => void
+
+  constructor(
+    stage: MotionStage,
+    registry: AnimationRegistry,
+    reportInstance: (instance: TimelineInstance) => void,
+  ) {
+    super(stage, registry)
+    this.reportInstance = reportInstance
+  }
+
+  override createInstance(definitionId: string, options: PlayOptions = {}): TimelineInstance {
+    const instance = super.createInstance(definitionId, options)
+    this.reportInstance(instance)
+    return instance
+  }
+}
+
 export class MotionDirector {
   private readonly options: MotionDirectorOptions
   private readonly engine: TimelineEngine
@@ -73,6 +100,13 @@ export class MotionDirector {
   private paused = false
   /** Settle-view of the in-flight enter transition (null = the stage is quiet). */
   private pendingTransition: Promise<void> | null = null
+  /**
+   * The in-flight enter transition's instance (§23 pause coverage). The
+   * TransitionEngine creates it internally; the EnterReportingEngine view
+   * reports it here so pause()/resume() can freeze it like any play()
+   * instance. Null whenever no enter transition is running.
+   */
+  private enterInstance: TimelineInstance | null = null
   /** Bumped per click interaction: only the latest flash may swap the pose back. */
   private interactionGeneration = 0
   /**
@@ -85,8 +119,13 @@ export class MotionDirector {
   constructor(options: MotionDirectorOptions) {
     this.options = options
     this.engine = new TimelineEngine(options.stage, options.registry)
-    this.transitions = new TransitionEngine(options.stage, this.engine)
-    this.ambient = new AmbientEngine(options.stage, this.engine)
+    this.transitions = new TransitionEngine(
+      options.stage,
+      new EnterReportingEngine(options.stage, options.registry, (instance) => {
+        this.enterInstance = instance
+      }),
+    )
+    this.ambient = new AmbientEngine(options.stage, this.engine, options.registry)
   }
 
   async setTarget(target: MotionTarget): Promise<void> {
@@ -157,18 +196,21 @@ export class MotionDirector {
   stop(): void {
     this.transitions.cancel()
     this.ambient.stop()
+    this.enterInstance = null
   }
 
   /**
    * §23: freeze everything the director owns, preserving ambient phase.
    * Instances handed out by play() are tracked so an interaction in flight
-   * pauses too; anything started while paused begins pre-paused.
+   * pauses too; anything started while paused begins pre-paused — including
+   * enter transitions started by setTarget/replayEnter while hidden.
    */
   pause(): void {
     if (this.paused) return
     this.paused = true
     this.ambient.pause()
     for (const instance of this.playedInstances) instance.pause()
+    this.enterInstance?.pause()
   }
 
   resume(): void {
@@ -176,6 +218,7 @@ export class MotionDirector {
     this.paused = false
     this.ambient.resume()
     for (const instance of this.playedInstances) instance.resume()
+    this.enterInstance?.resume()
   }
 
   dispose(): void {
@@ -243,6 +286,11 @@ export class MotionDirector {
       params: { strength: enter.strength },
       durationMs: enter.durationMs,
     })
+    // The transition engine created AND started its instance synchronously;
+    // freeze it straight away when the director is paused (§23 — the same
+    // contract play() applies to its instances).
+    const enterInstance = this.enterInstance
+    if (this.paused && enterInstance !== null) enterInstance.pause()
     // Track the settle so config hot-edits can wait out a transition whose
     // pose-swap event still carries pre-edit values. A superseded play
     // resolves false (or an unknown definition rejects): both settle waiters.
@@ -253,6 +301,7 @@ export class MotionDirector {
     this.pendingTransition = tracked
     void tracked.finally(() => {
       if (this.pendingTransition === tracked) this.pendingTransition = null
+      if (this.enterInstance === enterInstance) this.enterInstance = null
     })
     const completed = await playing
     if (!completed) return // superseded: an interrupted transition must not restart ambient (§10.2)
@@ -270,15 +319,17 @@ export class MotionDirector {
   /**
    * 'global' resolves through the global transition config; clamps per §7.4.
    * §8.14: an enter.animationId registered in the registry takes priority over
-   * the preset mapping; a dangling id (deleted custom animation) falls back to
-   * the preset. Either way the state's strength/durationMs still override.
+   * the preset mapping; a dangling id (deleted custom animation) OR a
+   * non-transition kind (an enter must fire pose-swap, §12) falls back to the
+   * preset. Either way the state's strength/durationMs still override.
    */
   private resolveEnter(enter: TransitionConfig): ResolvedEnter {
     const globalTransition = this.options.config.global.transition
     const preset: Exclude<TransitionPreset, 'global'> = enter.preset === 'global' ? globalTransition.preset : enter.preset
     const strength = enter.preset === 'global' ? globalTransition.strength : enter.strength
     const durationMs = enter.preset === 'global' ? globalTransition.durationMs : enter.durationMs
-    const override = enter.animationId === undefined ? undefined : this.options.registry.get(enter.animationId)
+    const candidate = enter.animationId === undefined ? undefined : this.options.registry.get(enter.animationId)
+    const override = candidate?.kind === 'transition' ? candidate : undefined
     return {
       definitionId: override?.id ?? transitionDefinitionId(preset),
       strength: clamp(strength, TRANSITION_STRENGTH_LIMITS.min, TRANSITION_STRENGTH_LIMITS.max),

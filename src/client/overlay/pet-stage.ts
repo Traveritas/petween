@@ -17,6 +17,11 @@
  * particles`, §8.5 `particle` events) — not a transform-ownership layer; only
  * the ParticleEmitter writes into it.
  *
+ * Hit region (UX-4): the pose <img> itself is the only pointer-events:auto
+ * element, so the clickable area is exactly the rendered image box (which
+ * layoutPose keeps in sync); the surrounding transparent stage square passes
+ * clicks through to the UI underneath.
+ *
  * The position layer is viewport-fixed by default (§27, the shell.overlay
  * mode); with `embedded: true` it becomes an absolutely positioned square
  * centered in the host container (the settings Live Preview), and the
@@ -94,6 +99,38 @@ function px(value: number): string {
 }
 
 /**
+ * The few rules that cannot be expressed as inline styles: the keyboard-focus
+ * ring is a :focus-visible pseudo-class, and the load-failure placeholder is a
+ * ::after silhouette. Injected once per document; everything else the stage
+ * styles stays inline (same mechanism as the particle emitter).
+ */
+const STAGE_STYLE_ELEMENT_ID = 'dsh-motion-pet-stage-styles'
+const STAGE_STYLE_TEXT = `
+.dsh-motion-pet-pose:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.75);
+  outline-offset: 2px;
+}
+.dsh-motion-pet-stage.dsh-motion-pet-image-error::after {
+  content: '';
+  position: absolute;
+  inset: 12%;
+  border: 2px dashed rgba(127, 127, 127, 0.45);
+  border-radius: 24%;
+  background: rgba(127, 127, 127, 0.08);
+  pointer-events: none;
+}
+`
+
+function ensureStageStyles(): void {
+  if (typeof document === 'undefined') return
+  if (document.getElementById(STAGE_STYLE_ELEMENT_ID) !== null) return
+  const style = document.createElement('style')
+  style.id = STAGE_STYLE_ELEMENT_ID
+  style.textContent = STAGE_STYLE_TEXT
+  document.head.append(style)
+}
+
+/**
  * §27 viewport clamp: the stage square may partly leave the viewport, but at
  * least MIN_VISIBLE_PX of it always stays reachable (drag + resize policy).
  */
@@ -134,6 +171,7 @@ export class PetStage implements MotionStage {
   private worldAnchor: PoseAnchor
   private reducedMotionValue: boolean
   private readonly embedded: boolean
+  private userScale = 1
   private pose: ResolvedPose | null = null
   private disposed = false
 
@@ -171,8 +209,11 @@ export class PetStage implements MotionStage {
     this.stageLayer.append(this.anchorMarker)
 
     this.applyBaseStyles()
-    // If asset metadata lacked dimensions, the first real load refines the layout.
+    ensureStageStyles()
+    // If asset metadata lacked dimensions, the first real load refines the
+    // layout; a failed load gets a visible placeholder instead.
     this.image.addEventListener('load', this.handleImageLoad)
+    this.image.addEventListener('error', this.handleImageError)
   }
 
   /** The outermost element (position layer); append it to a host container. */
@@ -256,20 +297,26 @@ export class PetStage implements MotionStage {
   /** User scale around the world anchor, so the pet grows from the ground. */
   setUserScale(scale: number): void {
     if (!(scale > 0)) return
+    this.userScale = scale
     this.userScaleLayer.style.transform = `scale(${scale})`
   }
 
   /**
    * Viewport position of the stage square's top-left corner (§27). Clamped so
-   * at least MIN_VISIBLE_PX of the pet always stays inside the viewport.
+   * at least MIN_VISIBLE_PX of the VISIBLE pet (square × user scale) always
+   * stays inside the viewport — with a small scale the unscaled square would
+   * allow the pet to vanish almost completely behind an edge.
    * Switches the layer from the default corner anchor to absolute left/top.
    * Overlay (fixed) mode only — embedded stages are host-centered.
    */
   setPosition(x: number, y: number): void {
+    // Never smaller than MIN_VISIBLE_PX: a tiny pet may hug the edge fully
+    // visible (a positive lower clamp would push it away from the edge).
+    const visibleSize = Math.max(this.size * this.userScale, MIN_VISIBLE_PX)
     const { x: clampedX, y: clampedY } = clampStagePosition(
       x,
       y,
-      this.size,
+      visibleSize,
       window.innerWidth,
       window.innerHeight,
     )
@@ -289,9 +336,19 @@ export class PetStage implements MotionStage {
     style.bottom = px(DEFAULT_OVERLAY_MARGIN)
   }
 
-  /** The interactive pet body (§2.1: the only layer with pointer-events:auto). */
+  /**
+   * The interactive pet body (§2.1: the only element with pointer-events:auto).
+   * The pose <img> IS the hit region: its box is the contain-fit + anchor
+   * layout (computeAnchorLayout), so only the drawn pet body is clickable and
+   * the transparent stage area passes clicks through to the UI below. The box
+   * follows layoutPose automatically (degraded layouts fill the whole square,
+   * keeping the pet draggable). The <img> is the "pose" transform-ownership
+   * leaf — nothing animates it, so resizing its box never disturbs any
+   * transform-origin (§13): squash/stretch origins live on the 100%-square
+   * motion layers above, still pointing at the world anchor.
+   */
   get interactiveElement(): HTMLElement {
-    return this.stageLayer
+    return this.image
   }
 
   /** Anchor crosshair at the world anchor (editor preview aid, §17.2). */
@@ -314,6 +371,7 @@ export class PetStage implements MotionStage {
     if (this.disposed) return
     this.disposed = true
     this.image.removeEventListener('load', this.handleImageLoad)
+    this.image.removeEventListener('error', this.handleImageError)
     this.particles.dispose()
     this.root.remove()
     this.pose = null
@@ -321,7 +379,21 @@ export class PetStage implements MotionStage {
   }
 
   private readonly handleImageLoad = (): void => {
+    this.stageLayer.classList.remove('dsh-motion-pet-image-error')
     this.layoutPose()
+  }
+
+  /**
+   * Load failure (missing/renamed asset file, dead URL): warn once per
+   * attempt, mark the stage with the placeholder class (dashed silhouette via
+   * the injected stylesheet) and keep going — swapPose stays fully usable, and
+   * a later successful load clears the placeholder again.
+   */
+  private readonly handleImageError = (): void => {
+    if (this.disposed) return
+    const url = this.pose?.asset.url
+    console.warn(`motion-pet: pose image failed to load${url === undefined ? '' : `: ${url}`}`)
+    this.stageLayer.classList.add('dsh-motion-pet-image-error')
   }
 
   private buildAnchorMarker(): HTMLDivElement {
@@ -373,17 +445,25 @@ export class PetStage implements MotionStage {
     stageStyle.width = '100%'
     stageStyle.height = '100%'
     stageStyle.transformOrigin = origin // §12.4: squash around the world anchor
-    stageStyle.pointerEvents = 'auto'
-    stageStyle.touchAction = 'none' // §28: pointer dragging must not scroll the page
-    stageStyle.cursor = 'grab'
+    stageStyle.pointerEvents = 'none' // the pose img below is the only hit target
 
     const imageStyle = this.image.style
     imageStyle.position = 'absolute'
     imageStyle.objectFit = 'contain'
     imageStyle.userSelect = 'none'
     ;(imageStyle as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = 'none'
+    // §2.1 + UX-4: the rendered image box is the interactive pet body — the
+    // transparent parts of the stage square click through to the UI below.
+    imageStyle.pointerEvents = 'auto'
+    imageStyle.touchAction = 'none' // §28: pointer dragging must not scroll the page
+    imageStyle.cursor = 'grab'
+    // The hit region doubles as the a11y affordance (same element, §28):
+    // keyboard users tab to the pet and trigger the same click interaction.
     this.image.draggable = false
-    this.image.alt = ''
+    this.image.alt = '' // decorative; the label below carries the semantics
+    this.image.role = 'button'
+    this.image.tabIndex = 0
+    this.image.setAttribute('aria-label', '桌宠，点击互动')
 
     // Particle layer: above the pose image, never interactive, bursts may
     // overshoot the stage square (overflow visible).

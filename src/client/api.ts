@@ -11,13 +11,15 @@
  * - GET    /api/motion-pet/animations     → { customs, warnings } (V1.1)
  * - PUT    /api/motion-pet/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
  * - DELETE /api/motion-pet/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
+ * - GET/POST /api/motion-pet/pets and PUT/DELETE/apply subpaths (V1.1 presets)
  */
-import type { AssetMeta, MotionPetConfig } from '../core/types'
+import type { AssetMeta, MotionPetConfig, PetPreset } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 
 const CONFIG_URL = '/api/motion-pet/config'
 const ASSETS_URL = '/api/motion-pet/assets'
 const ANIMATIONS_URL = '/api/motion-pet/animations'
+const PETS_URL = '/api/motion-pet/pets'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
 export const EDITOR_PAGE_URL = '/motion-pet-editor/'
@@ -174,4 +176,44 @@ export function putAnimation(definition: AnimationDefinition): Promise<PutAnimat
 
 export function deleteAnimation(id: string): Promise<{ deleted: string }> {
   return request(`${ANIMATIONS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/** V1.1 pet presets: stored character slices plus the active config pointer. */
+export interface GetPetsResponse {
+  pets: PetPreset[]
+  activePetId: string | null
+  warnings: string[]
+}
+
+export function getPets(): Promise<GetPetsResponse> {
+  return request(PETS_URL)
+}
+
+export interface CreatePetResponse {
+  pet: PetPreset
+  config: MotionPetConfig
+}
+
+export function createPet(input: { name: string; from: 'current' | 'blank' }): Promise<CreatePetResponse> {
+  return request(PETS_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function renamePet(id: string, name: string): Promise<{ pet: PetPreset }> {
+  return request(`${PETS_URL}/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function deletePet(id: string): Promise<{ deleted: string }> {
+  return request(`${PETS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function applyPet(id: string): Promise<{ config: MotionPetConfig }> {
+  return request(`${PETS_URL}/${encodeURIComponent(id)}/apply`, { method: 'POST' })
 }

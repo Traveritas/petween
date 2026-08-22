@@ -68,7 +68,12 @@ type EventDraft = {
   [K in NormalizedAgentEvent['type']]: Omit<Extract<NormalizedAgentEvent, { type: K }>, 'ts'> & { ts?: number }
 }[NormalizedAgentEvent['type']]
 
-const event = (partial: EventDraft): NormalizedAgentEvent => ({ ts: 1000, ...partial }) as NormalizedAgentEvent
+/**
+ * Terminal TTLs are judged against the event's own `ts` (host epoch clock), so
+ * the default timestamp is "now" under the faked clock; tests that need age
+ * pass an explicit offset back in time.
+ */
+const event = (partial: EventDraft): NormalizedAgentEvent => ({ ts: Date.now(), ...partial }) as NormalizedAgentEvent
 
 const lastSource = (): FakeEventSource => FakeEventSource.instances[FakeEventSource.instances.length - 1]
 
@@ -123,10 +128,10 @@ describe('aggregate mode (§14.5 priority)', () => {
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's1', ts: 10 }) })
     expect(events).toEqual([{ type: 'activity', mode: 'thinking' }])
     // A success in another session does not preempt the active one.
-    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's2', ts: 20 }) })
+    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's2' }) })
     expect(events).toHaveLength(1)
     // An error anywhere does.
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's3', ts: 30 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's3' }) })
     expect(events).toEqual([{ type: 'activity', mode: 'thinking' }, { type: 'turn-end', outcome: 'error' }])
     // And waiting outranks the error.
     source.message({ kind: 'event', event: event({ type: 'waiting', sessionId: 's4', ts: 40 }) })
@@ -156,7 +161,7 @@ describe('aggregate terminal TTL (§14.5)', () => {
   it('a stale terminal state stops suppressing other sessions after its TTL', async () => {
     makeAdapter()
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1' }) })
     expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }])
 
     // within the TTL the error still outranks other sessions' activity
@@ -176,7 +181,7 @@ describe('aggregate terminal TTL (§14.5)', () => {
   it('success entries expire on their own (shorter) TTL', async () => {
     makeAdapter()
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1' }) })
     expect(events).toEqual([{ type: 'turn-end', outcome: 'success' }])
     // the expiry timer recomputes with no new event: nothing left → idle
     await vi.advanceTimersByTimeAsync(1700) // ≥ 1600ms default success TTL
@@ -198,7 +203,7 @@ describe('aggregate terminal TTL (§14.5)', () => {
       errorTtlMs: 500,
     })
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1' }) })
     await vi.advanceTimersByTimeAsync(600) // ≥ the 500ms TTL: expired → idle
     expect(events).toEqual([{ type: 'turn-end', outcome: 'success' }, { type: 'idle' }])
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's2', ts: 20 }) })
@@ -212,9 +217,9 @@ describe('aggregate terminal TTL (§14.5)', () => {
   it('a fresh terminal event from the same session refreshes the entry', async () => {
     makeAdapter()
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1' }) })
     await vi.advanceTimersByTimeAsync(5000) // the first error expired (idle emitted at the TTL)
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1', ts: 20 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1' }) })
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's2', ts: 30 }) })
     // the renewed error still wins; the idle in between came from the expiry
     expect(events).toEqual([
@@ -228,7 +233,7 @@ describe('aggregate terminal TTL (§14.5)', () => {
     makeAdapter()
     const source = lastSource()
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's1', ts: 10 }) })
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2', ts: 20 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2' }) })
     expect(events).toEqual([
       { type: 'activity', mode: 'thinking' },
       { type: 'turn-end', outcome: 'error' },
@@ -245,7 +250,7 @@ describe('aggregate terminal TTL (§14.5)', () => {
   it('an expiring terminal with nothing behind it returns the pet to idle exactly once', async () => {
     makeAdapter()
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'success', sessionId: 's1' }) })
     expect(events).toEqual([{ type: 'turn-end', outcome: 'success' }])
     await vi.advanceTimersByTimeAsync(1600)
     expect(events).toEqual([{ type: 'turn-end', outcome: 'success' }, { type: 'idle' }])
@@ -254,12 +259,49 @@ describe('aggregate terminal TTL (§14.5)', () => {
   })
 })
 
+describe('stale terminal snapshot replay (ghost celebration fix)', () => {
+  it('a snapshot success with a stale ts never shows: expired on arrival', () => {
+    makeAdapter()
+    const source = lastSource()
+    source.message({
+      kind: 'snapshot',
+      events: [event({ type: 'success', sessionId: 's1', ts: Date.now() - 60_000 })],
+    })
+    // The session finished a minute ago (SSE reconnect/poll replay): the
+    // terminal counts as absent, NOT as a fresh celebration.
+    expect(events).toEqual([{ type: 'idle' }])
+  })
+
+  it('a snapshot terminal with a fresh ts still shows', () => {
+    makeAdapter()
+    const source = lastSource()
+    source.message({
+      kind: 'snapshot',
+      events: [event({ type: 'success', sessionId: 's1', ts: Date.now() })],
+    })
+    expect(events).toEqual([{ type: 'turn-end', outcome: 'success' }])
+  })
+
+  it("a stale terminal in a snapshot does not suppress another session's live activity", () => {
+    makeAdapter()
+    const source = lastSource()
+    source.message({
+      kind: 'snapshot',
+      events: [
+        event({ type: 'error', sessionId: 's1', ts: Date.now() - 120_000 }),
+        event({ type: 'thinking', sessionId: 's2', ts: Date.now() - 1000 }),
+      ],
+    })
+    expect(events).toEqual([{ type: 'activity', mode: 'thinking' }])
+  })
+})
+
 describe('setTerminalTtls (live hold edits)', () => {
   it('shortening a TTL expires a still-winning terminal entry immediately', async () => {
     const adapter = makeAdapter()
     const source = lastSource()
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's1', ts: 10 }) })
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2', ts: 20 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2' }) })
     expect(events).toEqual([
       { type: 'activity', mode: 'thinking' },
       { type: 'turn-end', outcome: 'error' },
@@ -278,7 +320,7 @@ describe('setTerminalTtls (live hold edits)', () => {
   it('lengthening a TTL revives an already-expired terminal entry', async () => {
     const adapter = makeAdapter()
     const source = lastSource()
-    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1', ts: 10 }) })
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's1' }) })
     expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }])
     await vi.advanceTimersByTimeAsync(2000) // past the 1800 default: expired → idle
     expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }, { type: 'idle' }])
@@ -293,7 +335,7 @@ describe('setTerminalTtls (live hold edits)', () => {
 
   it('unchanged values are a no-op (no recompute, no emission)', () => {
     const adapter = makeAdapter()
-    lastSource().message({ kind: 'event', event: event({ type: 'error', sessionId: 's1', ts: 10 }) })
+    lastSource().message({ kind: 'event', event: event({ type: 'error', sessionId: 's1' }) })
     adapter.setTerminalTtls(1600, 1800)
     expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }])
     adapter.dispose()

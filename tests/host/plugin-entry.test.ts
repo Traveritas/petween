@@ -18,6 +18,8 @@ const ALL_ROUTES = [
   '/api/motion-pet/assets',
   '/api/motion-pet/animations', // exact GET
   '/api/motion-pet/animations', // prefix PUT/DELETE
+  '/api/motion-pet/pets', // exact GET/POST
+  '/api/motion-pet/pets', // prefix PUT/DELETE + apply
   '/motion-pet-assets',
   '/motion-pet-editor',
   '/api/motion-pet/events',

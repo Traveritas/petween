@@ -12,8 +12,6 @@ import { createDefaultMotionPetConfig } from '../../src/core/defaults'
 import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
-const DEBOUNCE_MS = 300
-
 const asset = (id: string): AssetMeta => ({
   id,
   fileName: `${id}.webp`,
@@ -242,6 +240,13 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
         getAnimations: vi.fn(async () => {
           throw new Error('getAnimations must not be called when a hub is present')
         }),
+        getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
+        createPet: vi.fn(async () => {
+          throw new Error('not used')
+        }),
+        renamePet: vi.fn(),
+        deletePet: vi.fn(),
+        applyPet: vi.fn(async () => structuredClone(base)),
         patchConfig: patchConfig as EditorApi['patchConfig'],
         putAnimation: vi.fn(),
         deleteAnimation: vi.fn(),
@@ -259,7 +264,7 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     hub.subscribe((next) => broadcasts.push(next))
 
     const { api, patchConfig } = makeEditorApi(snapshot.config)
-    const store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    const store = new EditorStore({ api, hub })
     await store.load()
     expect(api.getConfig).not.toHaveBeenCalled() // the hub cache served it
     expect(store.getSnapshot().status).toBe('ready')
@@ -267,8 +272,7 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     store.updateConfig((draft) => {
       draft.global.scale = 1.4
     })
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
-    await flushMicrotasks()
+    await store.saveConfig()
     expect(patchConfig).toHaveBeenCalledTimes(1)
     // the save broadcast reached other hub subscribers (the overlay)
     expect(broadcasts).toHaveLength(1)
@@ -282,7 +286,7 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     const hub = new ConfigHub({ fetchConfig: fetcherFor(snapshot), fetchAnimations: animationsFetcherFor() })
     await hub.load()
     const { api } = makeEditorApi(snapshot.config)
-    const store = new EditorStore({ api, hub, debounceMs: DEBOUNCE_MS })
+    const store = new EditorStore({ api, hub })
     await store.load()
     const revision = store.getSnapshot().configRevision
 
@@ -306,10 +310,42 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     )
     expect(store.getSnapshot().config?.global.scale).toBe(1.9)
 
-    // once the save lands, the editor's own broadcast wins the hub
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
-    await flushMicrotasks()
+    // once explicitly saved, the editor's own broadcast wins the hub
+    await store.saveConfig()
     expect(hub.getCurrent()?.config.global.scale).toBe(1.9)
+    store.dispose()
+  })
+
+  it('does not restore a cleared ambient id from an old publish while Save is in flight', async () => {
+    const snapshot = makeSnapshot((config) => {
+      config.states.idle.ambient.customAnimationId = 'user:float'
+    })
+    const hub = new ConfigHub({ fetchConfig: fetcherFor(snapshot), fetchAnimations: animationsFetcherFor() })
+    await hub.load()
+    const { api } = makeEditorApi(snapshot.config)
+    let resolveSave!: (config: MotionPetConfig) => void
+    api.patchConfig = vi.fn(
+      () =>
+        new Promise<MotionPetConfig>((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+    const store = new EditorStore({ api, hub })
+    await store.load()
+
+    store.updateConfig((draft) => {
+      delete draft.states.idle.ambient.customAnimationId
+    })
+    const saving = store.saveConfig()
+    await flushMicrotasks()
+    hub.publish(snapshot) // stale poll/config echo from before the clear
+    expect(store.getSnapshot().config?.states.idle.ambient.customAnimationId).toBeUndefined()
+
+    const saved = structuredClone(snapshot.config)
+    delete saved.states.idle.ambient.customAnimationId
+    resolveSave(saved)
+    await saving
+    expect(store.getSnapshot().config?.states.idle.ambient.customAnimationId).toBeUndefined()
     store.dispose()
   })
 })

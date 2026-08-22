@@ -455,3 +455,67 @@ reviewer 环境（Linux 解压 ZIP，pnpm symlink 被展平）无法独立跑 Vi
 - 测试：42 文件 / **588 用例**全绿（timeline-model 19 + timeline-editor 18 + 集成 5 等）。
 - 真机 CDP 验收：三轨道 lanes/⚑ 标记/检查器/自愈按钮/JSON 视图截图复核（1600/1100 两档）；真实鼠标拖关键帧生效；试播期间 transition 层 computed scale 连续采样到 24 个变化值（预览确实在播变形动画）。
 - 已知从简（代码注释在案）：移动/删除关键帧造成的同层 easing 失配只报不自动修；TimelineEditor 无 readOnly 通道（内置动画的轴上试改只能试播，保存靠克隆）。
+
+## GitHub 仓库建立（2026-08-21）
+
+- 仓库：`https://github.com/Traveritas/dsh-motion-pet`（**PRIVATE**，发布前可改 public）。initial commit 已推送（main 分支，130 文件；node_modules/lib/构建产物经 .gitignore 排除）。
+- `package.json` 已补 `repository`/`homepage` 字段。
+- **CI 未随首推**：gh token 缺 `workflow` scope，含 `.github/workflows/ci.yml` 的推送被 GitHub 拒绝。ci.yml 保留在工作区未跟踪；用户执行 `gh auth refresh -s workflow` 后补交即可启用 Actions。
+- 名称保持 `dsh-motion-pet`（用户决定），npm 发布继续搁置（调优中）。
+
+## V1.1 — 宠物预设（2026-08-21）
+
+- **数据边界**：宠物预设只拥有 `{poses, states, scale}`，全局启用、减少动态、停留策略、互动、overlay 位置和自定义动画继续由全局配置拥有；身份指针为 `config.activePetId`。
+- **host**：`PetsStore` 以 `$DSH_HOME/motion-pet/pets/<id>.json` 一宠物一文件持久化，原子写 + 串行队列，损坏文件跳过并返回 warnings。配置保存后把预设切片镜像到 active preset（config 主、preset 镜像从，镜像失败只告警）。新建空白或应用其他宠物前若 `activePetId === null`，自动把当前切片保存为「未命名宠物」。资产删除引用检查扩展到全部预设，非激活预设引用同样返回 409 `ASSET_IN_USE`。
+
+### 2026-08-22 — 编辑器体验与回归修复
+
+- 配置编辑改为显式“保存修改”；关闭页面不再写入草稿，宠物切换遇到未保存修改时提示先保存，也不再自动创建「未命名宠物」。图片上传仍即时用于预览，配置引用与旧资产清理在手动保存后执行。
+- 动画库内新增独立试播渲染器与停止按钮；试播不再占用状态预览渲染器，循环/随机间隔动画可立即取消。
+- 动画类型切换会按类型规范事件：环境动画清空事件，互动动画移除 `pose-swap`，切回过渡动画自动补充 `pose-swap`。
+- 修复自定义环境选择“无”后回弹：客户端用 `null` 明确清除可选动画引用，并在保存请求期间拒绝旧配置广播覆盖本地草稿。
+- **API**：`GET/POST /api/motion-pet/pets`、`PUT/DELETE /api/motion-pet/pets/<id>`、`POST /api/motion-pet/pets/<id>/apply`。删除 active preset 只清空指针，当前角色配置保留为「未保存的当前配置」。
+- **client**：editor-store 与 config/custom animations 并行加载 pets；新建副本/空白、重命名、删除、应用均为即时 API 动作。身份变更前先冲刷 300ms 防抖窗口内的编辑；create/apply 采用 host 返回的完整 config 替换 draft 并 publish，delete-active 从刷新结果同步 null 指针。独立编辑器顶部新增「宠物」卡，空配置状态下仍可管理预设。
+- **验证**：43 文件 / **636 用例**全绿，typecheck 零错误，四产物 build 通过。重启真实 `dsh web` 后完成新建当前/空白、列表、应用、重命名、删除与跨预设资产 409 矩阵；临时数据清理后 live config 对比恢复一致。编辑器 1280×720 暗色真机目视：宠物卡位于全局设置上方，无横向溢出，原三栏与预览正常。
+
+## V1.1 — 自定义环境动画状态挂载（2026-08-21）
+
+- **配置与编辑器**：`states.*.ambient.customAnimationId` 可为六个状态分别选择一个 `kind: ambient` 的用户动画；环境编辑区只列出 ambient 类型，并回显悬空引用。
+- **运行时**：自定义环境动画与 Bounce / Sway / Breathing 并行播放，统一走 Timeline Engine；切换状态、修改动画定义、清除引用与 reduced-motion 都会正确启停，悬空或类型不匹配的 id 安静忽略。
+- **保护**：Host 校验用户命名空间和动画存在性；删除动画会检查当前配置及全部宠物预设中的进入动画和环境动画引用，引用中返回 `409 ANIMATION_IN_USE`。应用宠物时会显式清除目标预设没有保存的可选动画 id。
+- **验证**：43 文件 / **649 用例**全绿，typecheck 零错误，四产物 build 通过。重启真实 `dsh web` 后，现有自定义环境动画「奶蛋-工作」在待机/思考/工作/等待/成功/错误六个状态的下拉中均可见；通过 UI 挂载后 Host 配置保存了对应 id，验收结束已恢复原配置，active pet 预设也无残留引用。
+
+## 外部审查修复 — UX 护栏 + 安全/契约收口（2026-08-23）
+
+独立代码审查（用户体验 + 接口可扩展性两个维度）后的两批落地。
+
+### 编辑器与运行时 UX（审查 UX-1..UX-4 及小项）
+
+- 手动保存模型补齐丢失保护：独立编辑器页在 dirty/saving/error 态注册 `beforeunload`；`SaveIndicator` 新增「撤回修改」控件（confirm 后 `EditorStore.revertConfig()` 重新 GET 磁盘态替换草稿、清空待删资产队列，保留 selectedState/customs/pets）。动画库草稿切换/新建/克隆/删除前有未保存修改时弹确认并在列表标记 ●。
+- 图片上传进行中 `importing` 状态：导入按钮 disabled + 「上传中…」，防重复上传产生孤儿资产。
+- 舞台命中区收窄到宠物本体：`pointer-events` 移到 pose `<img>`（尺寸由 layoutPose 驱动，随 anchor/zoom/scale 自动跟随，退化布局回退整格），透明区域不再吞掉底层 UI 点击；`<img>` 兼任 a11y 操作体（role=button / tabindex / Enter+Space 互动）。
+- 运行时修复：终态 TTL 改用事件自带 `ts`（SSE 重连不再重放陈旧 success/error）；页面 hidden 期间 enter 过渡实例随 director pause/resume（§23 补齐，经 `EnterReportingEngine` 侧通道上报实例）；`<img>` 加载失败 console.warn + 虚线占位；拖动 grabbing 光标；位置夹紧按 userScale 折算；coalescing 增加 200ms 最大窗口防饿死。
+- 其余小项：全局过渡下拉补 flip、缩放范围两处对齐 0.3–4、NumberField 改 blur/Enter 提交（输入中间值不再被逐键 clamp）、TransitionEditor 预览按钮播放所选状态的进入动画、删除动画确认、错误通知 role=alert、编辑器页头 sticky、STATE_LABELS 收敛到 state-labels.ts。
+- 暂缓项清单见 `docs/deferred-backlog.md`。
+
+### enter 挂载点 kind 契约（审查 EXT-1）
+
+- 问题：`states.*.enter.animationId` 只做存在性校验，`kind: ambient/interaction` 的自定义动画可经 `PUT /config` 挂上 enter；该定义没有 `pose-swap` 事件，enter 播完后 `stagePoseUrl` 仍被无条件写为新 pose 的 URL，违反「完成的 enter 必然换过图」不变量（首屏可致永久空白，后续静默换图被 URL 相等短路）。
+- 修复：`MotionDirector.resolveEnter` 仅接受 `kind === 'transition'` 的 override（错误 kind 与悬空 id 同样回落 preset）；Host 校验注入从存在性检查升级为 kind 查询（`AnimationsStore.kindOf()`，校验选项改名 `animationLookup`），enter 要求 transition、`ambient.customAnimationId` 要求 ambient，wrong-kind 在 strict 模式 400 / repair 模式丢弃回落。`interactions.click.animation` 维持 shape-only（运行时 `playInteraction` 已有 kind 防御，注释保持该决策）。
+- 测试：validation 错误 kind 的正反用例、repair 回落；director「ambient 挂 enter 回落 preset 且正常换图」。
+
+### 跨源写防护（审查 EXT-2）
+
+- 问题：三个 POST 写端点（assets 上传 multipart、pets 创建/apply 可接受 text/plain body）属于 CORS「简单请求」，恶意网页无需 preflight 即可触发副作用；Host 层此前无任何 Origin/Sec-Fetch 校验。DSH 网关对插件 exact/prefix 路由的鉴权行为未在官方源码中确认，按纵深防御处理。
+- 修复：`registerRoutes` 的统一 wrap 层对非 GET/HEAD/OPTIONS 请求校验 `Sec-Fetch-Site: cross-site` 拒绝（403 `CROSS_ORIGIN`）；无 Sec-Fetch-Site 时回落 Origin 与 Host 比对（`null` 与外域拒绝）。无浏览器元数据的请求（curl / 未来 CLI）放行。SSE 状态流是只读 GET，不在防护范围。
+- 测试：cross-site 上传 403 且无落盘、外域 Origin 的 text/plain POST /pets 403、同源 Origin 与无元数据客户端放行、GET 不受影响。
+- **验证**：43 文件 / **699 用例**全绿，typecheck 零错误。
+
+### 复查修复（同日第二轮）
+
+提交前独立复查两轮改动，发现并修复 editor-store 两个并发路径问题及两处小项：
+
+- **高**：`importImage` 的 superseded 分支只发 notice、丢弃 assets/configRevision/saveState patch，但 draft mutation 已无条件执行——被取代的上传会留下"snapshot 落后于 draft 且无 revision bump 自愈"的不一致（并发导入可自然触发）。修复：被取代的导入照常落地数据 patch，仅 `importing` 标志归最新序列。
+- **中**：`writeLoop` 尾部无条件 emit `'saved'`，会覆盖 `cleanupReplacedAssets` await 窗口内新编辑的 `'dirty'`（UI 显示已保存、保存按钮禁用、beforeunload 不注册）。修复：尾部按 `this.dirty` 决定终态。
+- 小项：`removeImage` 在保存进行中保持 `'saving'`；宠物 rename/delete 非 active 目标同时跳过 dirty 与 failed-save 两道门（原实现只放宽 dirty 门）；revertConfig 注明"GET 窗口内的纯编辑按设计丢弃"。
+- 新增测试：并发导入（被取代导入数据仍落地）、清理窗口 dirty 保持、in-flight 保存中 removeImage 被 latest-wins 收编、failed-save 不阻塞非 active 重命名。

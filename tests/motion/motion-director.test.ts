@@ -609,6 +609,68 @@ describe('MotionDirector — pause/resume (§23 hidden-tab policy)', () => {
     director.resume()
     director.dispose()
   })
+
+  it('an enter transition started while paused begins paused: no animation advances while hidden (§23)', async () => {
+    const { stage, director } = setup()
+    director.pause()
+    const pending = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    // the enter's pre segment exists but is frozen: playState paused, not running
+    const finite = harness.pending().filter((animation) => animation.options.iterations !== Infinity)
+    expect(finite).toHaveLength(1)
+    expect(finite[0].target).toBe(stage.layers.transition)
+    expect(finite[0].playState).toBe('paused')
+    expect(stage.swapped).toEqual([]) // a frozen pre segment never reaches its pose-swap
+
+    director.resume()
+    expect(finite[0].playState).toBe('running')
+    harness.finishPending()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking']) // swap fires only after resume
+    await settleTransitions()
+    await pending
+    director.dispose()
+  })
+
+  it('pausing mid-enter freezes the in-flight transition in place; resume completes it', async () => {
+    const { stage, director } = setup()
+    const pending = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const pre = harness.animations[harness.animations.length - 1]
+    expect(pre.playState).toBe('running')
+
+    director.pause() // the tab hides while the enter is in flight
+    expect(pre.playState).toBe('paused')
+    await vi.advanceTimersByTimeAsync(10_000) // a paused WAAPI animation never advances
+    expect(pre.playState).toBe('paused')
+    expect(stage.swapped).toEqual([])
+
+    director.resume()
+    expect(pre.playState).toBe('running')
+    harness.finishPending()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking'])
+    await settleTransitions()
+    await pending
+    director.dispose()
+  })
+
+  it('a superseded paused enter is still cancelled by the next transition (generation guard intact)', async () => {
+    const { stage, director } = setup()
+    director.pause()
+    const pendingA = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const preA = harness.pending().find((animation) => animation.options.iterations !== Infinity)
+    expect(preA?.playState).toBe('paused')
+
+    const pendingB = director.setTarget(target({ visualState: 'waiting', poseKey: 'waiting' }))
+    expect(preA?.playState).toBe('idle') // A was cancelled, not merely paused
+    await settleTransitions()
+    await Promise.all([pendingA, pendingB])
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['waiting']) // A never swapped
+    director.dispose()
+  })
 })
 
 describe('MotionDirector — currentTarget (read-only, M5)', () => {
@@ -922,5 +984,135 @@ describe('MotionDirector — enter animationId (§8.14, V1.1)', () => {
     await pending
     expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle'])
     director.dispose()
+  })
+
+  it('a wrong-kind animationId (ambient custom mounted on an enter) falls back to the preset', async () => {
+    const { stage, registry, config, director } = setup()
+    registry.register({
+      version: 1,
+      id: 'user:float',
+      name: 'Float',
+      kind: 'ambient',
+      durationMs: 700,
+      repeat: { mode: 'loop' },
+      tracks: [
+        { property: 'sway.rotation', keyframes: [{ at: 0, value: -3 }, { at: 1, value: 3 }] },
+      ],
+    })
+    config.states.idle.enter = { preset: 'snap', strength: 1, durationMs: 160, animationId: 'user:float' }
+
+    const pending = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    const pre = harness.animations[0]
+    // The enter played builtin:snap (160ms cut at 0.48), NOT the 700ms looping
+    // ambient: an enter without pose-swap would strand stagePoseUrl (§12).
+    expect(pre.options.duration).toBeCloseTo(76.8, 5)
+    expect(pre.options.iterations ?? 1).toBe(1)
+
+    await settleTransitions()
+    await pending
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle'])
+    director.dispose()
+  })
+})
+
+describe('MotionDirector — custom ambient animation per state', () => {
+  const customAmbient = (durationMs = 777): AnimationDefinition => ({
+    version: 1,
+    id: 'user:float',
+    name: 'Float',
+    kind: 'ambient',
+    durationMs,
+    repeat: { mode: 'loop' },
+    tracks: [
+      {
+        property: 'sway.rotation',
+        keyframes: [
+          { at: 0, value: -3 },
+          { at: 1, value: 3 },
+        ],
+      },
+    ],
+  })
+
+  const disableBuiltinAmbient = (config: MotionPetConfig): void => {
+    const ambient = config.states.idle.ambient
+    ambient.bounce.enabled = false
+    ambient.sway.enabled = false
+    ambient.breathe.enabled = false
+  }
+
+  it('plays the selected ambient definition after enter and keeps it through ambient-only refreshes', async () => {
+    const { stage, registry, config, director } = setup()
+    disableBuiltinAmbient(config)
+    registry.register(customAmbient())
+    config.states.idle.ambient.customAnimationId = 'user:float'
+
+    const entering = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await entering
+    const custom = harness.animations.find(
+      (animation) => animation.target === stage.layers.sway && animation.options.duration === 777,
+    )
+    expect(custom?.options.iterations).toBe(Infinity)
+    const count = harness.animations.length
+
+    await director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    expect(harness.animations).toHaveLength(count)
+    expect(custom?.playState).toBe('running')
+    director.dispose()
+  })
+
+  it('stops the old custom on selection clear and restarts when its definition changes', async () => {
+    const { stage, registry, config, director } = setup()
+    disableBuiltinAmbient(config)
+    registry.register(customAmbient())
+    config.states.idle.ambient.customAnimationId = 'user:float'
+    const entering = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await entering
+    const first = harness.animations.find(
+      (animation) => animation.target === stage.layers.sway && animation.options.duration === 777,
+    )
+    expect(first?.playState).toBe('running')
+
+    registry.unregister('user:float')
+    registry.register(customAmbient(999))
+    director.refreshAmbient()
+    expect(first?.playState).toBe('idle')
+    const replacement = harness.animations.find(
+      (animation) => animation.target === stage.layers.sway && animation.options.duration === 999,
+    )
+    expect(replacement?.playState).toBe('running')
+
+    delete config.states.idle.ambient.customAnimationId
+    director.refreshAmbient()
+    expect(replacement?.playState).toBe('idle')
+    director.dispose()
+  })
+
+  it('ignores dangling/wrong-kind ids and suppresses custom ambient under reduced motion', async () => {
+    const wrongKind = setup()
+    disableBuiltinAmbient(wrongKind.config)
+    wrongKind.registry.register({ ...customAmbient(), kind: 'interaction' })
+    wrongKind.config.states.idle.ambient.customAnimationId = 'user:float'
+    const wrongEntering = wrongKind.director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await wrongEntering
+    expect(harness.animations.some((animation) => animation.options.duration === 777)).toBe(false)
+    wrongKind.director.dispose()
+    harness.animations.length = 0
+
+    for (const reducedMotion of [false, true]) {
+      const { registry, config, director } = setup(reducedMotion)
+      disableBuiltinAmbient(config)
+      registry.register(customAmbient())
+      config.states.idle.ambient.customAnimationId = reducedMotion ? 'user:float' : 'user:missing'
+      const entering = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+      await settleTransitions()
+      await entering
+      expect(harness.animations.some((animation) => animation.options.duration === 777)).toBe(false)
+      director.dispose()
+      harness.animations.length = 0
+    }
   })
 })

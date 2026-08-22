@@ -98,6 +98,8 @@ export interface AmbientConfig {
   bounce: BounceConfig
   sway: SwayConfig
   breathe: BreatheConfig
+  /** Optional user-defined ambient timeline played alongside built-in channels. */
+  customAnimationId?: string
 }
 
 export type AmbientChannel = 'bounce' | 'sway' | 'breathe'
@@ -157,6 +159,12 @@ export interface MotionPetConfig {
   interactions: {
     click: ClickInteraction
   }
+  /**
+   * Active pet preset id (`pet_*`, host/pets.ts, V1.1); null = the current
+   * poses/states/scale are unsaved edits belonging to no preset. Config files
+   * predating the field load as null — no migration needed.
+   */
+  activePetId: string | null
 }
 
 /** Same-state pose-swap animation policy for MotionPetConfig.advanced. */
@@ -175,6 +183,21 @@ export interface ClickInteraction {
 
 /** Terminal-state exit policy for MotionPetConfig.advanced.terminalHold. */
 export type TerminalHold = 'timed' | 'until-interaction'
+
+/** The preset-owned slice of the config (V1.1 pet presets, host/pets.ts). */
+export interface PetSlice {
+  scale: number
+  poses: Record<PoseKey, PoseConfig>
+  states: Record<PoseKey, StateAppearance>
+}
+
+/** A stored pet preset: the character slice plus identity and timestamps. */
+export interface PetPreset extends PetSlice {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
 
 export type MotionTargetReason =
   | 'agent-state'

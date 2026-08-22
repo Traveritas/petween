@@ -2,13 +2,13 @@
  * client/settings/MotionPetCard.tsx — the compact settings.section entry
  * card. The ~600px settings dialog only carries the daily quick controls:
  * a status summary (imported poses · enabled state), the enable toggle, the
- * scale slider and a prominent link to the standalone full-page editor
- * (EDITOR_PAGE_URL, new tab). The full editor (MotionPetSettings) lives on
- * that page.
+ * scale slider (0.3..4 — aligned with the full editor and host validation)
+ * and a prominent link to the standalone full-page editor (EDITOR_PAGE_URL,
+ * new tab). The full editor (MotionPetSettings) lives on that page.
  *
  * State goes through the same EditorStore as the full editor (hub-shared in
- * production), so quick edits get the same debounced patch-save discipline
- * and save indicator.
+ * production), so quick edits stay local until the shared Save button is
+ * clicked.
  */
 import { useEffect, useState, useSyncExternalStore, type JSX } from 'react'
 import { POSE_KEYS } from '../../core/types'
@@ -73,8 +73,8 @@ export function MotionPetCard(props: MotionPetCardProps): JSX.Element {
       />
       <Slider
         label="整体缩放"
-        min={0.5}
-        max={2}
+        min={0.3}
+        max={4}
         step={0.05}
         value={config.global.scale}
         onChange={(value) =>

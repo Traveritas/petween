@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PoseAnchor, PoseKey, ResolvedPose } from '../../src/core/types'
-import { computeAnchorLayout, MIN_VISIBLE_PX, PetStage } from '../../src/client/overlay/pet-stage'
+import { computeAnchorLayout, DEFAULT_STAGE_SIZE, MIN_VISIBLE_PX, PetStage } from '../../src/client/overlay/pet-stage'
 import { installFakeAnimate } from '../motion/fake-animate'
 
 const STAGE_SIZE = 160
@@ -76,13 +76,128 @@ describe('PetStage — layered DOM (§3.4)', () => {
     stage.dispose()
   })
 
-  it('keeps the pointer-events contract: click-through shell, interactive body', () => {
+  it('keeps the pointer-events contract: click-through shell, interactive pet body', () => {
     const stage = new PetStage()
     expect(stage.element.style.pointerEvents).toBe('none')
-    expect(stage.layers.transition.firstElementChild).not.toBeNull()
     const stageLayer = stage.layers.transition.firstElementChild as HTMLElement
-    expect(stageLayer.style.pointerEvents).toBe('auto')
+    expect(stageLayer.className).toBe('dsh-motion-pet-stage')
+    // UX-4: the stage square is inert; the pose img box is the only hit target
+    expect(stageLayer.style.pointerEvents).toBe('none')
+    expect(stage.interactiveElement).toBe(imageOf(stage))
+    expect(stage.interactiveElement.style.pointerEvents).toBe('auto')
     stage.dispose()
+  })
+})
+
+describe('PetStage — hit region follows the rendered pet body (UX-4)', () => {
+  it('the hit region is the pose img, sized to the contain-fit image box', () => {
+    const stage = new PetStage({ size: STAGE_SIZE })
+    // A wide 4:1 pose: the drawn body is a 160×40 strip, not the whole square.
+    stage.swapPose(makePose({ width: 480, height: 120, anchor: { x: 0.5, y: 1 } }))
+    const hit = stage.interactiveElement
+    expect(hit.tagName).toBe('IMG')
+    expect(hit).toBe(imageOf(stage))
+    expect(hit.style.width).toBe('160px')
+    expect(hit.style.height).toBe('40px')
+    expect(hit.style.top).toBe('104px') // the strip sits at the bottom via the anchor
+    stage.dispose()
+  })
+
+  it('the hit region tracks every relayout (anchor/zoom/pose changes)', () => {
+    const stage = new PetStage({ size: STAGE_SIZE })
+    stage.swapPose(makePose({ key: 'idle', anchor: { x: 0.5, y: 0.96 } }))
+    expect(stage.interactiveElement.style.width).toBe('160px') // square pose fills the stage
+
+    stage.swapPose(makePose({ key: 'thinking', width: 480, height: 240, anchor: { x: 0.5, y: 0.96 }, zoom: 1.5 }))
+    const hit = stage.interactiveElement
+    expect(hit.style.width).toBe('240px') // fit 1/3 × 480 × 1.5
+    expect(hit.style.height).toBe('120px')
+
+    stage.setSize(240)
+    expect(hit.style.width).toBe('360px') // relayout on resize keeps the hit box in sync
+    stage.dispose()
+  })
+
+  it('degrades to the full-square hit while the image size is unknown', () => {
+    const stage = new PetStage({ size: STAGE_SIZE })
+    stage.swapPose(makePose({ width: 0, height: 0 })) // jsdom naturalWidth is 0 too
+    const hit = stage.interactiveElement
+    expect(hit.style.width).toBe('160px')
+    expect(hit.style.height).toBe('160px')
+    expect(hit.style.left).toBe('0px')
+    expect(hit.style.top).toBe('0px')
+    stage.dispose()
+  })
+})
+
+describe('PetStage — hit region a11y (UX-4)', () => {
+  it('the interactive body is a labelled, focusable button', () => {
+    const stage = new PetStage()
+    const hit = stage.interactiveElement
+    expect(hit.getAttribute('role')).toBe('button')
+    expect(hit.tabIndex).toBe(0)
+    expect(hit.getAttribute('aria-label')).toBe('桌宠，点击互动')
+    expect(hit.getAttribute('alt')).toBe('') // the img itself stays decorative
+    expect(hit.style.cursor).toBe('grab')
+    expect(hit.style.touchAction).toBe('none')
+    stage.dispose()
+  })
+
+  it('injects the :focus-visible ring stylesheet once per document', () => {
+    const first = new PetStage()
+    const style = document.getElementById('dsh-motion-pet-stage-styles')
+    expect(style).not.toBeNull()
+    expect(style?.tagName).toBe('STYLE')
+    expect(style?.textContent).toContain('.dsh-motion-pet-pose:focus-visible')
+    expect(style?.textContent).toContain('dsh-motion-pet-image-error')
+    expect(style?.parentElement).toBe(document.head)
+
+    const before = document.getElementById('dsh-motion-pet-stage-styles')
+    const second = new PetStage() // a second stage (settings preview + overlay)
+    expect(document.getElementById('dsh-motion-pet-stage-styles')).toBe(before) // injected once
+    first.dispose()
+    second.dispose()
+  })
+})
+
+describe('PetStage — image load failure fallback (UX robustness)', () => {
+  it('marks the stage with a placeholder class and warns with the asset URL', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const stage = new PetStage({ size: STAGE_SIZE })
+      const pose = makePose({ url: 'https://example.test/broken.webp' })
+      stage.swapPose(pose)
+      const stageLayer = stage.layers.transition.firstElementChild as HTMLElement
+      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(false)
+      imageOf(stage).dispatchEvent(new Event('error'))
+      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(true)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0][0]).toContain('https://example.test/broken.webp')
+      stage.dispose()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a later successful load clears the placeholder; swapPose keeps working after failures', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const stage = new PetStage({ size: STAGE_SIZE })
+      const stageLayer = stage.layers.transition.firstElementChild as HTMLElement
+      stage.swapPose(makePose({ key: 'idle' }))
+      imageOf(stage).dispatchEvent(new Event('error'))
+
+      // the next swap is unaffected by the earlier failure…
+      const next = makePose({ key: 'thinking', url: 'https://example.test/thinking.webp' })
+      stage.swapPose(next)
+      expect(imageOf(stage).getAttribute('src')).toBe(next.asset.url)
+      // …and its successful load clears the placeholder state
+      imageOf(stage).dispatchEvent(new Event('load'))
+      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(false)
+      stage.dispose()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
@@ -283,6 +398,22 @@ describe('PetStage — scale, position (§27), reduced motion, marker, dispose',
     stage.setPosition(-5000, -5000)
     expect(stage.element.style.left).toBe(`${-(stage.stageSize - MIN_VISIBLE_PX)}px`)
     expect(stage.element.style.top).toBe(`${-(stage.stageSize - MIN_VISIBLE_PX)}px`)
+    stage.dispose()
+  })
+
+  it('the clamp is user-scale aware: a shrunken pet may hide no more than its visible size', () => {
+    const stage = new PetStage()
+    stage.setUserScale(0.5) // visible pet = 80px square
+    stage.setPosition(-5000, -5000)
+    // -(80 - 32): 32px of the VISIBLE pet stays reachable, not of the raw square
+    expect(stage.element.style.left).toBe(`${-(DEFAULT_STAGE_SIZE * 0.5 - MIN_VISIBLE_PX)}px`)
+    expect(stage.element.style.top).toBe(`${-(DEFAULT_STAGE_SIZE * 0.5 - MIN_VISIBLE_PX)}px`)
+
+    stage.setUserScale(0.1) // visible pet (16px) smaller than MIN_VISIBLE_PX
+    stage.setPosition(-5000, -5000)
+    // the tiny pet may hug the edge fully visible; no positive push-back
+    expect(Number.parseFloat(stage.element.style.left)).toBe(0)
+    expect(Number.parseFloat(stage.element.style.top)).toBe(0)
     stage.dispose()
   })
 

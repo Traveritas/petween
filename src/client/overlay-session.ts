@@ -148,6 +148,11 @@ export class OverlaySession {
       onClick: () => this.clickPop(),
     })
 
+    // §28 + a11y: the hit region is focusable (role=button, tabindex=0 on the
+    // stage); Enter/Space trigger the exact same interaction as a pointer
+    // click, without modifiers and with the default (scroll) suppressed.
+    this.stage.interactiveElement.addEventListener('keydown', this.handleInteractiveKeydown)
+
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.handleVisibilityChange)
     }
@@ -231,12 +236,12 @@ export class OverlaySession {
     this.assets = { ...snapshot.assets }
     this.resolvePose = createPoseResolver(this.config.poses, this.assets)
     this.stage.setParticlesEnabled(this.config.advanced.particles)
-    this.syncCustoms(snapshot.customs)
+    const customsChanged = this.syncCustoms(snapshot.customs)
 
     if (this.config.global.scale !== previousScale) this.stage.setUserScale(this.config.global.scale)
     if (this.config.global.reducedMotion !== previousReducedMotion) {
       this.applyReducedMotion()
-    } else if (JSON.stringify(this.config.states) !== previousStates) {
+    } else if (JSON.stringify(this.config.states) !== previousStates || customsChanged) {
       this.director.refreshAmbient()
     }
 
@@ -276,15 +281,19 @@ export class OverlaySession {
    * animationId falls back to preset semantics at play time, so a removed
    * custom never breaks the pet.
    */
-  private syncCustoms(customs: ConfigSnapshot['customs']): void {
+  private syncCustoms(customs: ConfigSnapshot['customs']): boolean {
+    const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     for (const warning of syncCustomAnimations(this.registry, customs)) {
       console.warn(`motion-pet: ${warning}`)
     }
+    const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
+    return before !== after
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.stage.interactiveElement.removeEventListener('keydown', this.handleInteractiveKeydown)
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -353,6 +362,16 @@ export class OverlaySession {
     void this.director.playInteraction().catch((error: unknown) => {
       console.error('motion-pet: click interaction failed', error)
     })
+  }
+
+  /** Enter/Space on the focused pet body == a pointer click (§28 + a11y). */
+  private readonly handleInteractiveKeydown = (event: Event): void => {
+    if (this.disposed) return
+    const keyboard = event as KeyboardEvent
+    if (keyboard.key !== 'Enter' && keyboard.key !== ' ') return
+    if (keyboard.ctrlKey || keyboard.metaKey || keyboard.altKey || keyboard.shiftKey) return
+    keyboard.preventDefault() // Space would scroll the page; Enter might click twice
+    this.clickPop()
   }
 
   private applyPosition(): void {

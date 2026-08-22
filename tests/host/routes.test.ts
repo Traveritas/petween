@@ -6,7 +6,7 @@
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -17,6 +17,7 @@ import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { AnimationsStore } from '../../src/host/animations'
 import { AssetStore } from '../../src/host/assets'
 import { ConfigStore } from '../../src/host/config'
+import { PetsStore, petSliceFromConfig, type PetPreset } from '../../src/host/pets'
 import { registerRoutes, type RoutesDeps } from '../../src/host/routes'
 import { makeJpeg, makePng, makeSvg, makeWebp } from './fixtures'
 
@@ -34,7 +35,14 @@ function uploadBody(bytes: Buffer, mime: string, fieldName = 'file'): FormData {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'motion-pet-routes-'))
-  const configStore = new ConfigStore({ configPath: join(dir, 'config.json') })
+  const petsStore = new PetsStore({ petsDir: join(dir, 'pets') })
+  const configStore = new ConfigStore({
+    configPath: join(dir, 'config.json'),
+    // The pet-preset mirror, wired exactly as in src/index.ts.
+    onSaved: async (config) => {
+      if (config.activePetId !== null) await petsStore.saveSlice(config.activePetId, petSliceFromConfig(config))
+    },
+  })
   const assetStore = new AssetStore({ assetsDir: join(dir, 'assets'), manifestPath: join(dir, 'assets.json') })
   const animationsStore = new AnimationsStore({ animationsDir: join(dir, 'animations') })
   deps = {
@@ -48,6 +56,11 @@ beforeEach(async () => {
     listAnimations: () => animationsStore.loadAll(),
     saveAnimation: (definition) => animationsStore.save(definition),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
+    listPets: () => petsStore.list(),
+    createPet: (name, slice) => petsStore.create(name, slice),
+    readPet: (id) => petsStore.read(id),
+    renamePet: (id, name) => petsStore.rename(id, name),
+    deletePet: (id) => petsStore.delete(id),
   }
   const routes: WebRoute[] = []
   disposeRoutes = registerRoutes(
@@ -377,6 +390,26 @@ describe('/api/motion-pet/animations (V1.1 plan §3)', () => {
     }
   }
 
+  function makeAmbient(id: string): AnimationDefinition {
+    return {
+      version: 1,
+      id,
+      name: 'Custom Float',
+      kind: 'ambient',
+      durationMs: 900,
+      repeat: { mode: 'loop' },
+      tracks: [
+        {
+          property: 'sway.rotation',
+          keyframes: [
+            { at: 0, value: -2 },
+            { at: 1, value: 2 },
+          ],
+        },
+      ],
+    }
+  }
+
   const putAnimation = (id: string, body: unknown): Promise<Response> =>
     fetch(`${base}/api/motion-pet/animations/${id}`, {
       method: 'PUT',
@@ -479,7 +512,263 @@ describe('/api/motion-pet/animations (V1.1 plan §3)', () => {
     expect(await res.json()).toEqual({ error: 'ANIMATION_IN_USE' })
   })
 
+  it('DELETE refuses 409 for a custom ambient referenced only by a non-active pet preset', async () => {
+    await putAnimation('user:float', makeAmbient('user:float'))
+    const config = createDefaultMotionPetConfig()
+    config.states.idle.ambient.customAnimationId = 'user:float'
+    expect((await putConfig(config)).status).toBe(200)
+
+    const saved = await fetch(`${base}/api/motion-pet/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'With Float', from: 'current' }),
+    })
+    expect(saved.status).toBe(200)
+    const blank = await fetch(`${base}/api/motion-pet/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Blank', from: 'blank' }),
+    })
+    expect(blank.status).toBe(200)
+    expect((await blank.json()).config.states.idle.ambient.customAnimationId).toBeUndefined()
+
+    const res = await fetch(`${base}/api/motion-pet/animations/user:float`, { method: 'DELETE' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'ANIMATION_IN_USE' })
+  })
+
   it('DELETE 404s an unregistered id', async () => {
     expect((await fetch(`${base}/api/motion-pet/animations/user:missing`, { method: 'DELETE' })).status).toBe(404)
+  })
+})
+
+describe('/api/motion-pet/pets (V1.1 pet presets)', () => {
+  const postPets = (body: unknown): Promise<Response> =>
+    fetch(`${base}/api/motion-pet/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  const putConfig = (patch: unknown): Promise<Response> =>
+    fetch(`${base}/api/motion-pet/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+
+  /** PUT a config whose character slice is recognizably non-default. */
+  async function seedConfig(scale = 1.5, assetId = '0123456789abcdef'): Promise<void> {
+    const config = createDefaultMotionPetConfig()
+    config.global.scale = scale
+    config.poses.idle.assetId = assetId
+    const res = await putConfig(config)
+    expect(res.status).toBe(200)
+  }
+
+  it('GET returns an empty list and a null activePetId on a fresh install', async () => {
+    const res = await fetch(`${base}/api/motion-pet/pets`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ pets: [], activePetId: null, warnings: [] })
+  })
+
+  it('POST from=current saves the current slice as a preset and makes it active', async () => {
+    await seedConfig()
+    const res = await postPets({ name: 'Kitty', from: 'current' })
+    expect(res.status).toBe(200)
+    const { pet, config } = (await res.json()) as { pet: PetPreset; config: MotionPetConfig }
+    expect(pet.id).toMatch(/^pet_[a-z0-9]+$/)
+    expect(pet.name).toBe('Kitty')
+    expect(pet.scale).toBe(1.5)
+    expect(pet.poses.idle.assetId).toBe('0123456789abcdef')
+    expect(config.activePetId).toBe(pet.id)
+    // persisted: the file is on disk and GET reflects the new active pointer.
+    // (The adopt-update mirrors the slice back, so the on-disk updatedAt may
+    // tick past the created one — everything else must match verbatim.)
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(onDisk).toEqual({ ...pet, updatedAt: expect.any(String) })
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets).toEqual([onDisk])
+    expect(listed.activePetId).toBe(pet.id)
+  })
+
+  it('POST from=current rejects a missing name with 400 INVALID_PRESET', async () => {
+    const res = await postPets({ from: 'current' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVALID_PRESET')
+    expect(await (await fetch(`${base}/api/motion-pet/pets`)).json()).toMatchObject({ pets: [] })
+  })
+
+  it('POST rejects an unknown "from" with 400', async () => {
+    const res = await postPets({ name: 'X', from: 'somewhere' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVALID_REQUEST')
+  })
+
+  it('POST from=blank applies an empty pet without creating an unnamed preset', async () => {
+    await seedConfig()
+    const res = await postPets({ name: 'Blank', from: 'blank' })
+    expect(res.status).toBe(200)
+    const { pet, config } = (await res.json()) as { pet: PetPreset; config: MotionPetConfig }
+    expect(config.activePetId).toBe(pet.id)
+    expect(config.global.scale).toBe(1)
+    expect(config.poses.idle.assetId).toBeUndefined()
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets.map((candidate: PetPreset) => candidate.name)).toEqual(['Blank'])
+  })
+
+  it('POST from=blank keeps existing named presets', async () => {
+    await postPets({ name: 'First', from: 'current' })
+    const res = await postPets({ name: 'Blank', from: 'blank' })
+    expect(res.status).toBe(200)
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Blank', 'First'])
+  })
+
+  it('PUT renames a preset; 404 unknown ids, 400 empty names', async () => {
+    const { pet } = (await (await postPets({ name: 'Old', from: 'current' })).json()) as { pet: PetPreset }
+    const res = await fetch(`${base}/api/motion-pet/pets/${pet.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'New' }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()).pet.name).toBe('New')
+    expect((await (await fetch(`${base}/api/motion-pet/pets`)).json()).pets[0].name).toBe('New')
+
+    const unknown = await fetch(`${base}/api/motion-pet/pets/pet_missing`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'X' }),
+    })
+    expect(unknown.status).toBe(404)
+    const empty = await fetch(`${base}/api/motion-pet/pets/${pet.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: ' ' }),
+    })
+    expect(empty.status).toBe(400)
+    expect((await empty.json()).error.code).toBe('INVALID_PRESET')
+  })
+
+  it('DELETE removes the preset; deleting the active one clears only activePetId', async () => {
+    await seedConfig()
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    const res = await fetch(`${base}/api/motion-pet/pets/${pet.id}`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ deleted: pet.id })
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets).toEqual([])
+    expect(listed.activePetId).toBeNull()
+    // the config content stays: the pet keeps showing as unsaved edits
+    const got = await (await fetch(`${base}/api/motion-pet/config`)).json()
+    expect(got.config.global.scale).toBe(1.5)
+    expect(got.config.poses.idle.assetId).toBe('0123456789abcdef')
+    expect(got.config.activePetId).toBeNull()
+    expect((await fetch(`${base}/api/motion-pet/pets/${pet.id}`, { method: 'DELETE' })).status).toBe(404)
+  })
+
+  it('POST <id>/apply writes the preset slice into the config and sets it active', async () => {
+    await seedConfig()
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    // Change the live config, then apply the preset to bring the slice back.
+    await putConfig({ activePetId: null, global: { scale: 3 }, poses: { idle: { assetId: null } } })
+    const res = await fetch(`${base}/api/motion-pet/pets/${pet.id}/apply`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const { config } = (await res.json()) as { config: MotionPetConfig }
+    expect(config.activePetId).toBe(pet.id)
+    expect(config.global.scale).toBe(1.5)
+    expect(config.poses.idle.assetId).toBe('0123456789abcdef')
+  })
+
+  it('POST <id>/apply does not create an implicit unnamed preset', async () => {
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    // Detach and edit: the current slice is now unsaved work.
+    await putConfig({ activePetId: null, global: { scale: 2.2 } })
+    const res = await fetch(`${base}/api/motion-pet/pets/${pet.id}/apply`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets.map((candidate: PetPreset) => candidate.name)).toEqual(['Kitty'])
+    expect(listed.activePetId).toBe(pet.id)
+  })
+
+  it('POST <id>/apply 404s unknown ids; method and path guards hold', async () => {
+    expect((await fetch(`${base}/api/motion-pet/pets/pet_missing/apply`, { method: 'POST' })).status).toBe(404)
+    expect((await fetch(`${base}/api/motion-pet/pets/pet_missing`, { method: 'DELETE' })).status).toBe(404)
+    expect((await fetch(`${base}/api/motion-pet/pets/..%2Fescape`, { method: 'DELETE' })).status).toBe(404)
+    expect((await fetch(`${base}/api/motion-pet/pets/pet_x`, { method: 'GET' })).status).toBe(405)
+    expect((await fetch(`${base}/api/motion-pet/pets/pet_x/apply`, { method: 'PUT' })).status).toBe(405)
+    expect((await fetch(`${base}/api/motion-pet/pets`, { method: 'PUT' })).status).toBe(405)
+  })
+
+  it('config updates mirror into the active preset file; a null activePetId mirrors nothing', async () => {
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    await putConfig({ global: { scale: 2.4 } })
+    const mirrored = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(mirrored.scale).toBe(2.4)
+    // detach, then edit again: no preset is touched
+    await putConfig({ activePetId: null })
+    await putConfig({ global: { scale: 3 } })
+    expect(JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8')).scale).toBe(2.4)
+  })
+
+  it('DELETE /assets refuses 409 when only a non-active preset references the asset', async () => {
+    const upload = await fetch(`${base}/api/motion-pet/assets`, { method: 'POST', body: uploadBody(makePng(2, 3), 'image/png') })
+    const assetId = ((await upload.json()) as { asset: { id: string } }).asset.id
+    await seedConfig(1.5, assetId)
+    await postPets({ name: 'Kitty', from: 'current' }) // Kitty references the asset
+    await postPets({ name: 'Blank', from: 'blank' }) // switch away: the config no longer references it
+    const res = await fetch(`${base}/api/motion-pet/assets/${assetId}`, { method: 'DELETE' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'ASSET_IN_USE' })
+    // Deleting the referencing preset frees the asset.
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    const kitty = listed.pets.find((candidate: PetPreset) => candidate.name === 'Kitty')
+    await fetch(`${base}/api/motion-pet/pets/${kitty.id}`, { method: 'DELETE' })
+    expect((await fetch(`${base}/api/motion-pet/assets/${assetId}`, { method: 'DELETE' })).status).toBe(200)
+  })
+})
+
+describe('cross-origin write guard (§20 defense-in-depth)', () => {
+  it('rejects a Sec-Fetch-Site: cross-site upload with 403 and no side effect', async () => {
+    const res = await fetch(`${base}/api/motion-pet/assets`, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'cross-site' },
+      body: uploadBody(makePng(2, 3), 'image/png'),
+    })
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('CROSS_ORIGIN')
+    expect(await readdir(join(dir, 'assets')).catch(() => [])).toEqual([])
+  })
+
+  it('rejects a foreign Origin on POST /pets (simple text/plain writes never preflight)', async () => {
+    const res = await fetch(`${base}/api/motion-pet/pets`, {
+      method: 'POST',
+      headers: { origin: 'http://evil.example', 'content-type': 'text/plain' },
+      body: JSON.stringify({ name: 'Evil', from: 'blank' }),
+    })
+    expect(res.status).toBe(403)
+    const listed = await (await fetch(`${base}/api/motion-pet/pets`)).json()
+    expect(listed.pets).toEqual([])
+  })
+
+  it('same-origin Origin headers pass and non-browser clients (no metadata) stay allowed', async () => {
+    const sameOrigin = await fetch(`${base}/api/motion-pet/config`, {
+      method: 'PUT',
+      headers: { origin: base, 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, enabled: false }),
+    })
+    expect(sameOrigin.status).toBe(200)
+    const cliStyle = await fetch(`${base}/api/motion-pet/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Cli', from: 'blank' }),
+    })
+    expect(cliStyle.status).toBe(200)
+  })
+
+  it('GETs are never guarded', async () => {
+    const res = await fetch(`${base}/api/motion-pet/config`, { headers: { 'sec-fetch-site': 'cross-site' } })
+    expect(res.status).toBe(200)
   })
 })

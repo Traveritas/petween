@@ -11,6 +11,7 @@ import { AnimationsStore } from './host/animations'
 import { AssetStore } from './host/assets'
 import { ConfigStore } from './host/config'
 import { registerEditorPage } from './host/editor-page'
+import { PetsStore, petSliceFromConfig } from './host/pets'
 import { registerRoutes, type RoutesDeps } from './host/routes'
 import { attachStateChannel } from './host/state-channel'
 
@@ -30,9 +31,16 @@ export function apply(ctx: Context) {
 
   const root = dshHomePath('motion-pet')
   const animationsStore = new AnimationsStore({ animationsDir: join(root, 'animations') })
+  const petsStore = new PetsStore({ petsDir: join(root, 'pets') })
   const configStore = new ConfigStore({
     configPath: join(root, 'config.json'),
-    animationExists: (id) => animationsStore.exists(id),
+    animationLookup: (id) => animationsStore.kindOf(id),
+    // Pet-preset mirror (V1.1): every config save re-writes the active
+    // preset's slice, so editor changes to the current pet automatically
+    // belong to that preset. Failures warn inside ConfigStore, never roll back.
+    onSaved: async (config) => {
+      if (config.activePetId !== null) await petsStore.saveSlice(config.activePetId, petSliceFromConfig(config))
+    },
   })
   const assetStore = new AssetStore({
     assetsDir: join(root, 'assets'),
@@ -50,6 +58,11 @@ export function apply(ctx: Context) {
     listAnimations: () => animationsStore.loadAll(),
     saveAnimation: (definition) => animationsStore.save(definition),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
+    listPets: () => petsStore.list(),
+    createPet: (name, slice) => petsStore.create(name, slice),
+    readPet: (id) => petsStore.read(id),
+    renamePet: (id, name) => petsStore.rename(id, name),
+    deletePet: (id) => petsStore.delete(id),
   }
 
   // Directories are created lazily on first write (storage mkdir -p).

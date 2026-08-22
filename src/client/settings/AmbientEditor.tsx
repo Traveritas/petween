@@ -8,23 +8,49 @@
  */
 import type { JSX } from 'react'
 import type { MotionPetConfig, PoseKey } from '../../core/types'
+import type { AnimationDefinition } from '../../motion/animation-definition'
 import type { EditorStore } from '../stores/editor-store'
-import { NumberField, Slider, Toggle } from './controls'
+import { NumberField, SelectRow, Slider, Toggle } from './controls'
 import styles from './settings.module.css'
 
 export interface AmbientEditorProps {
   state: PoseKey
   config: MotionPetConfig
+  customs: AnimationDefinition[]
   store: EditorStore
 }
 
 export function AmbientEditor(props: AmbientEditorProps): JSX.Element {
-  const { state, config, store } = props
+  const { state, config, customs, store } = props
   const ambient = config.states[state].ambient
+  const customAmbients = customs.filter((definition) => definition.kind === 'ambient')
+  const customOptions = [
+    { value: '', label: '无' },
+    ...customAmbients.map((definition) => ({ value: definition.id, label: definition.name })),
+  ]
+  if (
+    ambient.customAnimationId !== undefined &&
+    !customOptions.some((option) => option.value === ambient.customAnimationId)
+  ) {
+    customOptions.push({ value: ambient.customAnimationId, label: `${ambient.customAnimationId}（不可用）` })
+  }
 
   return (
     <section className={styles.section} aria-label="环境动态">
       <h3 className={styles.sectionTitle}>环境动态 Ambient</h3>
+
+      <SelectRow
+        label="自定义环境"
+        value={ambient.customAnimationId ?? ''}
+        options={customOptions}
+        onChange={(value) =>
+          store.updateConfig((draft) => {
+            if (value === '') delete draft.states[state].ambient.customAnimationId
+            else draft.states[state].ambient.customAnimationId = value
+          })
+        }
+      />
+      <p className={styles.hint}>与下方内置通道同时播放，循环方式与时长取自动画定义。</p>
 
       <Toggle
         label="Bounce 弹跳"

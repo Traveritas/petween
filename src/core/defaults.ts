@@ -107,5 +107,6 @@ export function createDefaultMotionPetConfig(): MotionPetConfig {
     overlay: { x: null, y: null },
     advanced: { changePoseWithinActive: false, activityTransition: 'subtle', terminalHold: 'timed', particles: true },
     interactions: { click: { animation: 'builtin:click-pop', pose: null } },
+    activePetId: null,
   }
 }

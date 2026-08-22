@@ -2,7 +2,7 @@
 /**
  * MotionPetCard tests: the settings.section entry card — status summary
  * (imported poses · enabled state), the enable toggle and scale slider saving
- * through the editor store's debounced patch discipline, the no-image hint,
+ * through the editor store's explicit-save discipline, the no-image hint,
  * and the link to the standalone full-page editor.
  */
 import { act } from 'react'
@@ -71,6 +71,13 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
   const api: EditorApi = {
     ...mocks,
     getAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+    getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
+    createPet: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    renamePet: vi.fn(async () => {}),
+    deletePet: vi.fn(async () => {}),
+    applyPet: vi.fn(async () => structuredClone(config)),
     putAnimation: vi.fn(async () => {}),
     deleteAnimation: vi.fn(async () => {}),
     uploadAsset: vi.fn(async () => {
@@ -119,30 +126,40 @@ describe('MotionPetCard', () => {
     expect(container.textContent).toContain('还没有导入图片')
   })
 
-  it('the enable toggle saves an enabled patch after the debounce', async () => {
+  it('the enable toggle stays local until Save is clicked', async () => {
     const { api, mocks } = makeApi(true)
     await render(api)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+    const save = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存修改' && !button.disabled)
+    if (save === undefined) throw new Error('save button missing')
+    await act(async () => save.click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).enabled).toBe(false)
     expect(container.textContent).toContain('已导入 1/6 张图 · 已停用')
     expect(container.textContent).toContain('已保存')
   })
 
-  it('the scale slider saves a global.scale patch after the debounce', async () => {
+  it('the scale slider spans 0.3..4, aligned with the full editor and host validation', async () => {
+    const { api } = makeApi(true)
+    await render(api)
+    const range = container.querySelector<HTMLInputElement>('input[type="range"]')
+    if (range === null) throw new Error('scale slider missing')
+    expect(range.min).toBe('0.3')
+    expect(range.max).toBe('4')
+  })
+
+  it('the scale slider is persisted by the manual Save button', async () => {
     const { api, mocks } = makeApi(true)
     await render(api)
     const range = container.querySelector<HTMLInputElement>('input[type="range"]')
     if (range === null) throw new Error('scale slider missing')
     act(() => moveSlider(range, '1.5'))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
+    const save = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存修改' && !button.disabled)
+    if (save === undefined) throw new Error('save button missing')
+    await act(async () => save.click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).global?.scale).toBe(1.5)
   })

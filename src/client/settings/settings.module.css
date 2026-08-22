@@ -38,6 +38,33 @@
   margin: 2px 0 0;
 }
 
+/* Pet preset switcher: select and actions share a row on wide screens and
+   wrap naturally without compressing names on smaller editor windows. */
+.petToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+
+.petSelectLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: min(100%, 320px);
+}
+
+.petSelectLabel .select {
+  flex: 1;
+  min-width: 160px;
+}
+
+.petActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* Fallback host for the SaveIndicator when no portal target is provided. */
 .saveRow {
   display: flex;
@@ -120,6 +147,12 @@
   margin-left: auto;
   font-size: 11px;
   color: var(--dsw-alias-label-secondary, #9ca3af);
+}
+
+/* UX-2: unsaved-edit marker on the selected animation list entry. */
+.dirtyDot {
+  color: var(--dsw-alias-state-warn-primary, #b45309);
+  font-size: 11px;
 }
 
 /* --- StateSettings panels (§17.2~17.4) --- */
@@ -471,6 +504,43 @@
 
 .animationEditor {
   min-width: 0;
+}
+
+.animationPreview {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l1, #d4d9e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+}
+
+.animationPreviewStage {
+  position: relative;
+  height: 240px;
+  overflow: hidden;
+  border: 1px dashed var(--dsw-alias-border-l1, #d4d9e3);
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    var(--dsw-alias-bg-base, #fdfdff) 0%,
+    var(--dsw-alias-bg-layer-1, #eef1f6) 100%
+  );
+}
+
+.animationPreviewStage [data-motion-pet-renderer] {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.animationPreviewActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
 }
 
 .textInput {

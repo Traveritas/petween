@@ -12,11 +12,11 @@
  * the client registers whatever customs come back through the same zero-
  * branch registry path as the built-ins.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { AnimationDefinition } from '../motion/animation-definition'
+import type { AnimationDefinition, AnimationKind } from '../motion/animation-definition'
 import { validateAnimationDefinition } from '../motion/animation-definition'
 import { writeJsonAtomic } from './storage'
 
@@ -162,6 +162,25 @@ export class AnimationsStore {
   /** Sync existence check for config validation (states.*.enter.animationId). */
   exists(id: string): boolean {
     return validateUserAnimationId(id) !== null && existsSync(join(this.options.animationsDir, fileNameFor(id)))
+  }
+
+  /**
+   * Sync kind lookup for config validation: mounts are kind-checked at the
+   * interface (enter needs transition, ambient needs ambient), so a wrong-kind
+   * id is rejected like a dangling one. Missing/corrupt files and inner ids
+   * that disagree with the filename report undefined (unknown).
+   */
+  kindOf(id: string): AnimationKind | undefined {
+    if (validateUserAnimationId(id) === null) return undefined
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(join(this.options.animationsDir, fileNameFor(id)), 'utf8'))
+    } catch {
+      return undefined
+    }
+    if (!validateAnimationDefinition(raw).valid) return undefined
+    const definition = raw as AnimationDefinition
+    return definition.id === id ? definition.kind : undefined
   }
 
   /** Ids of every animation file on disk (filename-derived, shape-filtered). */

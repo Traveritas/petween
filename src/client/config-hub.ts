@@ -5,7 +5,7 @@
  *
  * - load(): exactly one GET pair (config + custom animations), memoized;
  *   whichever surface mounts first pays it.
- * - publish(): a local save (editor debounce, overlay drag persist) broadcasts
+ * - publish(): a local save (editor manual save, overlay drag persist) broadcasts
  *   its saved config immediately — the other surface updates without waiting
  *   for a poll.
  * - startPolling(): 3s interval catches external changes (another tab, CLI).

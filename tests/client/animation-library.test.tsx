@@ -113,6 +113,24 @@ const interactionCustom = (id: string, name: string, durationMs = 517): Animatio
   ],
 })
 
+const ambientCustom = (id: string, name: string): AnimationDefinition => ({
+  version: 1,
+  id,
+  name,
+  kind: 'ambient',
+  durationMs: 900,
+  repeat: { mode: 'loop' },
+  tracks: [
+    {
+      property: 'sway.rotation',
+      keyframes: [
+        { at: 0, value: -2 },
+        { at: 1, value: 2 },
+      ],
+    },
+  ],
+})
+
 interface ApiMocks {
   getConfig: ReturnType<typeof vi.fn>
   getAnimations: ReturnType<typeof vi.fn>
@@ -152,6 +170,13 @@ const makeApi = (
   }
   const api: EditorApi = {
     ...mocks,
+    getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
+    createPet: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    renamePet: vi.fn(async () => {}),
+    deletePet: vi.fn(async () => {}),
+    applyPet: vi.fn(async () => structuredClone(config)),
     uploadAsset: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
@@ -164,6 +189,14 @@ const render = async (api: EditorApi, wide: boolean): Promise<void> => {
   await act(async () => {
     root.render(<MotionPetSettings api={api} wide={wide} />)
   })
+}
+
+const saveConfig = async (): Promise<void> => {
+  const button = [...container.querySelectorAll('button')].find(
+    (candidate) => candidate.textContent === '保存修改' && !candidate.disabled,
+  )
+  if (button === undefined) throw new Error('enabled config save button missing')
+  await act(async () => button.click())
 }
 
 const librarySection = (): HTMLElement => {
@@ -432,61 +465,45 @@ describe('AnimationLibrary — editing, validation, save', () => {
     expect(payload.events).toEqual([{ at: 0.25, type: 'pose-swap' }])
   })
 
-  it('switching kind keeps tracks/events; the invalid state is flagged with guidance until healed', async () => {
+  it('switching kind normalizes incompatible events automatically', async () => {
     const { api } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     expect(libraryButton('保存').disabled).toBe(false)
-    expect(librarySection().textContent).toContain('切换类型不会改动已有轨道与事件')
+    expect(librarySection().textContent).toContain('自动移除不适用的事件')
 
-    // transition → ambient with the pose-swap still present: schema error + gating
+    // transition → ambient removes pose-swap and stays valid.
     const kindSelect = libraryControlRow('类型').querySelector('select')
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'ambient'))
-    expect(librarySection().textContent).toContain('must not declare events')
-    expect(libraryButton('保存').disabled).toBe(true)
-    expect(libraryButton('▶ 试播').disabled).toBe(true)
-
-    // back to transition: the error clears and the save re-enables
-    act(() => choose(kindSelect, 'transition'))
     expect(librarySection().textContent).not.toContain('must not declare events')
+    expect(librarySection().querySelector('[aria-label^="pose-swap 事件"]')).toBeNull()
+    expect(libraryButton('保存').disabled).toBe(false)
+
+    // Back to transition adds the required pose-swap.
+    act(() => choose(kindSelect, 'transition'))
+    expect(librarySection().querySelector('[aria-label="pose-swap 事件 @ 0.5"]')).not.toBeNull()
     expect(libraryButton('保存').disabled).toBe(false)
   })
 
-  it('a transition whose pose-swap was removed is rejected and heals via the toolbar button', async () => {
+  it('switching to interaction removes pose-swap and saves a valid definition', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
     await render(api, true)
     act(() => libraryButton('My Pop').click())
 
-    // interaction kinds may delete a stray pose-swap: use that to empty the events
     const kindSelect = libraryControlRow('类型').querySelector('select')
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'interaction'))
-    const marker = librarySection().querySelector('[aria-label="pose-swap 事件 @ 0.5"]')
-    if (marker === null) throw new Error('pose-swap marker missing')
-    down(marker, 100)
-    up(100)
-    const eventInspector = librarySection().querySelector('[aria-label="事件检查器"]')
-    if (eventInspector === null) throw new Error('event inspector missing')
-    const deleteButton = [...eventInspector.querySelectorAll('button')].find((el) => el.textContent === '删除事件')
-    if (deleteButton === undefined) throw new Error('delete event button missing')
-    act(() => deleteButton.click())
-
-    // back to transition with no pose-swap: invalid, gated, heal offered
-    act(() => choose(kindSelect, 'transition'))
-    expect(librarySection().textContent).toContain('a transition needs exactly 1 pose-swap event, got 0')
-    expect(libraryButton('保存').disabled).toBe(true)
-    const heal = [...librarySection().querySelectorAll('button')].find((el) => el.textContent === '＋ 添加 pose-swap')
-    if (heal === undefined) throw new Error('heal button missing')
-    act(() => heal.click())
-    expect(librarySection().textContent).not.toContain('pose-swap event, got 0')
+    expect(librarySection().querySelector('[aria-label^="pose-swap 事件"]')).toBeNull()
+    expect(librarySection().textContent).not.toContain('must not declare pose-swap')
     expect(libraryButton('保存').disabled).toBe(false)
 
     await act(async () => {
       libraryButton('保存').click()
     })
     const payload = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
-    expect(payload.events).toEqual([{ at: 0.5, type: 'pose-swap' }])
+    expect(payload.kind).toBe('interaction')
+    expect(payload.events).toBeUndefined()
   })
 
   it('试播 plays the current draft on the live preview stage', async () => {
@@ -498,7 +515,11 @@ describe('AnimationLibrary — editing, validation, save', () => {
     expect(harness.animations.length).toBe(before + 1)
     const played = harness.animations[before]
     expect(played.options.duration).toBe(517)
-    expect(container.contains(played.target as Node)).toBe(true)
+    const preview = librarySection().querySelector('[aria-label="动画试播渲染器"]')
+    expect(preview?.contains(played.target as Node)).toBe(true)
+    const stop = libraryButton('■ 停止')
+    act(() => stop.click())
+    expect(played.playState).toBe('idle')
   })
 
   it('循环试播 auto-replays a valid draft after edits; the strength slider rides along', async () => {
@@ -573,6 +594,7 @@ describe('AnimationLibrary — editing, validation, save', () => {
         config.states.thinking.enter.animationId = 'user:t1'
       },
     })
+    vi.stubGlobal('confirm', vi.fn(() => true)) // the delete confirmation
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     await act(async () => {
@@ -597,19 +619,15 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
     expect(customOption?.textContent).toBe('My Pop')
 
     act(() => choose(select, 'user:t1'))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
+    await saveConfig()
     let payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
     expect(payload.states?.idle.enter.animationId).toBe('user:t1')
 
     act(() => choose(select, 'comic-pop'))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
+    await saveConfig()
     payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
     expect(payload.states?.idle.enter.preset).toBe('comic-pop')
-    expect(payload.states?.idle.enter.animationId).toBeUndefined()
+    expect(payload.states?.idle.enter.animationId).toBeNull()
   })
 
   it('the transition select echoes the custom referenced by animationId', async () => {
@@ -634,5 +652,157 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
     const options = [...select.querySelectorAll('option')].map((option) => [option.value, option.textContent])
     expect(options).toContainEqual(['user:w1', '自定义：Wiggy'])
     expect(options.some(([value]) => value === 'user:t1')).toBe(false)
+  })
+
+  it('each state can select and clear an ambient custom, excluding other kinds', async () => {
+    vi.useFakeTimers()
+    const { api, mocks } = makeApi({
+      customs: [ambientCustom('user:a1', 'Floaty'), transitionCustom('user:t1', 'My Pop')],
+    })
+    await render(api, true)
+    const select = findControlRow('自定义环境').querySelector('select')
+    if (select === null) throw new Error('custom ambient select missing')
+    const options = [...select.querySelectorAll('option')].map((option) => [option.value, option.textContent])
+    expect(options).toContainEqual(['user:a1', 'Floaty'])
+    expect(options.some(([value]) => value === 'user:t1')).toBe(false)
+
+    act(() => choose(select, 'user:a1'))
+    await saveConfig()
+    let payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
+    expect(payload.states?.idle.ambient.customAnimationId).toBe('user:a1')
+
+    act(() => choose(select, ''))
+    await saveConfig()
+    payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
+    expect(payload.states?.idle.ambient.customAnimationId).toBeNull()
+  })
+
+  it('echoes a dangling custom ambient id instead of silently selecting none', async () => {
+    const { api } = makeApi({
+      mutateConfig: (config) => {
+        config.states.idle.ambient.customAnimationId = 'user:missing'
+      },
+    })
+    await render(api, true)
+    const select = findControlRow('自定义环境').querySelector('select')
+    expect(select?.value).toBe('user:missing')
+    expect(select?.textContent).toContain('不可用')
+  })
+})
+
+describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
+  const nameInput = (): HTMLInputElement => {
+    const input = librarySection().querySelector('input[type="text"]') as HTMLInputElement | null
+    if (input === null) throw new Error('name input missing')
+    return input
+  }
+
+  const renameDraft = (name: string): void => {
+    act(() => typeInput(nameInput(), name))
+  }
+
+  it('marks the selected entry with ● while the draft diverges; saving clears it', async () => {
+    const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+    expect(libraryButton('My Pop').textContent).not.toContain('●')
+
+    renameDraft('My Pop v2')
+    expect(libraryButton('My Pop').textContent).toContain('●')
+
+    await act(async () => {
+      libraryButton('保存').click()
+    })
+    // the saved list entry becomes the draft's baseline again
+    expect(mocks.putAnimation).toHaveBeenCalledTimes(1)
+    expect((mocks.putAnimation.mock.calls[0][0] as AnimationDefinition).name).toBe('My Pop v2')
+    expect(libraryButton('My Pop v2').textContent).not.toContain('●')
+  })
+
+  it('a built-in entry edited for audition also counts as dirty and is guarded', async () => {
+    const { api } = makeApi()
+    const confirm = vi.fn().mockReturnValueOnce(false)
+    vi.stubGlobal('confirm', confirm)
+    await render(api, true)
+    act(() => libraryButton('Comic Pop').click())
+    renameDraft('Comic Pop tweaked')
+    expect(libraryButton('Comic Pop').textContent).toContain('●')
+
+    act(() => libraryButton('Jelly').click()) // declined: the tweaks survive
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(nameInput().value).toBe('Comic Pop tweaked')
+
+    confirm.mockReturnValueOnce(true)
+    act(() => libraryButton('Jelly').click()) // accepted: the draft resets
+    expect(nameInput().value).toBe('Jelly')
+    expect(libraryButton('Comic Pop').textContent).not.toContain('●')
+  })
+
+  it('新建空白 and 克隆为自定义 guard the dirty draft', async () => {
+    const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    const confirm = vi.fn().mockReturnValue(false)
+    vi.stubGlobal('confirm', confirm)
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+    renameDraft('Renamed')
+
+    await act(async () => {
+      libraryButton('新建空白').click()
+    })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.putAnimation).not.toHaveBeenCalled()
+
+    await act(async () => {
+      libraryButton('克隆为自定义').click()
+    })
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(mocks.putAnimation).not.toHaveBeenCalled()
+    expect(nameInput().value).toBe('Renamed') // still on the dirty draft
+  })
+
+  it('删除 asks for an irreversible confirmation naming the animation', async () => {
+    const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
+    vi.stubGlobal('confirm', confirm)
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+
+    await act(async () => {
+      libraryButton('删除').click() // declined
+    })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm.mock.calls[0][0]).toContain('My Pop')
+    expect(confirm.mock.calls[0][0]).toContain('不可恢复')
+    expect(mocks.deleteAnimation).not.toHaveBeenCalled()
+
+    await act(async () => {
+      libraryButton('删除').click() // accepted
+    })
+    expect(mocks.deleteAnimation).toHaveBeenCalledWith('user:t1')
+    expect(librarySection().textContent).not.toContain('My Pop')
+  })
+
+  it('deleting a dirty draft requires the discard AND the delete confirmation', async () => {
+    const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true).mockReturnValueOnce(true)
+    vi.stubGlobal('confirm', confirm)
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+    renameDraft('Renamed')
+
+    await act(async () => {
+      libraryButton('删除').click() // discard declined → nothing happens
+    })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.deleteAnimation).not.toHaveBeenCalled()
+    expect(nameInput().value).toBe('Renamed')
+
+    await act(async () => {
+      libraryButton('删除').click() // discard + delete accepted
+    })
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(confirm.mock.calls[1][0]).toContain('未保存的修改')
+    expect(confirm.mock.calls[2][0]).toContain('不可恢复')
+    expect(mocks.deleteAnimation).toHaveBeenCalledWith('user:t1')
   })
 })

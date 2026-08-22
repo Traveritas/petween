@@ -405,6 +405,46 @@ describe('OverlaySession — position, drag persistence, click (§27/§28)', () 
     session.dispose()
   })
 
+  it('Enter and Space on the focused pet body trigger the same interaction as a click (a11y)', async () => {
+    const context = setup()
+    const { stage, session } = context
+    await boot(context)
+    const body = stage.interactiveElement
+    expect(body.getAttribute('role')).toBe('button') // the hit region is focusable
+    expect(body.tabIndex).toBe(0)
+
+    const countBefore = harness.animations.length
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    body.dispatchEvent(enter)
+    expect(enter.defaultPrevented).toBe(true)
+    expect(harness.animations.length).toBeGreaterThan(countBefore)
+    await settleTransitions()
+
+    const countAfterEnter = harness.animations.length
+    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    body.dispatchEvent(space)
+    expect(space.defaultPrevented).toBe(true) // Space must not scroll the page
+    expect(harness.animations.length).toBeGreaterThan(countAfterEnter)
+    await settleTransitions()
+    session.dispose()
+  })
+
+  it('modified or unrelated keys never trigger the keyboard interaction', async () => {
+    const context = setup()
+    const { stage, session } = context
+    await boot(context)
+    const countBefore = harness.animations.length
+    const body = stage.interactiveElement
+
+    const modified = new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })
+    body.dispatchEvent(modified)
+    expect(modified.defaultPrevented).toBe(false) // browser shortcuts stay intact
+    const unrelated = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    body.dispatchEvent(unrelated)
+    expect(harness.animations.length).toBe(countBefore)
+    session.dispose()
+  })
+
   it('a click dismisses a held terminal face through the state source (§14.4)', async () => {
     const dismissTerminal = vi.fn()
     const context = setup(undefined, {
@@ -501,6 +541,24 @@ describe('OverlaySession — custom animation sync (V1.1)', () => {
     ],
   })
 
+  const makeAmbient = (durationMs: number): AnimationDefinition => ({
+    version: 1,
+    id: 'user:float',
+    name: 'Float',
+    kind: 'ambient',
+    durationMs,
+    repeat: { mode: 'loop' },
+    tracks: [
+      {
+        property: 'sway.rotation',
+        keyframes: [
+          { at: 0, value: -2 },
+          { at: 1, value: 2 },
+        ],
+      },
+    ],
+  })
+
   it('registers hub customs at construction and follows publish add/change/remove', async () => {
     const context = setup(undefined, undefined, [makeCustom('user:a')])
     const { hub, session, config, assets } = context
@@ -540,6 +598,33 @@ describe('OverlaySession — custom animation sync (V1.1)', () => {
     expect(pop.target).toBe(stage.layers.transition)
     expect(pop.options.duration).toBe(260) // the custom, not builtin:click-pop (140ms)
     await settleTransitions()
+    session.dispose()
+  })
+
+  it('hot-restarts the active custom ambient when the hub definition changes', async () => {
+    const context = setup(
+      (config) => {
+        config.states.idle.ambient.sway.enabled = false
+        config.states.idle.ambient.customAnimationId = 'user:float'
+      },
+      undefined,
+      [makeAmbient(700)],
+    )
+    const { stage, session, hub, config, assets } = context
+    await boot(context)
+    const first = harness.animations.find(
+      (animation) => animation.target === stage.layers.sway && animation.options.duration === 700,
+    )
+    expect(first?.playState).toBe('running')
+
+    publish(hub, config, assets, [makeAmbient(950)])
+    await flushUntil(() => harness.animations.some((animation) => animation.options.duration === 950))
+    expect(first?.playState).toBe('idle')
+    expect(
+      harness.animations.find(
+        (animation) => animation.target === stage.layers.sway && animation.options.duration === 950,
+      )?.playState,
+    ).toBe('running')
     session.dispose()
   })
 })

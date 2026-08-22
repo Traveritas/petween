@@ -33,6 +33,14 @@ export interface PetStateResolverOptions {
 }
 
 const DEFAULT_COALESCE_MS = 60
+/**
+ * §15.3 starvation cap: the coalescing window is trailing-edge (every event
+ * resets it), so a steady event stream could postpone the commit forever.
+ * At this distance from the FIRST still-uncommitted event the window is
+ * forced to close and commit exactly once (the constant is the ceiling, not
+ * the normal cadence — bursts still collapse inside the 60ms window).
+ */
+const MAX_COALESCE_WINDOW_MS = 200
 
 export class PetStateResolver {
   private readonly config: PetStateResolverOptions['config']
@@ -42,6 +50,8 @@ export class PetStateResolver {
   private current: PetVisualSnapshot = { visualState: 'idle' }
   private currentPoseKey: PoseKey
   private pendingEvent: PetSemanticEvent | null = null
+  /** When the current coalescing epoch started (first uncommitted event). */
+  private pendingSince: number | null = null
   private coalesceTimer: ReturnType<typeof setTimeout> | null = null
   private holdTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -61,14 +71,21 @@ export class PetStateResolver {
     // §15.3 coalescing: keep only the latest event inside the window so a burst
     // like turn-start + assistant-start + tool-start produces one visual op.
     this.pendingEvent = event
+    const now = Date.now()
+    if (this.pendingSince === null) this.pendingSince = now
+    // The wait is the regular trailing window, capped by the starvation
+    // deadline: never later than pendingSince + MAX_COALESCE_WINDOW_MS.
+    const elapsed = now - this.pendingSince
+    const remaining = Math.min(this.coalesceMs, Math.max(0, MAX_COALESCE_WINDOW_MS - elapsed))
     if (this.coalesceTimer !== null) clearTimeout(this.coalesceTimer)
     this.coalesceTimer = setTimeout(() => {
       this.coalesceTimer = null
+      this.pendingSince = null
       const pending = this.pendingEvent
       this.pendingEvent = null
       if (pending === null) return
       this.commit(reducePetState(this.current, pending), reasonFor(pending))
-    }, this.coalesceMs)
+    }, remaining)
   }
 
   /** A turn-end is waiting out the coalescing window, or a terminal face is held. */
@@ -87,6 +104,7 @@ export class PetStateResolver {
     this.coalesceTimer = null
     this.holdTimer = null
     this.pendingEvent = null
+    this.pendingSince = null
   }
 
   private commit(next: PetVisualSnapshot, reason: MotionTargetReason): void {

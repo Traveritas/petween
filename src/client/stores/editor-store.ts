@@ -3,60 +3,59 @@
  * §17, §21). Pure TS with a subscribe/getSnapshot pair so React components
  * read it through useSyncExternalStore; nothing here imports React or DSH.
  *
- * Save discipline (§21): updateConfig mutates the local draft immediately
- * (the Live Preview follows via configRevision), then a 300ms debounce sends
- * the editor-owned sections (enabled/global/poses/states/advanced/interactions
- * — never overlay, never version) as a patch PUT; the host merges them onto its
- * current config, so a drag-save landing while the draft was dirty cannot be
- * rolled back by the later editor write. Writes serialize through a promise
- * chain; edits landing while a PUT is in flight re-flag the draft dirty and
- * are flushed right after it (latest-wins). Asset flows (§19.4) bypass the
- * debounce: upload → await the config write → delete the old asset (delete
- * failures only warn). Custom animations (V1.1) are explicit-save too:
+ * Save discipline: updateConfig mutates the local draft immediately (the Live
+ * Preview follows via configRevision) and marks it dirty. Only saveConfig()
+ * sends the editor-owned sections (enabled/global/poses/states/advanced/
+ * interactions — never overlay, never version) as a patch PUT. Writes
+ * serialize; edits landing while a PUT is in flight are included in a second
+ * write (latest-wins). Asset imports upload immediately so they can be
+ * previewed, while config persistence and replaced-asset cleanup wait for the
+ * same explicit save. Custom animations (V1.1) are explicit-save too:
  * saveAnimation/deleteAnimation hit the API immediately and broadcast the
  * customs list through the hub; they never touch the config draft.
  */
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
+import type { AssetMeta, MotionPetConfig, PetPreset, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
 import {
+  applyPet as httpApplyPet,
+  createPet as httpCreatePet,
   deleteAnimation as httpDeleteAnimation,
   deleteAsset as httpDeleteAsset,
+  deletePet as httpDeletePet,
   getAnimations as httpGetAnimations,
   getConfig as httpGetConfig,
+  getPets as httpGetPets,
   patchConfig as httpPatchConfig,
   putAnimation as httpPutAnimation,
+  renamePet as httpRenamePet,
   uploadAsset as httpUploadAsset,
   ApiError,
   type ConfigPatch,
   type GetAnimationsResponse,
   type GetConfigResponse,
+  type GetPetsResponse,
   type UploadedAsset,
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
+import { STATE_LABELS } from '../settings/state-labels'
 
 /** Client-side mirror of the host upload rules (spec §20; host re-validates). */
 const ACCEPTED_MIME_TYPES: ReadonlyArray<AssetMeta['mimeType']> = ['image/png', 'image/webp', 'image/jpeg']
 const MAX_ASSET_BYTES = 10 * 1024 * 1024
-/** §21: debounce window for coalescing edits into one PUT. */
-const DEFAULT_DEBOUNCE_MS = 300
-
-/** Display labels for the delete-in-use notice; mirrors StateList.STATE_LABELS. */
-const POSE_LABELS: Record<PoseKey, string> = {
-  idle: '待机',
-  thinking: '思考',
-  working: '工作',
-  waiting: '等待',
-  success: '成功',
-  error: '错误',
-}
 
 /** The API surface the store needs; the default adapter hits the real HTTP API. */
 export interface EditorApi {
   getConfig(): Promise<GetConfigResponse>
   /** V1.1: custom animations + host scan warnings (fetched in parallel with the config). */
   getAnimations(): Promise<GetAnimationsResponse>
+  /** V1.1: named character presets and the active config pointer. */
+  getPets(): Promise<GetPetsResponse>
+  createPet(input: { name: string; from: 'current' | 'blank' }): Promise<{ pet: PetPreset; config: MotionPetConfig }>
+  renamePet(id: string, name: string): Promise<void>
+  deletePet(id: string): Promise<void>
+  applyPet(id: string): Promise<MotionPetConfig>
   /** Patch PUT of the editor-owned sections; resolves the host-merged full config. */
   patchConfig(patch: ConfigPatch): Promise<MotionPetConfig>
   /** Explicit-save custom animation write (no debounce — plan §3/P0). */
@@ -69,6 +68,15 @@ export interface EditorApi {
 const httpEditorApi: EditorApi = {
   getConfig: () => httpGetConfig(),
   getAnimations: () => httpGetAnimations(),
+  getPets: () => httpGetPets(),
+  createPet: (input) => httpCreatePet(input),
+  renamePet: async (id, name) => {
+    await httpRenamePet(id, name)
+  },
+  deletePet: async (id) => {
+    await httpDeletePet(id)
+  },
+  applyPet: async (id) => (await httpApplyPet(id)).config,
   patchConfig: async (patch) => (await httpPatchConfig(patch)).config,
   putAnimation: async (definition) => {
     await httpPutAnimation(definition)
@@ -83,7 +91,7 @@ const httpEditorApi: EditorApi = {
 }
 
 export type EditorStatus = 'loading' | 'ready' | 'error'
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+export type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 export type NoticeKind = 'info' | 'warn' | 'error'
 
 export interface EditorNotice {
@@ -96,20 +104,23 @@ export interface EditorSnapshot {
   /** The local draft; mutated in place, every mutation bumps configRevision. */
   config: MotionPetConfig | null
   assets: Record<string, AssetMeta>
-  /** V1.1 custom animations (explicit-save; never part of the config debounce). */
+  /** V1.1 custom animations (explicit-save; separate from the config draft). */
   customs: AnimationDefinition[]
+  /** V1.1 named pet presets; active identity lives in config.activePetId. */
+  pets: PetPreset[]
   selectedState: PoseKey
   saveState: SaveState
   loadError: string | null
   saveError: string | null
   notice: EditorNotice | null
+  /** UX-3: the pose slot whose image upload is in flight (one at a time). */
+  importing: PoseKey | null
   /** Bumped only when config/assets content changes — drives the Live Preview sync. */
   configRevision: number
 }
 
 export interface EditorStoreOptions {
   api?: EditorApi
-  debounceMs?: number
   /**
    * M3 shared config hub: when present, load() reuses the hub's single GET,
    * successful saves are broadcast to the overlay instantly, and external
@@ -133,31 +144,34 @@ export function hasAnyUsableImage(config: MotionPetConfig, assets: Record<string
 
 export class EditorStore {
   private readonly api: EditorApi
-  private readonly debounceMs: number
   private readonly hub: ConfigHub | undefined
   private readonly unsubscribeHub: (() => void) | null = null
   private readonly listeners = new Set<() => void>()
   private snapshot: EditorSnapshot
 
-  private saveTimer: ReturnType<typeof setTimeout> | null = null
   private saveChain: Promise<void> = Promise.resolve()
   private dirty = false
+  private saveInFlight = false
+  private readonly pendingAssetDeletes = new Set<string>()
   private disposed = false
+  /** UX-3: sequence of the latest importImage call — only it may clear `importing`. */
+  private importSeq = 0
 
   constructor(options: EditorStoreOptions = {}) {
     this.api = options.api ?? httpEditorApi
-    this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS
     this.hub = options.hub
     this.snapshot = {
       status: 'loading',
       config: null,
       assets: {},
       customs: [],
+      pets: [],
       selectedState: 'idle',
       saveState: 'idle',
       loadError: null,
       saveError: null,
       notice: null,
+      importing: null,
       configRevision: 0,
     }
     this.unsubscribeHub = this.hub?.subscribe((published) => this.adoptPublished(published)) ?? null
@@ -185,27 +199,43 @@ export class EditorStore {
       let assets: Record<string, AssetMeta>
       let customs: AnimationDefinition[]
       let animationWarnings: string[]
+      let pets: PetPreset[]
+      let petWarnings: string[]
+      let activePetId: string | null
       if (this.hub !== undefined) {
-        ;({ config, assets, customs } = await this.hub.load())
+        const [shared, petsResponse] = await Promise.all([this.hub.load(), this.api.getPets()])
+        ;({ config, assets, customs } = shared)
         animationWarnings = this.hub.getAnimationWarnings()
+        ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
       } else {
-        const [configResponse, animationsResponse] = await Promise.all([this.api.getConfig(), this.api.getAnimations()])
+        const [configResponse, animationsResponse, petsResponse] = await Promise.all([
+          this.api.getConfig(),
+          this.api.getAnimations(),
+          this.api.getPets(),
+        ])
         ;({ config, assets } = configResponse)
         ;({ customs, warnings: animationWarnings } = animationsResponse)
+        ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
       }
       if (this.disposed) return
+      // GET /pets is authoritative for the pointer and may observe a newer
+      // switch than a separately fetched config response.
+      config = structuredClone(config)
+      config.activePetId = activePetId
       // Clone from the hub cache: the draft is mutated in place by edits and
       // must never alias the shared snapshot.
+      const warningParts: string[] = []
+      if (animationWarnings.length > 0) warningParts.push(`${animationWarnings.length} 个自定义动画文件损坏或不合法`)
+      if (petWarnings.length > 0) warningParts.push(`${petWarnings.length} 个宠物预设文件损坏或不合法`)
       this.emit({
         status: 'ready',
         config: structuredClone(config),
         assets: { ...assets },
         customs: structuredClone(customs),
+        pets: structuredClone(pets),
         // Corrupt animation files were skipped host-side (plan §3): say so once.
         notice:
-          animationWarnings.length > 0
-            ? { kind: 'warn', text: `有 ${animationWarnings.length} 个自定义动画文件损坏或不合法，已被跳过。` }
-            : null,
+          warningParts.length > 0 ? { kind: 'warn', text: `有 ${warningParts.join('；')}，已被跳过。` } : null,
       })
     } catch (error) {
       if (this.disposed) return
@@ -215,10 +245,10 @@ export class EditorStore {
 
   /**
    * M3 rollback guard: adopt a hub publish (overlay drag save, another tab's
-   * poll) only while the local draft is clean; a dirty draft is the user's
+   * poll) only while the local draft is clean and no save is in flight; a dirty draft is the user's
    * in-progress edit and must win. Identical content (e.g. the echo of our
    * own save) is skipped without bumping configRevision. Customs are
-   * explicit-save data outside the debounce — they always follow the hub.
+   * explicit-save data outside the config draft — they always follow the hub.
    */
   private adoptPublished(published: ConfigSnapshot): void {
     if (this.disposed || this.snapshot.status !== 'ready') return
@@ -227,7 +257,7 @@ export class EditorStore {
       patch.customs = structuredClone(published.customs)
     }
     const current = this.snapshot.config
-    if (!this.dirty && current !== null) {
+    if (!this.dirty && !this.saveInFlight && current !== null) {
       const sameConfig = JSON.stringify(current) === JSON.stringify(published.config)
       const sameAssets = JSON.stringify(this.snapshot.assets) === JSON.stringify(published.assets)
       if (!sameConfig || !sameAssets) {
@@ -249,45 +279,112 @@ export class EditorStore {
   }
 
   /**
-   * Apply a local edit: the draft updates immediately (Live Preview follows
-   * via configRevision), the PUT is debounced (§21 — never one write per
-   * input event).
+   * Apply a local edit: the draft and Live Preview update immediately. The
+   * user decides when to persist it with saveConfig().
    */
   updateConfig(mutate: (draft: MotionPetConfig) => void): void {
     const draft = this.snapshot.config
     if (draft === null || this.disposed) return
     mutate(draft)
+    this.dirty = true
     this.emit({
       configRevision: this.snapshot.configRevision + 1,
-      saveState: 'saving',
+      saveState: this.saveInFlight ? 'saving' : 'dirty',
       saveError: null,
     })
-    this.scheduleSave()
   }
 
-  /** Manual retry after a failed save (the save indicator offers it). */
-  retrySave(): void {
-    if (this.snapshot.config === null || this.disposed) return
+  /** Persist all current editor changes. */
+  saveConfig(): Promise<boolean> {
+    if (this.snapshot.config === null || this.disposed) return Promise.resolve(false)
+    if (!this.dirty && !this.saveInFlight) return Promise.resolve(true)
     this.emit({ saveState: 'saving', saveError: null })
-    this.scheduleSave()
+    return this.persistDirty()
+  }
+
+  /** Manual retry after a failed save. */
+  retrySave(): void {
+    void this.saveConfig()
   }
 
   /**
-   * §19.4 image (re)import: upload the new asset, point the pose at it, PUT,
-   * and only then delete the replaced asset. The PUT is awaited (the debounce
-   * is bypassed) so the DELETE can never race ahead of the config reference;
-   * a failed DELETE only warns.
+   * UX: abandon the unsaved draft and return to the last SAVED config.
+   *
+   * The authoritative state comes from a fresh GET — the hub cache may lag a
+   * drag save from another surface — cloned like load() so the draft never
+   * aliases anything shared. Only the config draft and the assets map roll
+   * back: selectedState and the explicit-save lists (customs/pets) survive.
+   * pendingAssetDeletes is cleared: the replaced files are still referenced
+   * by the saved config and must never be deleted.
+   *
+   * A save in flight is awaited first (its PUT may still land on the host;
+   * the revert then shows the server's saved state either way). A save
+   * queued while the revert's GET is in flight aborts the revert — the newer
+   * intent wins and nothing is silently dropped. Plain edits (no save) made
+   * during that millisecond-scale GET window ARE discarded by design: the
+   * confirm already expressed the revert intent.
+   */
+  async revertConfig(): Promise<void> {
+    if (this.disposed || this.snapshot.config === null) return
+    const chainBefore = this.saveChain
+    await chainBefore
+    if (this.disposed || this.snapshot.config === null) return
+    let response: GetConfigResponse
+    try {
+      response = await this.api.getConfig()
+    } catch (error) {
+      if (!this.disposed) {
+        this.emit({ notice: { kind: 'error', text: `撤回失败：${describeError(error)}` } })
+      }
+      return
+    }
+    if (this.disposed) return
+    if (this.saveChain !== chainBefore) {
+      this.emit({ notice: { kind: 'warn', text: '已取消撤回：期间发起了新的保存。' } })
+      return
+    }
+    this.dirty = false
+    this.pendingAssetDeletes.clear()
+    this.emit({
+      config: structuredClone(response.config),
+      assets: { ...response.assets },
+      configRevision: this.snapshot.configRevision + 1,
+      saveState: 'idle',
+      saveError: null,
+      notice: { kind: 'info', text: '已撤回未保存的修改。' },
+    })
+  }
+
+  /**
+   * Image (re)import: upload now for local preview, then wait for the user's
+   * explicit config save before deleting the replaced asset. The in-flight
+   * upload is mirrored on the snapshot (`importing`) so the UI can disable
+   * the trigger button and say 上传中… (UX-3).
    */
   async importImage(state: PoseKey, file: File): Promise<void> {
     const draft = this.snapshot.config
     if (draft === null || this.disposed) return
+    // One visible import at a time: the newest call owns the `importing` slot;
+    // a superseded import still reports its own notice but cannot clear a
+    // newer import's flag.
+    const seq = ++this.importSeq
+    this.emit({ importing: state })
+    const finishImport = (patch: Partial<EditorSnapshot>): void => {
+      if (this.disposed) return
+      // Only the `importing` flag belongs to the newest sequence — its data
+      // patches always land (the draft was already mutated by then), or a
+      // superseded import would leave snapshot.assets/dirty state behind the
+      // draft with no revision bump to heal it.
+      if (seq === this.importSeq) this.emit({ importing: null, ...patch })
+      else this.emit(patch)
+    }
     const mimeType = file.type as AssetMeta['mimeType']
     if (!ACCEPTED_MIME_TYPES.includes(mimeType)) {
-      this.emit({ notice: { kind: 'error', text: '仅支持 PNG / WebP / JPEG 图片（SVG 已明确拒绝）。' } })
+      finishImport({ notice: { kind: 'error', text: '仅支持 PNG / WebP / JPEG 图片（SVG 已明确拒绝）。' } })
       return
     }
     if (file.size > MAX_ASSET_BYTES) {
-      this.emit({ notice: { kind: 'error', text: '图片超过 10MB 上限，请压缩后再导入。' } })
+      finishImport({ notice: { kind: 'error', text: '图片超过 10MB 上限，请压缩后再导入。' } })
       return
     }
     if (mimeType === 'image/jpeg') {
@@ -298,7 +395,7 @@ export class EditorStore {
     try {
       uploaded = await this.api.uploadAsset(file)
     } catch (error) {
-      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `上传失败：${describeError(error)}` } })
+      finishImport({ notice: { kind: 'error', text: `上传失败：${describeError(error)}` } })
       return
     }
     if (this.disposed || this.snapshot.config === null) return
@@ -315,29 +412,16 @@ export class EditorStore {
       url: uploaded.url,
     }
     this.snapshot.config.poses[state].assetId = uploaded.id
-    this.emit({
+    if (previousAssetId !== undefined && previousAssetId !== uploaded.id) {
+      this.pendingAssetDeletes.add(previousAssetId)
+    }
+    this.dirty = true
+    finishImport({
       assets: { ...this.snapshot.assets, [uploaded.id]: meta },
       configRevision: this.snapshot.configRevision + 1,
-      saveState: 'saving',
+      saveState: this.saveInFlight ? 'saving' : 'dirty',
       saveError: null,
     })
-    this.scheduleSave()
-
-    const saved = await this.persistNow()
-    if (!saved || previousAssetId === undefined || previousAssetId === uploaded.id) return
-    try {
-      await this.api.deleteAsset(previousAssetId)
-      if (this.disposed) return
-      const rest = { ...this.snapshot.assets }
-      delete rest[previousAssetId]
-      this.emit({ assets: rest, configRevision: this.snapshot.configRevision + 1 })
-    } catch (error) {
-      // 409 ASSET_IN_USE: another pose still references it — keep it locally.
-      if (error instanceof ApiError && error.code === 'ASSET_IN_USE') return
-      if (!this.disposed) {
-        this.emit({ notice: { kind: 'warn', text: `旧图片文件清理失败：${describeError(error)}` } })
-      }
-    }
   }
 
   /** Clear the pose's image (absent assetId = cleared, host validation), then delete the file if unreferenced. */
@@ -347,30 +431,18 @@ export class EditorStore {
     const assetId = draft.poses[state].assetId
     if (assetId === undefined) return
     delete draft.poses[state].assetId
-    this.emit({ configRevision: this.snapshot.configRevision + 1, saveState: 'saving', saveError: null })
-    this.scheduleSave()
-
-    const saved = await this.persistNow()
-    if (!saved || this.disposed || this.snapshot.config === null) return
-    const stillReferenced = POSE_KEYS.some((key) => this.snapshot.config?.poses[key].assetId === assetId)
-    if (stillReferenced) return
-    try {
-      await this.api.deleteAsset(assetId)
-      if (this.disposed) return
-      const rest = { ...this.snapshot.assets }
-      delete rest[assetId]
-      this.emit({ assets: rest, configRevision: this.snapshot.configRevision + 1 })
-    } catch (error) {
-      if (error instanceof ApiError && (error.code === 'ASSET_IN_USE' || error.code === 'NOT_FOUND')) return
-      if (!this.disposed) {
-        this.emit({ notice: { kind: 'warn', text: `图片文件清理失败：${describeError(error)}` } })
-      }
-    }
+    this.pendingAssetDeletes.add(assetId)
+    this.dirty = true
+    this.emit({
+      configRevision: this.snapshot.configRevision + 1,
+      saveState: this.saveInFlight ? 'saving' : 'dirty',
+      saveError: null,
+    })
   }
 
   /**
    * V1.1 animation library save (plan §3): explicit-write semantics — no
-   * debounce. The client-side schema check runs first (the host re-validates);
+   * config save. The client-side schema check runs first (the host re-validates);
    * the saved list is broadcast through the hub so the overlay re-syncs its
    * registry without waiting for a poll. The config draft is untouched.
    */
@@ -427,12 +499,147 @@ export class EditorStore {
     return true
   }
 
+  /** Create a named copy of the current character and make it active. */
+  createPetCurrent(name: string): Promise<boolean> {
+    return this.createPet(name, 'current')
+  }
+
+  /** Protect any unsaved character host-side, then create and apply a blank one. */
+  createPetBlank(name: string): Promise<boolean> {
+    return this.createPet(name, 'blank')
+  }
+
+  private async createPet(name: string, from: 'current' | 'blank'): Promise<boolean> {
+    if (!(await this.preparePetAction())) return false
+    try {
+      const { config } = await this.api.createPet({ name, from })
+      if (this.disposed) return true
+      this.adoptPetConfig(config)
+      await this.refreshPetsSafely()
+      return true
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `新建宠物失败：${describeError(error)}` } })
+      return false
+    }
+  }
+
+  async renamePet(id: string, name: string): Promise<boolean> {
+    if (!(await this.preparePetAction(id))) return false
+    try {
+      await this.api.renamePet(id, name)
+      if (this.disposed) return true
+      await this.refreshPetsSafely()
+      return true
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `重命名失败：${describeError(error)}` } })
+      return false
+    }
+  }
+
+  async deletePet(id: string): Promise<boolean> {
+    if (!(await this.preparePetAction(id))) return false
+    try {
+      await this.api.deletePet(id)
+      if (this.disposed) return true
+      await this.refreshPetsSafely()
+      return true
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `删除宠物失败：${describeError(error)}` } })
+      return false
+    }
+  }
+
+  async applyPet(id: string): Promise<boolean> {
+    if (this.snapshot.config?.activePetId === id) return true
+    if (!(await this.preparePetAction())) return false
+    try {
+      const config = await this.api.applyPet(id)
+      if (this.disposed) return true
+      this.adoptPetConfig(config)
+      await this.refreshPetsSafely()
+      return true
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `切换宠物失败：${describeError(error)}` } })
+      return false
+    }
+  }
+
+  /**
+   * Identity changes never save a draft implicitly. Relaxation (UX): rename/
+   * delete of a NON-active preset never reads or writes the draft, so those
+   * targets skip BOTH the clean requirement and the failed-save gate;
+   * switching (apply) and creating still replace the working config and
+   * require a clean, successfully-saved draft.
+   */
+  private async preparePetAction(target?: string): Promise<boolean> {
+    if (this.disposed || this.snapshot.config === null) return false
+    const touchesActive = target === undefined || target === this.snapshot.config.activePetId
+    if (touchesActive && this.dirty) {
+      this.emit({ notice: { kind: 'warn', text: '有未保存修改，请先点击保存再操作宠物预设。' } })
+      return false
+    }
+    await this.saveChain
+    if (touchesActive && this.snapshot.saveState === 'error') {
+      this.emit({ notice: { kind: 'warn', text: '上次保存失败，请先重试保存或撤回修改，再操作宠物预设。' } })
+      return false
+    }
+    return true
+  }
+
+  /** Adopt the full config returned by create/apply and publish it immediately. */
+  private adoptPetConfig(config: MotionPetConfig): void {
+    const next = structuredClone(config)
+    this.dirty = false
+    this.emit({
+      config: next,
+      configRevision: this.snapshot.configRevision + 1,
+      saveState: 'saved',
+      saveError: null,
+    })
+    this.hub?.publish({ config: next, assets: this.snapshot.assets, customs: this.snapshot.customs })
+  }
+
+  /** Refresh the list after every pet mutation and synchronize delete-active's null pointer. */
+  private async refreshPets(): Promise<void> {
+    const { pets, activePetId, warnings } = await this.api.getPets()
+    if (this.disposed) return
+    const patch: Partial<EditorSnapshot> = { pets: structuredClone(pets) }
+    const current = this.snapshot.config
+    if (current !== null && current.activePetId !== activePetId) {
+      const config = structuredClone(current)
+      config.activePetId = activePetId
+      patch.config = config
+      patch.configRevision = this.snapshot.configRevision + 1
+      this.hub?.publish({ config, assets: this.snapshot.assets, customs: this.snapshot.customs })
+    }
+    if (warnings.length > 0) {
+      patch.notice = { kind: 'warn', text: `有 ${warnings.length} 个宠物预设文件损坏或不合法，已被跳过。` }
+    }
+    this.emit(patch)
+  }
+
+  /** A mutation already succeeded if only the follow-up list refresh fails. */
+  private async refreshPetsSafely(): Promise<void> {
+    try {
+      await this.refreshPets()
+    } catch (error) {
+      if (!this.disposed) {
+        this.emit({ notice: { kind: 'warn', text: `宠物已更新，但列表刷新失败：${describeError(error)}` } })
+      }
+    }
+  }
+
   /** States (and the click interaction) referencing the animation, as display labels. */
   private animationReferencers(id: string): string[] {
     const config = this.snapshot.config
     if (config === null) return []
     const labels = POSE_KEYS.filter((key) => config.states[key].enter.animationId === id).map(
-      (key) => `「${POSE_LABELS[key]}」状态`,
+      (key) => `「${STATE_LABELS[key]}」状态`,
+    )
+    labels.push(
+      ...POSE_KEYS.filter((key) => config.states[key].ambient.customAnimationId === id).map(
+        (key) => `「${STATE_LABELS[key]}」状态环境动态`,
+      ),
     )
     if (config.interactions.click.animation === id) labels.push('点击互动')
     return labels
@@ -446,35 +653,11 @@ export class EditorStore {
     this.hub.publish({ config: current.config, assets: current.assets, customs })
   }
 
-  /** Cancel the pending debounce; a dirty draft gets one final best-effort write. */
+  /** Unsaved drafts remain unsaved when the editor closes. */
   dispose(): void {
     if (this.disposed) return
-    if (this.saveTimer !== null) {
-      clearTimeout(this.saveTimer)
-      this.saveTimer = null
-    }
     this.unsubscribeHub?.()
     this.disposed = true
-    if (this.dirty) void this.persistDirty()
-  }
-
-  private scheduleSave(): void {
-    this.dirty = true
-    if (this.saveTimer !== null) clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null
-      void this.persistDirty()
-    }, this.debounceMs)
-  }
-
-  /** Skip the debounce and persist now (asset flows must order PUT before DELETE). */
-  private persistNow(): Promise<boolean> {
-    if (this.saveTimer !== null) {
-      clearTimeout(this.saveTimer)
-      this.saveTimer = null
-    }
-    this.dirty = true
-    return this.persistDirty()
   }
 
   /** Serialized writes: at most one PUT in flight; resolves false on failure. */
@@ -489,6 +672,7 @@ export class EditorStore {
 
   private async writeLoop(): Promise<boolean> {
     let savedConfig: MotionPetConfig | null = null
+    this.saveInFlight = true
     while (this.dirty && this.snapshot.config !== null) {
       this.dirty = false
       // Ownership split (P1): the editor owns enabled/global/poses/states/
@@ -497,11 +681,29 @@ export class EditorStore {
       // its current config and a drag-save made while this draft was dirty
       // survives the save.
       const draft = this.snapshot.config
+      // Optional animation references use null as the explicit clear marker;
+      // omission means "keep the host's current value" in patch semantics.
+      const states = Object.fromEntries(
+        POSE_KEYS.map((key) => {
+          const state = draft.states[key]
+          return [
+            key,
+            {
+              ...structuredClone(state),
+              enter: { ...structuredClone(state.enter), animationId: state.enter.animationId ?? null },
+              ambient: {
+                ...structuredClone(state.ambient),
+                customAnimationId: state.ambient.customAnimationId ?? null,
+              },
+            },
+          ]
+        }),
+      ) as unknown as MotionPetConfig['states']
       const payload: ConfigPatch = {
         enabled: draft.enabled,
         global: structuredClone(draft.global),
         poses: structuredClone(draft.poses),
-        states: structuredClone(draft.states),
+        states,
         advanced: structuredClone(draft.advanced),
         interactions: structuredClone(draft.interactions),
       }
@@ -509,15 +711,46 @@ export class EditorStore {
         // The host response is authoritative: it carries the merged overlay.
         savedConfig = await this.api.patchConfig(payload)
       } catch (error) {
+        this.dirty = true
+        this.saveInFlight = false
         if (!this.disposed) this.emit({ saveState: 'error', saveError: describeError(error) })
         return false
       }
     }
+    this.saveInFlight = false
     // Broadcast the saved config so the overlay updates without a poll (M3).
     if (savedConfig !== null) {
       this.hub?.publish({ config: savedConfig, assets: this.snapshot.assets, customs: this.snapshot.customs })
+      await this.cleanupReplacedAssets()
     }
-    if (!this.disposed) this.emit({ saveState: 'saved', saveError: null })
+    // cleanupReplacedAssets is a real await window: edits that landed there
+    // (dirty=true) must not be overwritten with 'saved' — that would disable
+    // the save button and drop the beforeunload guard while work is unsaved.
+    if (!this.disposed) this.emit({ saveState: this.dirty ? 'dirty' : 'saved', saveError: null })
     return true
+  }
+
+  /** Delete assets made unreachable by a successful explicit save. */
+  private async cleanupReplacedAssets(): Promise<void> {
+    const config = this.snapshot.config
+    if (config === null) return
+    const referenced = new Set(POSE_KEYS.map((key) => config.poses[key].assetId).filter((id): id is string => id !== undefined))
+    for (const assetId of [...this.pendingAssetDeletes]) {
+      if (referenced.has(assetId)) continue
+      try {
+        await this.api.deleteAsset(assetId)
+        this.pendingAssetDeletes.delete(assetId)
+        if (this.disposed) continue
+        const assets = { ...this.snapshot.assets }
+        delete assets[assetId]
+        this.emit({ assets, configRevision: this.snapshot.configRevision + 1 })
+      } catch (error) {
+        if (error instanceof ApiError && (error.code === 'ASSET_IN_USE' || error.code === 'NOT_FOUND')) {
+          this.pendingAssetDeletes.delete(assetId)
+          continue
+        }
+        if (!this.disposed) this.emit({ notice: { kind: 'warn', text: `旧图片文件清理失败：${describeError(error)}` } })
+      }
+    }
   }
 }

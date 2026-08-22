@@ -15,6 +15,8 @@ export interface PoseEditorProps {
   state: PoseKey
   config: MotionPetConfig
   assets: Record<string, AssetMeta>
+  /** UX-3: true while this slot's image upload is in flight (shows 上传中…). */
+  importing?: boolean
   store: EditorStore
 }
 
@@ -43,6 +45,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
       )}
       <FileImportButton
         label={asset !== undefined ? '更换图片' : '导入图片'}
+        busy={props.importing === true}
         onFile={(file) => void store.importImage(state, file)}
       />
       <Slider

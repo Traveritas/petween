@@ -293,6 +293,39 @@ describe('PreviewSession — §23 visibility policy and dispose', () => {
   })
 })
 
+describe('PreviewSession — replayStateEnter (edited-state preview)', () => {
+  it('switches the stage to the edited slot — the switch itself plays its enter', async () => {
+    const context = setup()
+    const { stage, session, image } = context
+    await boot(context)
+    expect(image.getAttribute('src')).toBe(assetUrl('idle'))
+
+    session.replayStateEnter('thinking')
+    await vi.advanceTimersByTimeAsync(COALESCE_MS) // resolver coalescing window
+    const pre = harness.pending().filter((animation) => animation.target === stage.layers.transition)
+    expect(pre).toHaveLength(1) // thinking's enter transition started
+    await settleTransitions()
+    expect(image.getAttribute('src')).toBe(assetUrl('thinking'))
+    session.dispose()
+  })
+
+  it('replays directly when the stage already shows the edited slot', async () => {
+    const context = setup()
+    const { session, image } = context
+    await boot(context) // boot leaves the stage on idle
+    const before = harness.animations.length
+
+    session.replayStateEnter('idle')
+    await flushUntil(() => harness.animations.length > before)
+    // a fresh idle enter began: had this delegated to sendState, the resolver
+    // dedupe (§15.1) would have swallowed it and nothing would play
+    expect(harness.animations.length).toBeGreaterThan(before)
+    await settleTransitions()
+    expect(image.getAttribute('src')).toBe(assetUrl('idle'))
+    session.dispose()
+  })
+})
+
 describe('PreviewSession — custom animation sync and 试播 (V1.1)', () => {
   const makeCustom = (id: string, durationMs = 300): AnimationDefinition => ({
     version: 1,
@@ -307,6 +340,24 @@ describe('PreviewSession — custom animation sync and 试播 (V1.1)', () => {
         keyframes: [
           { at: 0, value: 0 },
           { at: 1, value: 12 },
+        ],
+      },
+    ],
+  })
+
+  const makeAmbient = (durationMs: number): AnimationDefinition => ({
+    version: 1,
+    id: 'user:float',
+    name: 'Float',
+    kind: 'ambient',
+    durationMs,
+    repeat: { mode: 'loop' },
+    tracks: [
+      {
+        property: 'sway.rotation',
+        keyframes: [
+          { at: 0, value: -2 },
+          { at: 1, value: 2 },
         ],
       },
     ],
@@ -343,6 +394,27 @@ describe('PreviewSession — custom animation sync and 试播 (V1.1)', () => {
     // built-ins survive every sync
     expect(session.registry.get('builtin:comic-pop')).toBeDefined()
     session.dispose()
+  })
+
+  it('runs a configured custom ambient and hot-restarts it after library edits', async () => {
+    const context = setup((config) => {
+      config.states.idle.ambient.sway.enabled = false
+      config.states.idle.ambient.customAnimationId = 'user:float'
+    })
+    context.session.updateCustoms([makeAmbient(700)])
+    await boot(context)
+    const first = harness.animations.find(
+      (animation) => animation.target === context.stage.layers.sway && animation.options.duration === 700,
+    )
+    expect(first?.playState).toBe('running')
+
+    context.session.updateCustoms([makeAmbient(950)])
+    expect(first?.playState).toBe('idle')
+    const replacement = harness.animations.find(
+      (animation) => animation.target === context.stage.layers.sway && animation.options.duration === 950,
+    )
+    expect(replacement?.playState).toBe('running')
+    context.session.dispose()
   })
 
   it('previewDefinition validates, (re)registers under the scratch id and plays it', async () => {

@@ -7,13 +7,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  applyPet,
+  createPet,
   deleteAnimation,
   deleteAsset,
+  deletePet,
   getAnimations,
   getConfig,
+  getPets,
   patchConfig,
   putAnimation,
   putConfig,
+  renamePet,
   uploadAsset,
 } from '../../src/client/api'
 import { createDefaultMotionPetConfig } from '../../src/core/defaults'
@@ -249,5 +254,70 @@ describe('client api — animations (V1.1)', () => {
     const failure = await deleteAnimation('user:missing').catch((error: unknown) => error)
     expect((failure as ApiError).status).toBe(404)
     expect((failure as ApiError).code).toBe('NOT_FOUND')
+  })
+})
+
+describe('client api — pet presets (V1.1)', () => {
+  const makePet = () => {
+    const config = createDefaultMotionPetConfig()
+    return {
+      id: 'pet_abc-123',
+      name: '蓝猫',
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      scale: config.global.scale,
+      poses: config.poses,
+      states: config.states,
+    }
+  }
+
+  it('getPets GETs the index and returns the active pointer and warnings', async () => {
+    const payload = { pets: [makePet()], activePetId: 'pet_abc-123', warnings: ['bad file'] }
+    fetchMock.mockResolvedValue(jsonResponse(200, payload))
+    await expect(getPets()).resolves.toEqual(payload)
+    expect(lastCall().url).toBe('/api/motion-pet/pets')
+    expect(lastCall().init.method ?? 'GET').toBe('GET')
+  })
+
+  it('createPet POSTs name/from and returns the pet plus applied config', async () => {
+    const config = createDefaultMotionPetConfig()
+    config.activePetId = 'pet_abc-123'
+    fetchMock.mockResolvedValue(jsonResponse(200, { pet: makePet(), config }))
+    await expect(createPet({ name: '蓝猫', from: 'blank' })).resolves.toMatchObject({ config })
+    const { url, init } = lastCall()
+    expect(url).toBe('/api/motion-pet/pets')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ name: '蓝猫', from: 'blank' })
+  })
+
+  it('renamePet PUTs the name to the encoded id subpath', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { pet: { ...makePet(), name: '新名字' } }))
+    await renamePet('pet_abc-123', '新名字')
+    const { url, init } = lastCall()
+    expect(url).toBe('/api/motion-pet/pets/pet_abc-123')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual({ name: '新名字' })
+  })
+
+  it('deletePet DELETEs the id and maps host error codes', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: 'pet_abc-123' }))
+    await expect(deletePet('pet_abc-123')).resolves.toEqual({ deleted: 'pet_abc-123' })
+    expect(lastCall()).toMatchObject({ url: '/api/motion-pet/pets/pet_abc-123', init: { method: 'DELETE' } })
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'unknown pet' } }))
+    const failure = await deletePet('pet_missing').catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(ApiError)
+    expect((failure as ApiError).code).toBe('NOT_FOUND')
+  })
+
+  it('applyPet POSTs the apply subpath and returns the host config', async () => {
+    const config = createDefaultMotionPetConfig()
+    config.activePetId = 'pet_abc-123'
+    fetchMock.mockResolvedValue(jsonResponse(200, { config }))
+    await expect(applyPet('pet_abc-123')).resolves.toEqual({ config })
+    expect(lastCall()).toMatchObject({
+      url: '/api/motion-pet/pets/pet_abc-123/apply',
+      init: { method: 'POST' },
+    })
   })
 })

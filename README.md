@@ -10,11 +10,13 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware fo
 
 - **少量图片即可工作**：至少一张图；六个状态槽位（待机/思考/工作/等待/成功/错误）各自可配，缺失状态自动 fallback
 - **漫画式过渡动画**：Comic Pop / Soft / Jelly / Jump / Snap / Celebrate / Deflate，强度与时长可调
-- **环境动态三通道**：Bounce（随机间隔，不机械）、Sway、Breathing，按状态独立配置
+- **状态环境动态**：六个状态可分别组合 Bounce（随机间隔）、Sway、Breathing，并挂载一个自定义环境动画
 - **Anchor 真实对齐**：换图时脚底不瞬移，squash/stretch 围绕地面锚点
 - **跟随 Agent 状态**：思考摇摆弹跳、等待用户时安静等待、完成时庆祝、出错时泄气——基于宿主事件归一化 + 状态稳定器，流式输出不会导致宠物乱跳
 - **可拖动、可缩放、位置持久化**；尊重 `prefers-reduced-motion`
+- **多宠物预设**：每只宠物独立保存姿势图片、状态动画与整体缩放，可快速切换、复制、重命名和删除
 - **Timeline Engine**：所有动画（内置与自定义）都是 `AnimationDefinition` 数据，经同一个 Timeline Compiler / Scheduler 执行（WAAPI），无专用分支——自定义动画格式见 [docs/motion-format.md](docs/motion-format.md)
+- **可视化时间轴编辑器**：管理自定义过渡/环境/互动动画，编辑轨道、关键帧、easing 与事件并循环试播
 
 ## 截图
 
@@ -49,10 +51,11 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 
 打开 DSH Web UI → 设置 → **Motion Pet** 卡片：可快速启用/停用宠物、调整整体缩放，并查看图片导入进度。点击卡片上的「**打开完整编辑器 →**」（或浏览器直接访问 `/motion-pet-editor/`）会在新标签页打开独立编辑器页面：
 
-1. **导入图片**：在左侧选择状态（如「待机」），点击「更换图片」。支持 PNG / WebP / JPEG（JPEG 无透明背景，会提示）。推荐透明背景、近似正方形画布、角色完整的图片；不同姿势尽量保持角色视觉尺寸一致。
-2. **调 Anchor**：Anchor X/Y 标记角色的「脚底中心」（默认 0.5 / 0.96）。多张图的 Anchor 对齐后，切换姿势时角色不会瞬移。可用「图片缩放」微调大小。
-3. **调动画**：每个状态可选进入过渡（Preset / 强度 / 时长）与环境动态（Bounce / Sway / Breathing 参数）；「全局」区设置默认过渡、整体缩放（0.5~2.0）、减少动态（跟随系统 / 总是 / 从不）、成功/失败停留时长。
-4. **实时预览**：右侧预览区点击状态按钮即可模拟状态切换（走与正式 Overlay 相同的渲染与状态机），改动即时生效、自动保存（防抖 ~300ms，有保存状态提示）；主界面的宠物会在数秒内自动跟进。
+1. **管理宠物**：顶部「宠物」区可把当前配置保存为副本，或新建空白宠物；切换后，下面所有面板都编辑当前宠物。姿势、状态动画与整体缩放会自动镜像进当前预设。
+2. **导入图片**：在左侧选择状态（如「待机」），点击「更换图片」。支持 PNG / WebP / JPEG（JPEG 无透明背景，会提示）。推荐透明背景、近似正方形画布、角色完整的图片；不同姿势尽量保持角色视觉尺寸一致。
+3. **调 Anchor**：Anchor X/Y 标记角色的「脚底中心」（默认 0.5 / 0.96）。多张图的 Anchor 对齐后，切换姿势时角色不会瞬移。可用「图片缩放」微调大小。
+4. **调动画**：每个状态可选进入过渡（Preset / 强度 / 时长）与环境动态（自定义环境动画 + Bounce / Sway / Breathing）；「全局」区设置默认过渡、整体缩放（0.3~4.0）、减少动态（跟随系统 / 总是 / 从不）、成功/失败停留时长。底部动画库可创建和编辑自定义时间轴动画。
+5. **实时预览**：右侧预览区点击状态按钮即可模拟状态切换（走与正式 Overlay 相同的渲染与状态机），改动会即时进入预览；点击“保存修改”后写入当前宠物预设，主界面的宠物会在数秒内跟进。
 
 也可以直接访问 `http://127.0.0.1:3080/motion-pet-editor/`（端口以你的 DSH web 配置为准）。
 
@@ -81,7 +84,7 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 ```bash
 pnpm install
 pnpm run build       # tsc -b && tsdown → lib/index.js（host）、lib/client.js、lib/editor.js（独立编辑器页）、preview/preview.js
-pnpm vitest run      # 测试（tests/，404 用例）
+pnpm vitest run      # 测试（tests/，649 用例）
 pnpm run typecheck   # 双工程类型检查
 ```
 
@@ -89,8 +92,7 @@ pnpm run typecheck   # 双工程类型检查
 
 ## Known limitations
 
-- V1 的设置 UI 是 Preset 级别；高级关键帧 Timeline Editor 属于 V1.1（Runtime 已支持加载执行任意合法 `AnimationDefinition`）
-- 自定义动画目前只能经独立预览页试播，不能挂到状态上（V1.1 开放 `animationId` 挂载）
+- Motion Pack 导入导出、更多内置 ambient channel 与 Transition Matrix override 尚未实现
 - Agent 状态联动的「无焦点会话」聚合回退模式按优先级取最紧急会话（WAITING > ERROR > ACTIVE > SUCCESS > IDLE，终态带 TTL）；正常跟随当前会话
 - 不执行/不信任用户资产：SVG 明确拒绝，图片只做解码展示
 - 多浏览器标签同时编辑同一配置为 last-write-wins（revision/CAS 属后续项）

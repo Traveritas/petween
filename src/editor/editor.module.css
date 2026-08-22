@@ -22,6 +22,14 @@ body {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+  /* UX: keep the header's Save/Revert controls visible while the editor
+     scrolls — opaque background (page token) so the columns never bleed
+     through, raised above the sticky LivePreview column. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 10px 0 12px;
+  background: var(--dsw-alias-bg-base, #f3f4f6);
 }
 
 .headerMain {

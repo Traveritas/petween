@@ -95,6 +95,37 @@ describe('DragController — click vs drag (§28)', () => {
   })
 })
 
+describe('DragController — cursor feedback (drag affordance)', () => {
+  it('switches to grabbing while dragging and restores the previous cursor on release', () => {
+    const harness = setup()
+    harness.handle.style.cursor = 'grab' // the stage sets this on the hit element
+    down(harness, 100, 100)
+    move(101, 100) // 1px: still a click-shaped gesture, cursor untouched
+    expect(harness.handle.style.cursor).toBe('grab')
+    move(100 + DRAG_THRESHOLD_PX, 100) // crosses the threshold: drag begins
+    expect(harness.handle.style.cursor).toBe('grabbing')
+    up(100 + DRAG_THRESHOLD_PX, 100)
+    expect(harness.handle.style.cursor).toBe('grab') // restored after release
+    harness.controller.dispose()
+  })
+
+  it('restores the cursor on pointercancel and dispose too, and never touches a click', () => {
+    const harness = setup()
+    down(harness, 100, 100)
+    move(200, 200)
+    expect(harness.handle.style.cursor).toBe('grabbing')
+    window.dispatchEvent(pointer('pointercancel', 200, 200))
+    expect(harness.handle.style.cursor).toBe('')
+
+    // dispose mid-gesture must not leave 'grabbing' behind either
+    harness.handle.style.cursor = 'grab'
+    down(harness, 100, 100)
+    move(200, 200)
+    harness.controller.dispose()
+    expect(harness.handle.style.cursor).toBe('grab')
+  })
+})
+
 describe('DragController — viewport clamp (§27)', () => {
   it('a drag far off-screen is pulled back, keeping 32px visible', () => {
     const harness = setup()

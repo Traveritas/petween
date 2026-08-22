@@ -179,7 +179,31 @@ Ambient：`builtin:bounce` / `builtin:sway` / `builtin:breathe`。
 `builtin:*` 命名空间受保护：用户不能注册同名 id，也不能 unregister。想改造内置动画时，请
 克隆一份存为 `user:<uuid>` 再修改（Preset → Customize，§8.15）。
 
-## 9. 完整自定义动画示例
+## 9. 将自定义动画挂载到宠物
+
+动画在动画库中保存后，可按类型挂载到对应入口：
+
+- `transition`：`states.<状态>.enter.animationId`
+- `ambient`：`states.<状态>.ambient.customAnimationId`
+- `interaction`：`interactions.click.animation`
+
+六个状态都可独立选择一个自定义 `ambient` 动画。它会与该状态启用的 Bounce / Sway /
+Breathing 同时播放，时长、循环方式和参数默认值取自动画定义；开启「减少动态」后停止播放。
+删除仍被任一状态或宠物预设引用的动画时，Host 会返回 `409 ANIMATION_IN_USE`。
+
+```json
+{
+  "states": {
+    "idle": {
+      "ambient": {
+        "customAnimationId": "user:gentle-float"
+      }
+    }
+  }
+}
+```
+
+## 10. 完整自定义动画示例
 
 一份"漫画式重击落地"的自定义 transition：先急剧压缩蓄力，换图后向上猛弹并带回转，最后
 果冻式稳定。可直接 `registry.register()` 后 `motionDirector.play('user:slam-land')` 执行。

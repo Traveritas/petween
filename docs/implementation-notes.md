@@ -547,3 +547,16 @@ cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 O
 ### 验证
 
 新增 `tests/host/host-service.test.ts`（5）与 `tests/client/extension-service.test.ts`（16），drag-controller 增 onDragStart describe（1），plugin-entry 补服务生命周期断言。45 文件 / **724 用例**全绿，双工程 typecheck 零错误，四产物 build 通过。
+
+## 服务扩展 + 第一个附属插件：抛掷物理（2026-08-25）
+
+上一节服务的首次真实消费催生了四个增量 API（commit `515232a`，均有测试锁定）：
+
+- `StageSnapshot.stageSize`：舞台方块基准 px——碰壁/边缘计算需要包围盒（`stageSize × scale`）。
+- `subscribeUserDrag(phase)`（服务级，无需租约）：'start' 过拖拽阈值 / 'end' 真位移结束；抛掷类附属在手势期间用 `subscribeStage` 采样测速、'end' 时才申请租约。**租约持有期间主插件忽略远端 overlay 坐标**，所以"只在飞行期间持有"是附属侧的纪律。
+- `flashPose(poseKey, holdMs)`：换图 + holdMs 后恢复状态机当前 pose（动画内 pose-swap 事件表达不了"然后恢复"）；直接 `stage.swapPose` 循 `refreshCurrentPose` 先例（§16.3 全量预载，swapPose 按 src 幂等，与真实 transition 竞争安全）；二次 flash 替换未决恢复，dispose 取消。
+- Host 服务 `hasAnimation(id)`：附属首装守卫——只在缺失时注册默认动画，用户改过就不覆盖。
+
+**`dsh-motion-pet-physics` v0.1.0**（平级独立仓库，首个附属插件）：拖拽甩出 → 重力/碰壁反弹（半隐式欧拉纯函数引擎）→ 碰壁可选播放动画（默认 `user:physics-bounce-pop`，interaction kind——schema 强制 transition 恰好一个 pose-swap，纯变形只有 interaction 合法）与 flashPose（默认关）；落定 commit+release；人手抓取/页面隐藏/会话消失各有干净退出路径；同壁 150ms 效果去抖、20s 飞行兜底。3 文件 / 52 用例独立全绿，client bundle 纯净。**真机端到端**：link 安装成功，host 半经真实 `motion-pet` 服务完成首装注册（`~/.dsh/motion-pet/animations/user_physics-bounce-pop.json` 落盘核对无误）；浏览器侧视觉验证待用户重启 `dsh web`（验证时被无关第三方插件的进程锁挡住）。
+
+配置承载调查结论（对后续附属插件同样适用）：rc.7 **没有**外部插件的 schema 配置表单路径——Plugins 设置页只渲染插件自注册的卡片命名空间（dsh-client-ui-settings-plugins README："A served namespace no card claims renders nothing"），shell 冻结模块表无 schema-form，浏览器侧插件 entry 经 `loader.create({ name })` 创建不携带 config。附属的可调项当前以源码常量 + README 承载；要 UI 就得像主插件那样自带 settings 卡片。

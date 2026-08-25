@@ -1,6 +1,6 @@
 {
   "name": "dsh-motion-pet",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DSH Web UI motion pet — animation middleware for agent pets (Host + Client dual-half plugin)",
   "license": "MIT",
   "packageManager": "pnpm@10.34.5",

@@ -29,7 +29,7 @@ function EditorPage(): JSX.Element {
         <div className={styles.headerMain}>
           <h1 className={styles.title}>Motion Pet 编辑器</h1>
           <p className={styles.subtitle}>
-            导入姿势图片、调整过渡动画与环境动态，右侧实时预览。点击“保存修改”后应用到主界面。
+            导入姿势图片、调整过渡与循环动画，右侧实时预览。点击“保存修改”后应用到主界面。
           </p>
         </div>
         <span className={styles.saveSlot} ref={setSaveSlot} />

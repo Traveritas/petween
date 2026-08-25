@@ -68,9 +68,9 @@ export function LivePreview(props: LivePreviewProps): JSX.Element {
         <button type="button" className={styles.button} onClick={onReplay}>
           ▶ 重播进入动画
         </button>
-        <Toggle label="Anchor 十字" checked={showAnchor} onChange={setShowAnchor} />
+        <Toggle label="锚点十字" checked={showAnchor} onChange={setShowAnchor} />
       </div>
-      <p className={styles.hint}>预览与真实 Overlay 使用同一套渲染与状态机（§16.2）。</p>
+      <p className={styles.hint}>预览与主界面宠物使用同一套渲染与状态机。</p>
     </div>
   )
 }

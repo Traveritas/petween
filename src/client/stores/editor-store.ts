@@ -638,7 +638,7 @@ export class EditorStore {
     )
     labels.push(
       ...POSE_KEYS.filter((key) => config.states[key].ambient.customAnimationId === id).map(
-        (key) => `「${STATE_LABELS[key]}」状态环境动态`,
+        (key) => `「${STATE_LABELS[key]}」状态循环动画`,
       ),
     )
     if (config.interactions.click.animation === id) labels.push('点击互动')

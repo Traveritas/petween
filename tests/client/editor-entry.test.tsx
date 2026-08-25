@@ -74,7 +74,7 @@ describe('editor entry (src/editor/index.tsx)', () => {
     expect(root?.textContent).toContain('启用宠物')
     expect(root?.textContent).toContain('姿势图片')
     expect(root?.textContent).toContain('进入过渡动画')
-    expect(root?.textContent).toContain('环境动态')
+    expect(root?.textContent).toContain('循环动画')
     expect(root?.textContent).toContain('重播进入动画')
     expect(root?.querySelector('.dsh-motion-pet-position')).not.toBeNull()
   })

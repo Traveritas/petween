@@ -178,7 +178,7 @@ describe('MotionPetSettings', () => {
     expect(container.textContent).toContain('导入图片')
     // the editor columns and the pet stage must not render at all
     expect(container.querySelector('.dsh-motion-pet-position')).toBeNull()
-    expect(container.textContent).not.toContain('环境动态')
+    expect(container.textContent).not.toContain('循环动画')
   })
 
   it('with one image it renders the full editor and the live preview stack', async () => {
@@ -193,12 +193,12 @@ describe('MotionPetSettings', () => {
     // the three setting panels
     expect(container.textContent).toContain('姿势图片')
     expect(container.textContent).toContain('进入过渡动画')
-    expect(container.textContent).toContain('环境动态')
+    expect(container.textContent).toContain('循环动画')
     // global bar + save indicator
     expect(container.textContent).toContain('启用宠物')
     // Live Preview: manual state buttons + replay + anchor toggle
     expect(container.textContent).toContain('重播进入动画')
-    expect(container.textContent).toContain('Anchor 十字')
+    expect(container.textContent).toContain('锚点十字')
     // the current pose thumbnail
     const thumb = container.querySelector('img[src="/motion-pet-assets/aaaa1111bbbb2222"]')
     expect(thumb).not.toBeNull()
@@ -214,7 +214,7 @@ describe('MotionPetSettings', () => {
     const successHold = findControlRow('成功停留').querySelector('input')
     expect(successHold?.disabled).toBe(false)
 
-    const select = findControlRow('成功/失败停留').querySelector('select')
+    const select = findControlRow('停留方式').querySelector('select')
     if (select === null) throw new Error('terminal-hold select missing')
     act(() => choose(select, 'until-interaction'))
     expect(api.patchConfig).not.toHaveBeenCalled()

@@ -49,7 +49,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
         onFile={(file) => void store.importImage(state, file)}
       />
       <Slider
-        label="Anchor X"
+        label="锚点 X"
         min={0}
         max={1}
         step={0.01}
@@ -61,7 +61,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
         }
       />
       <Slider
-        label="Anchor Y"
+        label="锚点 Y"
         min={0}
         max={1}
         step={0.01}
@@ -84,7 +84,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
           })
         }
       />
-      <p className={styles.hint}>Anchor 是图片中对准地面锚点的位置（默认 0.5 / 0.96，即脚底中心）。</p>
+      <p className={styles.hint}>锚点（Anchor）是图片上对准地面固定点的位置（默认 0.5 / 0.96，即脚底中心）。</p>
     </section>
   )
 }

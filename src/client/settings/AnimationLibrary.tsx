@@ -46,13 +46,13 @@ const BUILTIN_DEFINITIONS: readonly AnimationDefinition[] = [
 
 const KIND_LABELS: Record<AnimationKind, string> = {
   transition: '过渡',
-  ambient: '环境',
+  ambient: '循环动画',
   interaction: '互动',
 }
 
 const KIND_OPTIONS: ReadonlyArray<{ value: AnimationKind; label: string }> = [
   { value: 'transition', label: '过渡 transition' },
-  { value: 'ambient', label: '环境 ambient' },
+  { value: 'ambient', label: '循环动画 ambient' },
   { value: 'interaction', label: '互动 interaction' },
 ]
 
@@ -450,7 +450,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
           </div>
           {selected === undefined || draft === null || evaluation === null ? (
             <p className={styles.hint}>
-              在左侧选择动画查看详情。内置动画只读，可克隆为自定义后编辑；保存后可在状态的过渡、环境动态与点击互动中选用。
+              在左侧选择动画查看详情。内置动画只读，可克隆为自定义后编辑；保存后可在状态的过渡动画、循环动画与点击互动中选用。
             </p>
           ) : (
             <>

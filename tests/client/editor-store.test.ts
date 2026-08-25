@@ -819,7 +819,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     expect(await store.deleteAnimation('user:a')).toBe(false)
     expect(mocks.deleteAnimation).not.toHaveBeenCalled()
     expect(store.getSnapshot().notice?.text).toContain('等待')
-    expect(store.getSnapshot().notice?.text).toContain('环境动态')
+    expect(store.getSnapshot().notice?.text).toContain('循环动画')
   })
 
   it('deleteAnimation removes the entry and broadcasts on success', async () => {

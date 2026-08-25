@@ -611,7 +611,7 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
     vi.useFakeTimers()
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
     await render(api, true)
-    const select = findControlRow('Preset').querySelector('select')
+    const select = findControlRow('预设').querySelector('select')
     if (select === null) throw new Error('preset select missing')
     const groups = [...select.querySelectorAll('optgroup')].map((group) => group.label)
     expect(groups).toEqual(['内置', '自定义'])
@@ -638,7 +638,7 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
       },
     })
     await render(api, true)
-    const select = findControlRow('Preset').querySelector('select')
+    const select = findControlRow('预设').querySelector('select')
     expect(select?.value).toBe('user:t1')
   })
 
@@ -660,7 +660,7 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
       customs: [ambientCustom('user:a1', 'Floaty'), transitionCustom('user:t1', 'My Pop')],
     })
     await render(api, true)
-    const select = findControlRow('自定义环境').querySelector('select')
+    const select = findControlRow('自定义循环动画').querySelector('select')
     if (select === null) throw new Error('custom ambient select missing')
     const options = [...select.querySelectorAll('option')].map((option) => [option.value, option.textContent])
     expect(options).toContainEqual(['user:a1', 'Floaty'])
@@ -684,7 +684,7 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
       },
     })
     await render(api, true)
-    const select = findControlRow('自定义环境').querySelector('select')
+    const select = findControlRow('自定义循环动画').querySelector('select')
     expect(select?.value).toBe('user:missing')
     expect(select?.textContent).toContain('不可用')
   })

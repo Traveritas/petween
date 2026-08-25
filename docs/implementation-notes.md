@@ -574,3 +574,14 @@ cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 O
 - 验证：新增 9 测试（extension-service 4:广播不截断/同 URL 静默换图收回/默认点击不碰保持/配置点击闪图恢复到保持 pose;overlay-session 2:hidden 立即恢复/卸载中手势持久化;motion-director 3:记账后守卫为真/恢复到保持 pose/保持过期恢复常态,其中 drag-controller 原"dispose 静默"锁更新为新契约）。45 文件 / **741 用例**全绿,双工程 typecheck 零错误,四产物 build 通过。
 
 附属 `dsh-motion-pet-physics`（commit `b1a8f43`,99 用例,较 82 增 17）:落地**地面滑动**状态——弹跳后期预测反弹高度（vy²/2g,restitution 后）低于 `minBounceHeightPx`（默认 12px）即不再反弹、不触发碰壁效果,贴地滑动（vy=0、侧壁只夹不弹、`groundFriction` 默认 2/s 衰减）,低于 `settleSpeed` 照常落定;阈值调 0 恢复旧的连弹行为（用户注:"反复触发可能是一些人要的效果"）。新增配置 `physics.minBounceHeightPx` / `physics.groundFriction` / `slideAnimationId`（滑动开始播一次,默认 null）,卡片加"落地滑动"组,README 配置表同步。测试缺口补齐:M5a（settle 的 commit→release 顺序断言 + commit 失败仍 release 只告警）、M5b（路由 same-origin Origin 放行 / 'null' Origin 拒绝变体）、L4（config-hub 的 getConfig 未加载/加载失败路径返回 DEFAULT_CONFIG 克隆而非共享引用）。
+
+## 编辑器 UI 文案与信息架构收口（2026-08-25）
+
+只动 UI 层（标签 / 分组 / 提示文案 / 字段归属），配置 schema、HTTP API、动画引擎、CSS 类与布局体系零变化。两处用户点名 + 一轮四维度系统审查（同一概念同一词 / 字段归属 / 高低频分层 / 术语自解释）：
+
+- **终态停留三件套归位**：原「成功/失败停留」模式选择在 AdvancedCard「高级」列，而 successHoldMs/errorHoldMs 两个时长字段远在 GlobalCard（全局设置）——同一概念被拆在两张卡片。现合并为 AdvancedCard 内新的「成功/失败」分组（cardColumn + groupTitle，第三个分组列）：停留方式下拉 + 成功停留 + 失败停留 + until-interaction 时的「停留时长不适用」提示 + 新增一行分组说明（任务成功/失败后宠物保持该姿势的方式与时长）；disabled 联动（非 timed 模式时长禁用）随迁。GlobalCard 回归纯全局高频项。
+- **「环境动态」→「循环动画」全量改名**：AmbientEditor 标题/aria-label/「自定义环境」→「自定义循环动画」/提示（内置通道→内置循环）；AnimationLibrary 的 KIND_LABELS（环境→循环动画）与 KIND_OPTIONS；库空态提示「过渡、环境动态与点击互动」→「过渡动画、循环动画与点击互动」；editor 页副标题；editor-store 删除保护引用标签「状态环境动态」→「状态循环动画」；docs/motion-format.md 两处描述性文字（kind 表格与 events 约束，格式定义本身不动）。config 字段名与 kind 值 `'ambient'` 为契约，一律未动。
+- **审查修复**：TransitionEditor 行标签「Preset」→「预设」（含回落提示文案）；PoseEditor「Anchor X/Y」→「锚点 X/Y」（提示改为「锚点（Anchor）…」保留英文对照）；LivePreview「Anchor 十字」→「锚点十字」、提示去掉 spec 引用与 Overlay 术语（「预览与真实 Overlay 使用同一套渲染与状态机（§16.2）」→「预览与主界面宠物使用同一套渲染与状态机」）。
+- **测试同步**：motion-pet-settings（环境动态→循环动画 ×2、Anchor 十字→锚点十字、成功/失败停留→停留方式）、animation-library（Preset→预设 ×2、自定义环境→自定义循环动画 ×2）、editor-entry / motion-pet-card / editor-store 的环境动态断言。45 文件 / **741 用例**全绿，双工程 typecheck 零错误，四产物 build 通过。
+
+**发现但未改（待用户拍板）**：① 「活跃内切换动画」措辞略歧义（可读成"切换动画"而非"换图用的动画"），候选「活跃内换图方式」，涉及既有心智未动；② 动画库/TimelineEditor 面向 Motion Pack 作者，保留 pose-swap、transition.scaleY 等格式原文（与 motion-format.md 一致），普通用户路径（状态面板）不接触这些词；③ 独立 preview 页（src/preview/index.tsx）为开发者工具，全英文标签，刻意未纳入本轮中文化；④ development-spec.md 为规格存档，仍用规格术语「环境动态」，未追改。

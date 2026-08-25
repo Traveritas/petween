@@ -276,9 +276,11 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
 }
 
 /**
- * Global settings card: enabled, scale, reduced motion, the global transition
- * (preset/strength/duration) and the terminal hold durations — a responsive
- * grid of label-aligned control rows (no flex-wrap squeezing).
+ * Global settings card: enabled, scale, reduced motion and the global
+ * transition (preset/strength/duration) — a responsive grid of label-aligned
+ * control rows (no flex-wrap squeezing). The terminal-hold settings live in
+ * the AdvancedCard's 成功/失败 group next to their mode select (one concept,
+ * one place).
  */
 function GlobalCard(props: { config: MotionPetConfig; store: EditorStore }): JSX.Element {
   const { config, store } = props
@@ -353,37 +355,6 @@ function GlobalCard(props: { config: MotionPetConfig; store: EditorStore }): JSX
             })
           }
         />
-        <NumberField
-          label="成功停留"
-          min={0}
-          max={120000}
-          step={100}
-          unit="ms"
-          value={global.successHoldMs}
-          disabled={config.advanced.terminalHold !== 'timed'}
-          onChange={(value) =>
-            store.updateConfig((draft) => {
-              draft.global.successHoldMs = value
-            })
-          }
-        />
-        <NumberField
-          label="失败停留"
-          min={0}
-          max={120000}
-          step={100}
-          unit="ms"
-          value={global.errorHoldMs}
-          disabled={config.advanced.terminalHold !== 'timed'}
-          onChange={(value) =>
-            store.updateConfig((draft) => {
-              draft.global.errorHoldMs = value
-            })
-          }
-        />
-        {config.advanced.terminalHold === 'until-interaction' && (
-          <p className={`${styles.hint} ${styles.hintFull}`}>当前为「直到点击宠物或新对话」，停留时长不适用。</p>
-        )}
       </div>
     </section>
   )
@@ -391,11 +362,13 @@ function GlobalCard(props: { config: MotionPetConfig; store: EditorStore }): JSX
 
 /**
  * Full-width card below the editor columns: the advanced behaviour switches
- * in one column and the click interactions in another. Long explanations
- * live on their own hint lines so they never break a control row.
+ * in one column, the terminal-hold group (mode + both durations) in another
+ * and the click interactions in a third. Long explanations live on their own
+ * hint lines so they never break a control row.
  */
 function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefinition[]; store: EditorStore }): JSX.Element {
   const { config, customs, store } = props
+  const timedHold = config.advanced.terminalHold === 'timed'
   return (
     <section className={styles.section} aria-label="高级与互动">
       <h2 className={styles.sectionTitle}>高级与互动</h2>
@@ -423,16 +396,6 @@ function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefini
             }
           />
           <p className={styles.hint}>开启后思考/工作使用各自图片，reasoning 与工具调用之间按上方所选方式换图。</p>
-          <SelectRow
-            label="成功/失败停留"
-            value={config.advanced.terminalHold}
-            options={TERMINAL_HOLD_OPTIONS}
-            onChange={(value) =>
-              store.updateConfig((draft) => {
-                draft.advanced.terminalHold = value
-              })
-            }
-          />
           <Toggle
             label="粒子特效"
             checked={config.advanced.particles}
@@ -443,6 +406,51 @@ function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefini
             }
           />
           <p className={styles.hint}>过渡/交互动画里的纸屑与星星等粒子爆发；开启减少动态效果时始终不发射。</p>
+        </div>
+        <div className={styles.cardColumn}>
+          <div className={styles.groupTitle}>成功/失败</div>
+          <SelectRow
+            label="停留方式"
+            value={config.advanced.terminalHold}
+            options={TERMINAL_HOLD_OPTIONS}
+            onChange={(value) =>
+              store.updateConfig((draft) => {
+                draft.advanced.terminalHold = value
+              })
+            }
+          />
+          <NumberField
+            label="成功停留"
+            min={0}
+            max={120000}
+            step={100}
+            unit="ms"
+            value={config.global.successHoldMs}
+            disabled={!timedHold}
+            onChange={(value) =>
+              store.updateConfig((draft) => {
+                draft.global.successHoldMs = value
+              })
+            }
+          />
+          <NumberField
+            label="失败停留"
+            min={0}
+            max={120000}
+            step={100}
+            unit="ms"
+            value={config.global.errorHoldMs}
+            disabled={!timedHold}
+            onChange={(value) =>
+              store.updateConfig((draft) => {
+                draft.global.errorHoldMs = value
+              })
+            }
+          />
+          <p className={styles.hint}>任务成功/失败后宠物保持该姿势的方式与时长。</p>
+          {!timedHold && (
+            <p className={styles.hint}>当前为「直到点击宠物或新对话」，停留时长不适用。</p>
+          )}
         </div>
         <div className={styles.cardColumn}>
           <div className={styles.groupTitle}>互动</div>

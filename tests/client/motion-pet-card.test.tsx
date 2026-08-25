@@ -115,7 +115,7 @@ describe('MotionPetCard', () => {
     expect(link?.getAttribute('target')).toBe('_blank')
     expect(link?.textContent).toContain('打开完整编辑器')
     // the card never mounts the full editor columns or a stage
-    expect(container.textContent).not.toContain('环境动态')
+    expect(container.textContent).not.toContain('循环动画')
     expect(container.querySelector('.dsh-motion-pet-position')).toBeNull()
   })
 

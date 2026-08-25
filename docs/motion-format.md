@@ -29,7 +29,7 @@
 | `version` | 固定为 `1`。 |
 | `id` | 必须是 `<命名空间>:<名称>`：`builtin:<name>` 保留给内置动画（用户注册会被拒绝），自定义请用 `user:<uuid>`。只允许字母数字、`-`、`_`。 |
 | `name` | 展示名称。 |
-| `kind` | `transition`（进入过渡）/ `ambient`（环境动态）/ `interaction`（交互动效）。`transition` 的 duration 会被 clamp 到 60~2000ms。 |
+| `kind` | `transition`（进入过渡）/ `ambient`（循环动画）/ `interaction`（交互动效）。`transition` 的 duration 会被 clamp 到 60~2000ms。 |
 | `durationMs` | 基准时长（1~60000ms）。关键帧时间是归一化的，改 duration 不影响比例。 |
 | `repeat` | 重复策略，见第 5 节。 |
 | `tracks` | 关键帧轨道数组；可以为空数组（配合 `at: 0` 的 pose-swap 即"无动画直接换图"）。 |
@@ -142,7 +142,7 @@ V1 的事件数量约束（注册时强制）：
 - **`kind: 'transition'` 必须恰好包含 1 个 pose-swap 事件**，另允许 0..n 个 particle 事件——
   transition 的语义就是"换一次图"，如 Comic Pop 的 `0.40`；0 个或 2 个以上 pose-swap 都会被拒绝。
 - **`interaction` 不允许 pose-swap，允许 0..n 个 particle**——交互动效不换图，但可以撒花。
-- **`ambient` 不允许声明任何 events**——环境动态不换图、不发射。
+- **`ambient` 不允许声明任何 events**——循环动画不换图、不发射。
 - 事件在 reduced-motion 下依然保留在编译产物里：动画坍缩但**换图仍会发生**（§22）；particle
   事件是否发射由 renderer 在运行时决定。
 - 编译器/Scheduler 的切段机制本身是通用的（V1.1 放宽 runtime 语义后可能允许更多事件组合，

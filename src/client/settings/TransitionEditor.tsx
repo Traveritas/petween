@@ -71,7 +71,7 @@ export function TransitionEditor(props: TransitionEditorProps): JSX.Element {
     <section className={styles.section} aria-label="进入过渡动画">
       <h3 className={styles.sectionTitle}>进入过渡动画</h3>
       <GroupedSelectRow
-        label="Preset"
+        label="预设"
         value={selectValue}
         groups={groups}
         onChange={(value) =>
@@ -88,7 +88,7 @@ export function TransitionEditor(props: TransitionEditorProps): JSX.Element {
         }
       />
       {customSelected ? (
-        <p className={styles.hint}>使用自定义动画；上方 Preset 作为自定义动画缺失时的回落。</p>
+        <p className={styles.hint}>使用自定义动画；上方预设作为自定义动画缺失时的回落。</p>
       ) : null}
       {inherited ? <p className={styles.hint}>继承上方全局过渡动画的参数。</p> : null}
       <Slider

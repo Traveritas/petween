@@ -1,10 +1,12 @@
 /**
  * client/settings/AmbientEditor.tsx — the three stackable ambient channels
  * (§17.4): Bounce / Sway / Breathing, each with an enable toggle and its own
- * parameters. Ranges mirror the host validation bounds (host/validation.ts):
- * strength 0..1.8, bounce interval 50..120000ms, bounce duration 50..5000ms,
- * sway angle 0..60°, period 200..120000ms. intervalMin never exceeds
- * intervalMax locally (the host 400s on that).
+ * parameters. UI copy calls the ambient concept 循环动画 (loop animation);
+ * the config field/kind stays `ambient`. Ranges mirror the host validation
+ * bounds (host/validation.ts): strength 0..1.8, bounce interval
+ * 50..120000ms, bounce duration 50..5000ms, sway angle 0..60°, period
+ * 200..120000ms. intervalMin never exceeds intervalMax locally (the host
+ * 400s on that).
  */
 import type { JSX } from 'react'
 import type { MotionPetConfig, PoseKey } from '../../core/types'
@@ -36,11 +38,11 @@ export function AmbientEditor(props: AmbientEditorProps): JSX.Element {
   }
 
   return (
-    <section className={styles.section} aria-label="环境动态">
-      <h3 className={styles.sectionTitle}>环境动态 Ambient</h3>
+    <section className={styles.section} aria-label="循环动画">
+      <h3 className={styles.sectionTitle}>循环动画</h3>
 
       <SelectRow
-        label="自定义环境"
+        label="自定义循环动画"
         value={ambient.customAnimationId ?? ''}
         options={customOptions}
         onChange={(value) =>
@@ -50,7 +52,7 @@ export function AmbientEditor(props: AmbientEditorProps): JSX.Element {
           })
         }
       />
-      <p className={styles.hint}>与下方内置通道同时播放，循环方式与时长取自动画定义。</p>
+      <p className={styles.hint}>与下方内置循环同时播放，循环方式与时长取自动画定义。</p>
 
       <Toggle
         label="Bounce 弹跳"

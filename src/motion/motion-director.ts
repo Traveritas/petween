@@ -97,6 +97,12 @@ export class MotionDirector {
   private readonly ambient: AmbientEngine
   private readonly playedInstances = new Set<TimelineInstance>()
   private current: MotionTarget | null = null
+  /**
+   * External target observers (the overlay session's snapshot notifications).
+   * Notified synchronously on every `current` assignment — setTarget is the
+   * only writer, so one hook covers every path.
+   */
+  private readonly targetListeners = new Set<(target: MotionTarget | null) => void>()
   private paused = false
   /** Settle-view of the in-flight enter transition (null = the stage is quiet). */
   private pendingTransition: Promise<void> | null = null
@@ -131,6 +137,7 @@ export class MotionDirector {
   async setTarget(target: MotionTarget): Promise<void> {
     const previous = this.current
     this.current = target
+    this.notifyTarget(target)
     if (previous !== null && previous.visualState === target.visualState) {
       if (previous.poseKey === target.poseKey) {
         // §10.3: identical visual target (e.g. streaming activity changes that
@@ -179,6 +186,24 @@ export class MotionDirector {
     return this.current
   }
 
+  /**
+   * Subscribe to target changes: fired synchronously at every `current`
+   * assignment. Null never occurs today (setTarget never clears) — the type
+   * keeps the door open for a future clear-on-dispose without breaking
+   * listeners. Listeners must not call back into the director synchronously.
+   */
+  subscribeTarget(listener: (target: MotionTarget | null) => void): () => void {
+    this.targetListeners.add(listener)
+    return () => {
+      this.targetListeners.delete(listener)
+    }
+  }
+
+  private notifyTarget(target: MotionTarget | null): void {
+    if (this.targetListeners.size === 0) return
+    for (const listener of [...this.targetListeners]) listener(target)
+  }
+
   /** True while an enter transition (setTarget/replayEnter) is in flight. */
   get transitionInFlight(): boolean {
     return this.pendingTransition !== null
@@ -194,9 +219,8 @@ export class MotionDirector {
   }
 
   stop(): void {
-    this.transitions.cancel()
+    this.invalidateEnterTransition()
     this.ambient.stop()
-    this.enterInstance = null
   }
 
   /**
@@ -252,6 +276,19 @@ export class MotionDirector {
   }
 
   /**
+   * External preemption of the in-flight enter transition (the extension
+   * service's interrupt path): same §10.2 invalidation a real target or a
+   * silent swap performs — the interrupted timeline can neither swap the pose
+   * nor restart ambient. A no-op when the stage is quiet: a spurious
+   * generation bump would needlessly invalidate live guards (e.g. a click
+   * flash restore riding on the same generation).
+   */
+  interruptEnterTransition(): void {
+    if (this.pendingTransition === null) return
+    this.invalidateEnterTransition()
+  }
+
+  /**
    * §15.2 silent pose change (the activityTransition='none' path): the target
    * keeps the current visual state but carries a new poseKey. Any in-flight enter transition is invalidated via
    * the generation guard (cancel bumps it), so its pose-swap event can never
@@ -263,7 +300,7 @@ export class MotionDirector {
    * not needed here — sessions boot-preload every resolvable pose (§16.3).
    */
   private swapPoseSilently(target: MotionTarget): void {
-    this.transitions.cancel()
+    this.invalidateEnterTransition()
     const pose = this.options.resolvePose(target.poseKey)
     if (pose !== null && pose.asset.url !== this.stagePoseUrl) {
       this.options.stage.swapPose(pose)
@@ -356,7 +393,10 @@ export class MotionDirector {
     const definitionId = configured !== undefined && configured.kind === 'interaction' ? configured.id : BUILTIN_CLICK_POP.id
 
     const interactionGeneration = ++this.interactionGeneration
-    const transitionGeneration = this.transitions.currentGeneration
+    // §10.2 guard over the transition generation: a real target arriving
+    // mid-flash (runEnter/swapPoseSilently/external interrupt bumps it)
+    // preempts the swap-back below.
+    const enterGuard = this.captureEnterGuard()
     const flashPose = click.pose === null ? null : this.options.resolvePose(click.pose)
     if (flashPose !== null && flashPose.asset.url !== this.stagePoseUrl) {
       // Keep stagePoseUrl equal to what the stage actually shows, so a silent
@@ -370,10 +410,35 @@ export class MotionDirector {
     if (flashPose === null) return // no flash requested or resolvable: nothing to restore
     if (instance.status !== 'finished') return // cancelled (dispose): leave the stage alone
     if (interactionGeneration !== this.interactionGeneration) return // a newer click owns the restore
-    if (transitionGeneration !== this.transitions.currentGeneration) return // preempted by a real target
+    if (!enterGuard.isCurrent()) return // preempted by a real target
     const restore = this.current === null ? null : this.options.resolvePose(this.current.poseKey)
     if (restore === null || restore.asset.url === this.stagePoseUrl) return
     this.options.stage.swapPose(restore)
     this.stagePoseUrl = restore.asset.url
+  }
+
+  /**
+   * §10.2 generation-guard token: captures the TransitionEngine's current
+   * generation; isCurrent() flips false once any newer enter, a silent swap
+   * or interruptEnterTransition() bumps it. playInteraction's flash restore
+   * rides on this to detect preemption by a real target. Purely derived from
+   * the engine — no extra director state.
+   */
+  private captureEnterGuard(): { isCurrent(): boolean } {
+    const generation = this.transitions.currentGeneration
+    return { isCurrent: () => generation === this.transitions.currentGeneration }
+  }
+
+  /**
+   * §10.2 invalidation, the shared preemption path: bump the engine's
+   * generation and cancel its active instance. The interrupted timeline can
+   * then neither fire its pose-swap event (engine event guard) nor resolve
+   * completed (its play resolves false), so runEnter skips the ambient
+   * restart. Used by stop()/swapPoseSilently() and the public
+   * interruptEnterTransition().
+   */
+  private invalidateEnterTransition(): void {
+    this.transitions.cancel()
+    this.enterInstance = null
   }
 }

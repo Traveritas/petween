@@ -35,6 +35,14 @@ export interface DragControllerOptions {
   onDragEnd: (x: number, y: number) => void
   /** Pointer released without crossing the drag threshold. */
   onClick: () => void
+  /**
+   * The gesture crossed the drag threshold and became a real drag (fired
+   * exactly once per gesture; a click never fires it). The overlay session
+   * uses it to suspend an external position driver for the gesture's
+   * duration — the user's hand outranks any programmatic driver while it is
+   * on the pet.
+   */
+  onDragStart?: () => void
   /** Test seam; defaults to the live window size. */
   viewport?: () => { width: number; height: number }
 }
@@ -105,6 +113,7 @@ export class DragController {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
       this.dragging = true
       this.setDraggingCursor(true)
+      this.options.onDragStart?.()
     }
     this.last = this.clamp({ x: this.startPosition.x + dx, y: this.startPosition.y + dy })
     this.options.onMove(this.last.x, this.last.y)

@@ -9,18 +9,22 @@
  * (matchMedia + config override; the stage never listens itself), the §23
  * visibility policy (director.pause/resume — ambient phase preserved), drag
  * position persistence (§27: debounced PUT + hub broadcast), the §28 click
- * interaction, and window-resize re-clamping.
+ * interaction, and window-resize re-clamping. Since the extension service,
+ * it additionally exposes the motion-pet/client windows: stage snapshots,
+ * the exclusive position-driver lease, and by-id animation playback.
  */
 import { createPoseResolver } from '../core/pose-resolver'
 import { BUILTIN_INTERACTION_DEFINITIONS } from '../core/transition-presets'
 import type { AssetMeta, MotionPetConfig, PoseKey, ResolvedPose } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import { DshStateSource, getCurrentSessionSource } from '../integration/dsh/dsh-state-source'
+import type { TimelineInstance } from '../motion/animation-handle'
 import { createBuiltinRegistry, type AnimationRegistry } from '../motion/animation-registry'
 import { MotionDirector } from '../motion/motion-director'
 import { patchConfig as httpPatchConfig, type ConfigPatch } from './api'
 import type { ConfigHub, ConfigSnapshot } from './config-hub'
 import { syncCustomAnimations } from './custom-animations'
+import type { PlayAnimationOptions, PositionDriver, StageSnapshot } from './extension-service'
 import { DragController } from './overlay/drag-controller'
 import { clampStagePosition, DEFAULT_OVERLAY_MARGIN, type PetStage } from './overlay/pet-stage'
 
@@ -65,6 +69,16 @@ const defaultCreateStateSource = (
   return new DshStateSource({ config, director, sessionSource: getCurrentSessionSource() ?? undefined })
 }
 
+/**
+ * Session-side bookkeeping for a lent-out PositionDriver. `released` latches:
+ * after it flips, every driver method degrades (apply false, commit still
+ * persists whatever the session itself owns) and the lease can be re-granted.
+ */
+interface ActivePositionDriver {
+  released: boolean
+  dragListeners: Set<() => void>
+}
+
 /** config.overlay → px position; null means the §27 default corner. */
 function readOverlayPosition(config: MotionPetConfig): { x: number; y: number } | null {
   const { x, y } = config.overlay
@@ -94,6 +108,14 @@ export class OverlaySession {
   private disposed = false
   private started = false
   private poseRefreshSeq = 0
+  /** Extension service: synchronous snapshot subscribers. */
+  private readonly snapshotListeners = new Set<(snapshot: StageSnapshot) => void>()
+  /** Extension service: instances played through playExternal, for interrupts. */
+  private readonly externalInstances = new Set<TimelineInstance>()
+  /** Extension service: the current position-driver lease, if any. */
+  private activeDriver: ActivePositionDriver | null = null
+  /** Unsubscribes the director's target stream (snapshot notifications). */
+  private unsubscribeTarget: (() => void) | null = null
 
   constructor(options: OverlaySessionOptions) {
     const snapshot = options.hub.getCurrent()
@@ -124,6 +146,10 @@ export class OverlaySession {
       // Indirection: updateConfig swaps the resolver on config changes.
       resolvePose: (poseKey) => this.resolvePose(poseKey),
     })
+    // Extension service: every target assignment (state/pose change) is a
+    // snapshot event. Fired synchronously inside setTarget, before any
+    // transition segment runs — subscribers see the NEW target immediately.
+    this.unsubscribeTarget = this.director.subscribeTarget(() => this.notifySnapshot())
 
     this.position = readOverlayPosition(this.config)
     this.stage.setUserScale(this.config.global.scale)
@@ -143,7 +169,9 @@ export class OverlaySession {
       onMove: (x, y) => {
         this.position = { x, y }
         this.stage.setPosition(x, y)
+        this.notifySnapshot()
       },
+      onDragStart: () => this.handleUserDragStart(),
       onDragEnd: () => this.schedulePositionSave(),
       onClick: () => this.clickPop(),
     })
@@ -194,6 +222,7 @@ export class OverlaySession {
     this.started = true
     this.reconcileStateSource()
     await this.refreshCurrentPose()
+    this.notifySnapshot()
   }
 
   /**
@@ -253,17 +282,23 @@ export class OverlaySession {
       this.stateSource?.setTerminalTtls?.(this.config.global.successHoldMs, this.config.global.errorHoldMs)
     }
 
-    if (!this.drag.isDragging && this.saveTimer === null && !this.saveInFlight) {
+    // A local drag, a pending debounced save, an in-flight save OR a live
+    // position-driver lease means a local owner currently holds the position
+    // — remote overlay coordinates (editor drag, another tab) must not yank
+    // the pet out from under it.
+    if (!this.drag.isDragging && this.saveTimer === null && !this.saveInFlight && this.activeDriver === null) {
       this.position = readOverlayPosition(this.config)
       this.applyPosition()
     }
 
     if (!this.started) {
       await this.start() // the first boot found no image; retry now
+      this.notifySnapshot()
       return
     }
     this.reconcileStateSource()
     await this.refreshCurrentPose()
+    this.notifySnapshot()
   }
 
   /** §22: push the effective reduced-motion flag into stage + ambient engine. */
@@ -294,6 +329,18 @@ export class OverlaySession {
     if (this.disposed) return
     this.disposed = true
     this.stage.interactiveElement.removeEventListener('keydown', this.handleInteractiveKeydown)
+    // Extension service teardown: kill the lease (the lent-out driver's
+    // methods degrade from here on), drop the subscriber sets and dispose
+    // every externally played instance before the director goes.
+    if (this.activeDriver !== null) {
+      this.activeDriver.released = true
+      this.activeDriver = null
+    }
+    this.snapshotListeners.clear()
+    this.unsubscribeTarget?.()
+    this.unsubscribeTarget = null
+    for (const instance of this.externalInstances) instance.dispose()
+    this.externalInstances.clear()
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -312,6 +359,135 @@ export class OverlaySession {
     this.drag.dispose()
     this.director.dispose()
     this.mediaQuery = null
+  }
+
+  /**
+   * Extension service: the live stage snapshot. Null once disposed; the §27
+   * default corner (config overlay x/y still null) is folded into concrete
+   * viewport px so x/y are always meaningful coordinates, never null.
+   */
+  getStageSnapshot(): StageSnapshot | null {
+    if (this.disposed) return null
+    const target = this.director.currentTarget
+    const position = this.position ?? this.defaultPositionPx()
+    return {
+      x: position.x,
+      y: position.y,
+      scale: this.config.global.scale,
+      visualState: target === null ? null : target.visualState,
+      activityMode: target?.activityMode ?? null,
+      started: this.started,
+    }
+  }
+
+  /**
+   * Extension service: synchronous snapshot stream. Fires on drag moves,
+   * driver applies, hub config publishes, director target changes, session
+   * start and resize re-clamps; the service layer re-broadcasts to its own
+   * subscribers and pushes null across session teardown (it detaches first).
+   */
+  subscribeSnapshot(listener: (snapshot: StageSnapshot) => void): () => void {
+    this.snapshotListeners.add(listener)
+    return () => {
+      this.snapshotListeners.delete(listener)
+    }
+  }
+
+  /** Fan the current snapshot out; copied so a listener may unsubscribe mid-push. */
+  private notifySnapshot(): void {
+    if (this.disposed || this.snapshotListeners.size === 0) return
+    const snapshot = this.getStageSnapshot()
+    if (snapshot === null) return
+    for (const listener of [...this.snapshotListeners]) listener(snapshot)
+  }
+
+  /**
+   * Extension service: lend the position to ONE external driver at a time.
+   * While the lease is held the updateConfig guard ignores remote overlay
+   * coordinates; user drags suspend the driver (onUserDrag fires, apply
+   * returns false) until the gesture ends. The drag path itself stays the
+   * owner of persistence on drag-end; the driver persists via commit().
+   */
+  createPositionDriver(): PositionDriver | null {
+    if (this.disposed || this.activeDriver !== null) return null
+    const state: ActivePositionDriver = { released: false, dragListeners: new Set() }
+    const driver: PositionDriver = {
+      apply: (x, y) => {
+        if (state.released || this.disposed || this.drag.isDragging) return false
+        // Same contract as the drag path: clamp BEFORE storing (§27) — the
+        // stage re-clamps on apply, but this.position must never hold an
+        // off-screen value a later commit would persist.
+        const clamped = clampStagePosition(x, y, this.stage.stageSize, window.innerWidth, window.innerHeight)
+        this.position = clamped
+        this.stage.setPosition(clamped.x, clamped.y)
+        this.notifySnapshot()
+        return true
+      },
+      commit: async () => {
+        // A pending drag debounce carries the same (or staler) position —
+        // this immediate write supersedes it rather than double-writing.
+        if (this.saveTimer !== null) {
+          clearTimeout(this.saveTimer)
+          this.saveTimer = null
+        }
+        await this.persistPosition()
+      },
+      release: () => {
+        if (state.released) return
+        state.released = true
+        if (this.activeDriver === state) this.activeDriver = null
+        this.notifySnapshot()
+      },
+      onUserDrag: (listener) => {
+        state.dragListeners.add(listener)
+        return () => {
+          state.dragListeners.delete(listener)
+        }
+      },
+    }
+    this.activeDriver = state
+    return driver
+  }
+
+  /** DragController threshold crossing: suspend the external driver's applies. */
+  private handleUserDragStart(): void {
+    const state = this.activeDriver
+    if (state === null) return
+    for (const listener of [...state.dragListeners]) listener()
+  }
+
+  /**
+   * Extension service: play a registered animation (builtin: or the synced
+   * user: namespace) on the live stage by id; unknown id → null. The
+   * interrupt contract (PlayAnimationOptions): default true preempts — the
+   * in-flight enter transition is invalidated (§10.2 generation bump) and
+   * every previously lent-out instance is disposed; false gives up (null)
+   * when anything is playing. Instance tracking mirrors PreviewSession.
+   * playCustom: dropped the moment a run settles, disposed on interrupt and
+   * session teardown.
+   */
+  playExternal(id: string, options?: PlayAnimationOptions): TimelineInstance | null {
+    if (this.disposed) return null
+    if (this.registry.get(id) === undefined) return null
+    if (options?.interrupt ?? true) {
+      this.director.interruptEnterTransition()
+      for (const instance of this.externalInstances) instance.dispose()
+      this.externalInstances.clear()
+    } else {
+      if (this.director.transitionInFlight) return null
+      for (const instance of this.externalInstances) {
+        // A settled-but-not-yet-swept instance (microtask gap) is not playing.
+        const status = instance.status
+        if (status === 'running' || status === 'paused') return null
+      }
+    }
+    const instance = this.director.play(
+      id,
+      options?.strength === undefined ? {} : { params: { strength: options.strength } },
+    )
+    this.externalInstances.add(instance)
+    void instance.play().then(() => this.externalInstances.delete(instance))
+    return instance
   }
 
   /**
@@ -442,5 +618,6 @@ export class OverlaySession {
     // corner re-anchors itself via right/bottom CSS.
     if (this.disposed || this.position === null) return
     this.applyPosition()
+    this.notifySnapshot() // the re-clamp may have moved the snapshot x/y
   }
 }

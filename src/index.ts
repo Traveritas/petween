@@ -13,10 +13,13 @@ import { ConfigStore } from './host/config'
 import { registerEditorPage } from './host/editor-page'
 import { PetsStore, petSliceFromConfig } from './host/pets'
 import { registerRoutes, type RoutesDeps } from './host/routes'
+import { createMotionPetHostService } from './host/service'
 import { attachStateChannel } from './host/state-channel'
 
 export const name = 'motion-pet'
 export const inject = ['webServer']
+/** Loader metadata: this plugin owns the `motion-pet` companion service. */
+export const provide = ['motion-pet']
 
 // Community mount-once convention (M0 §1): the bundle patch and a standalone
 // install can both load this module; the second fiber must not double-
@@ -71,22 +74,29 @@ export function apply(ctx: Context) {
   return ctx.effect(() => {
     let disposeRoutes: (() => void) | null = null
     let disposeEditor: (() => void) | null = null
+    let disposeService: (() => void) | null = null
     try {
       disposeRoutes = registerRoutes(ctx, deps)
       // Standalone full-page settings editor at /motion-pet-editor/.
       disposeEditor = registerEditorPage(ctx)
       // M4: agent-state SSE channel (session/event + agent/status + agent/error).
       const channel = attachStateChannel(ctx)
+      // Companion service (L1): host plugins inject 'motion-pet' to register
+      // animations into the shared library. Provided last so a throw in any
+      // registration above never advertises a service whose routes are gone.
+      disposeService = ctx.provide('motion-pet', createMotionPetHostService(animationsStore))
       // Mark as mounted only once every registration succeeded: a mid-init
       // throw must not wedge later in-process reloads behind a stale flag.
       registry[MOUNT_FLAG] = true
       return () => {
+        disposeService?.()
         channel.dispose()
         disposeEditor?.()
         disposeRoutes?.()
         registry[MOUNT_FLAG] = undefined
       }
     } catch (error) {
+      disposeService?.() // roll back whatever registered before the throw
       disposeEditor?.() // roll back whatever registered before the throw
       disposeRoutes?.()
       registry[MOUNT_FLAG] = undefined

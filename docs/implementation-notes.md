@@ -519,3 +519,31 @@ reviewer 环境（Linux 解压 ZIP，pnpm symlink 被展平）无法独立跑 Vi
 - **中**：`writeLoop` 尾部无条件 emit `'saved'`，会覆盖 `cleanupReplacedAssets` await 窗口内新编辑的 `'dirty'`（UI 显示已保存、保存按钮禁用、beforeunload 不注册）。修复：尾部按 `this.dirty` 决定终态。
 - 小项：`removeImage` 在保存进行中保持 `'saving'`；宠物 rename/delete 非 active 目标同时跳过 dirty 与 failed-save 两道门（原实现只放宽 dirty 门）；revertConfig 注明"GET 窗口内的纯编辑按设计丢弃"。
 - 新增测试：并发导入（被取代导入数据仍落地）、清理窗口 dirty 保持、in-flight 保存中 removeImage 被 latest-wins 收编、failed-save 不阻塞非 active 重命名。
+
+## 附属插件扩展服务 — L1 + L2（2026-08-25）
+
+插件化评估的落地：主插件通过 cordis 服务向其他 DSH 插件开放三个能力窗口，附属插件 `inject` 对应服务名即可选装（服务出现自动加载、主插件卸载自动失效）。机制核实：rc.7 的宿主侧与浏览器侧（dsh-client-runtime 本身是完整 cordis Context 上的插件）都支持 `ctx.provide` + 静态 `inject`，跨插件协作走服务正是 client bundle purity gate 注释声明的官方预期路径。设计原则（用户拍板）：**主插件只提供能力、不做策略**——打断选项随每次点播请求携带、位置是否持久化由调用方决定、性能红线不对外强制；唯一硬规则是用户拖拽手势永远优先于程序驱动。
+
+### L1 宿主侧：`motion-pet`（src/host/service.ts）
+
+- `registerAnimation(definition)` 直接委托 `AnimationsStore.save`——同一套 schema 校验、`user:` 命名空间强制与原子写；附属插件约定用 `user:<pack>-<name>`（如 `user:motion-run-wall-bounce`）避免与编辑器自制动画及彼此冲突。
+- 幂等语义：同名重注册覆盖原文件（安装/升级幂等）；附属卸载后其动画**留在库中**由用户在编辑器管理——动画库以主插件为唯一权威。
+- 提供时机在全部路由注册成功之后（mount-once 旗标语义不变：中途失败不 advertise 服务）；入口同时声明 `export const provide = ['motion-pet']` 供 loader 排序。
+
+### L2 浏览器侧：`motion-pet/client`（src/client/extension-service.ts）
+
+cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 OverlaySession 时注册/注销，`clearActivePetSession` 带陈旧守卫；照 `installCurrentSessionSource` 的容忍缺席模式——overlay 随 enabled/图片可用性卸载重建，「无会话」是每个 API 都要优雅降级的正常窗口）。`client/index.ts` 是唯一碰 ctx 的文件。三窗口：
+
+- **快照**：`getStageSnapshot()` / `subscribeStage(cb)`（订阅即推当前值；位置/缩放/状态/会话生命周期变化同步推送）。§27 默认角折算成具体 px，x/y 永不 null。通知触发点：drag onMove、driver apply、updateConfig 两条退出路径、director target 变化（新 `subscribeTarget`）、start 完成、resize re-clamp。
+- **位置出借**：`requestPositionControl()` 独占租约（同一时刻最多一个驱动方）。`apply` 先 `clampStagePosition` 再落位（与拖拽同款数学，`this.position` 永不持有越界值）；`commit` 清 pending debounce 后走既有 `persistPosition`（overlay 切片 patch + hub 广播，不另写持久化路径）；`release` 归还。借出期间 `updateConfig` 的远端坐标守卫追加 `activeDriver === null`——方向盘借出后远端（编辑器/他 tab）不再拽宠物。
+- **点播**：`playAnimation(id, { interrupt?, strength? })`。registry（builtin: 与同步来的 user:）未命中返回 null。`interrupt: true`（默认）= `director.interruptEnterTransition()`（§10.2 generation 作废：被打断的 timeline 不得换 pose、不得重启 ambient）+ dispose 本服务之前点播的全部实例；`false` = 「有东西在播就放弃」（transitionInFlight 或本服务活跃实例，settle 未清扫的微任务间隙不算在播）。实例跟踪照 PreviewSession.playCustom。
+
+### 拖拽仲裁与 motion 层增量
+
+- DragController 新增可选 `onDragStart`（仅在跨越 4px 阈值时触发一次，click 不触发）：手势开始即挂起驱动方（`onUserDrag` 监听触发、`apply` 返回 false），手势结束自动恢复——「人的手永远赢」是唯一不开放的策略。
+- MotionDirector 新增 `subscribeTarget`（`current` 唯一赋值点后同步通知）与 `interruptEnterTransition()`（无在播 transition 时 no-op，防误杀在途 §10.2 守卫如 click flash 恢复）。原 `stop()`/`swapPoseSilently()` 的内联取消收编为 `invalidateEnterTransition()`；`swapPoseSilently` 的 `enterInstance` 清理由 settle 回调异步提前到同步，语义等价（唯一差异窗口内仅可能对已取消实例 pause/resume）。playInteraction 的 generation 逻辑实为**守卫**而非作废，故提炼为 `captureEnterGuard()` 供其专用，行为逐位不变。
+- 安全边界不变：附属只能注册受 schema 约束的 AnimationDefinition、点播注册表内既有的 id，不能注册新 motion property 或任意 JS（白名单哲学不破口）。
+
+### 验证
+
+新增 `tests/host/host-service.test.ts`（5）与 `tests/client/extension-service.test.ts`（16），drag-controller 增 onDragStart describe（1），plugin-entry 补服务生命周期断言。45 文件 / **724 用例**全绿，双工程 typecheck 零错误，四产物 build 通过。

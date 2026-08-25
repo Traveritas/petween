@@ -156,6 +156,42 @@ describe('DragController — viewport clamp (§27)', () => {
   })
 })
 
+describe('DragController — onDragStart seam', () => {
+  it('fires once when the threshold is crossed; a click never fires it', () => {
+    const handle = document.createElement('div')
+    document.body.appendChild(handle)
+    const dragStarts: number[] = []
+    const controller = new DragController({
+      handle,
+      stageSize: STAGE_SIZE,
+      getPosition: () => ({ x: 800, y: 500 }),
+      onMove: () => {},
+      onDragEnd: () => {},
+      onClick: () => {},
+      onDragStart: () => {
+        dragStarts.push(1)
+      },
+      viewport: () => VIEWPORT,
+    })
+
+    // a click: under the threshold, onDragStart stays silent
+    handle.dispatchEvent(pointer('pointerdown', 100, 100))
+    move(100 + DRAG_THRESHOLD_PX - 1, 100)
+    up(100 + DRAG_THRESHOLD_PX - 1, 100)
+    expect(dragStarts).toHaveLength(0)
+
+    // a drag: crossing the threshold fires exactly once, further moves do not re-fire
+    handle.dispatchEvent(pointer('pointerdown', 100, 100))
+    move(100 + DRAG_THRESHOLD_PX, 100)
+    expect(dragStarts).toHaveLength(1)
+    move(160, 140)
+    expect(dragStarts).toHaveLength(1)
+    up(160, 140)
+    expect(dragStarts).toHaveLength(1)
+    controller.dispose()
+  })
+})
+
 describe('DragController — gesture hygiene', () => {
   it('pointercancel after real travel still persists the final position', () => {
     const harness = setup()

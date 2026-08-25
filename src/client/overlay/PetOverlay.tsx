@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { configHub as sharedConfigHub, type ConfigHub, type ConfigSnapshot } from '../config-hub'
+import { clearActivePetSession, setActivePetSession } from '../extension-service'
 import { OverlaySession } from '../overlay-session'
 import { hasAnyUsableImage } from '../stores/editor-store'
 import { PetRenderer } from './PetRenderer'
@@ -53,16 +54,23 @@ export function PetOverlay(props: PetOverlayProps): JSX.Element | null {
   }, [hub])
 
   // The session binds to the stage; it must be disposed BEFORE the stage DOM
-  // goes (PetRenderer's onStage(null) contract).
+  // goes (PetRenderer's onStage(null) contract). Each live session is also the
+  // extension service's active session — registered on creation, unregistered
+  // BEFORE dispose so the service's final null push sees a live snapshot.
   const handleStage = useCallback(
     (stage: PetStage | null) => {
       if (stage === null) {
-        sessionRef.current?.dispose()
+        const session = sessionRef.current
         sessionRef.current = null
+        if (session !== null) {
+          clearActivePetSession(session)
+          session.dispose()
+        }
         return
       }
       const session = new OverlaySession({ stage, hub })
       sessionRef.current = session
+      setActivePetSession(session)
       void session.start()
     },
     [hub],
@@ -71,8 +79,12 @@ export function PetOverlay(props: PetOverlayProps): JSX.Element | null {
   // Backstop cleanup in case the slot fiber vanishes without a stage detach.
   useEffect(
     () => () => {
-      sessionRef.current?.dispose()
+      const session = sessionRef.current
       sessionRef.current = null
+      if (session !== null) {
+        clearActivePetSession(session)
+        session.dispose()
+      }
     },
     [],
   )

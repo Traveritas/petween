@@ -28,9 +28,17 @@ const ALL_ROUTES = [
 
 type EffectCallback = () => (() => void) | void
 
-const makeCtx = (options: { failOnPath?: string } = {}): { ctx: Context; routes: string[]; listeners: string[] } => {
+interface ProvidedService {
+  name: string
+  value: unknown
+}
+
+const makeCtx = (
+  options: { failOnPath?: string } = {},
+): { ctx: Context; routes: string[]; listeners: string[]; provides: ProvidedService[] } => {
   const routes: string[] = []
   const listeners: string[] = []
+  const provides: ProvidedService[] = []
   const ctx = {
     effect: (callback: EffectCallback): (() => void) => {
       const dispose = callback()
@@ -39,6 +47,13 @@ const makeCtx = (options: { failOnPath?: string } = {}): { ctx: Context; routes:
     on: (name: string): (() => void) => {
       listeners.push(name)
       return () => undefined
+    },
+    provide: (name: string, value: unknown): (() => void) => {
+      provides.push({ name, value })
+      return () => {
+        const index = provides.findIndex((entry) => entry.name === name)
+        if (index !== -1) provides.splice(index, 1)
+      }
     },
     webServer: {
       register: (route: { kind: string; path: string }): (() => void) => {
@@ -51,7 +66,7 @@ const makeCtx = (options: { failOnPath?: string } = {}): { ctx: Context; routes:
       },
     },
   }
-  return { ctx: ctx as unknown as Context, routes, listeners }
+  return { ctx: ctx as unknown as Context, routes, listeners, provides }
 }
 
 afterEach(() => {
@@ -64,11 +79,13 @@ describe('host apply — mount-once flag', () => {
     apply(first.ctx)
     expect(first.routes).toEqual(ALL_ROUTES)
     expect(first.listeners).toEqual(['session/event', 'agent/status', 'agent/error', 'session/disposed'])
+    expect(first.provides.map((entry) => entry.name)).toEqual(['motion-pet'])
 
     const second = makeCtx()
     apply(second.ctx)
     expect(second.routes).toHaveLength(0)
     expect(second.listeners).toHaveLength(0)
+    expect(second.provides).toHaveLength(0)
   })
 
   it('a mid-init failure releases the flag and rolls back: a retry mounts cleanly', () => {
@@ -76,6 +93,8 @@ describe('host apply — mount-once flag', () => {
     expect(() => apply(failing.ctx)).toThrow(/duplicate/)
     // the config/asset routes registered before the throw were rolled back
     expect(failing.routes).toEqual([])
+    // the service is provided last: a mid-init throw never advertises it
+    expect(failing.provides).toEqual([])
 
     const retry = makeCtx()
     apply(retry.ctx)
@@ -88,9 +107,11 @@ describe('host apply — mount-once flag', () => {
     expect(typeof dispose).toBe('function')
     dispose()
     expect(first.routes).toEqual([])
+    expect(first.provides).toEqual([])
 
     const second = makeCtx()
     apply(second.ctx)
     expect(second.routes).toEqual(ALL_ROUTES)
+    expect(second.provides.map((entry) => entry.name)).toEqual(['motion-pet'])
   })
 })

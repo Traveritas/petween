@@ -4,6 +4,7 @@
 > 运行时小项、EXT-1 enter kind 契约、EXT-2 跨源写防护）见
 > `docs/implementation-notes.md` 同日条目，此处只收录**明确暂缓、待拍板**的内容。
 > 每项按「现状 → 影响 → 建议」组织；条目无优先级排序，做不做由后续迭代决定。
+> 2026-08-25 第二轮评审（附属 flashPose / 物理插件）新增条目见文末 D 节。
 
 ---
 
@@ -149,3 +150,44 @@
   （自定义 transition 结尾停在非中性值会永久停留）。
 - motion-format.md 内置 id 清单遗漏 `builtin:activity-swap` 与四个 `builtin:click-*`。
 - 错误文案直接透传 host 英文信息（如 "invalid AnimationDefinition: …"）→ 面向用户中文化。
+
+---
+
+## D. 附属插件体系（2026-08-25 第二轮评审）
+
+> 来源：附属 `flashPose` / 抛掷物理插件上线后的真机反馈评审。已修复项
+> （M1/M2/M3、L1/L2，主插件；M5a/M5b 测试、L4，物理插件）见
+> `docs/implementation-notes.md` 同日条目，此处收录明确暂缓的条目。
+
+### D1. 位置租约在 commit 往返期间未还，快速再掷被吞（评审 M4，用户拍板不修）
+
+- 现状：物理插件落定路径是 `commit()`（一次配置 PUT + 广播的网络往返）完成后才
+  `release()`——这个顺序本身是正确性要求（先还租约会让远端 overlay 坐标覆盖落定
+  位置）。代价是往返期间租约仍被持有，用户此刻再次甩出会因 `requestPositionControl()`
+  返回 null 被静默吞掉。
+- 影响：本地 DSH 往返通常 <100ms，只有连环快掷能感知；丢的是一次手势，无状态损坏。
+- 建议（若将来要修）：方向是"commit 在途时允许新租约接管待写的位置"（旧 commit
+  的写内容被新手势立即取代，语义安全），需要在 OverlaySession 的
+  saveInFlight/persistPosition 上加一代际标记。用户结论：不好修就没必要修。
+
+### D2. commit 与在途防抖 PUT 的交错窗口（评审 L3，极窄）
+
+- 现状：用户拖拽结束的 300ms 防抖保存与附属 `driver.commit()` 都走
+  `persistPosition`（单飞行标志 saveInFlight，无排队）；commit 会清掉 pending
+  debounce 再立即写，但一次**已在途**的防抖 PUT 与随后的 commit PUT 之间仍是
+  last-write-wins，理论上旧坐标可晚到覆盖新坐标。
+- 影响：需要拖拽结束 ≤300ms 内恰好有附属落定 commit，且两次写到达 host 的顺序
+  发生倒置——极窄。host 侧 read-merge-write 按会话序列化，单写内无损坏。
+- 建议：真要修就在 persistPosition 加单调递增 writeSeq，晚到的响应/早发的旧写
+  丢弃；当前记录在案即可。
+
+### D3. 未来在 `motion-pet/client` 服务上暴露 isPlaying 查询，供附属节流
+
+- 现状：附属判断"有东西在播"只能靠 `playAnimation({ interrupt: false })` 返回
+  null 这一隐式信号；无法区分"enter 在播 / 点播实例在播 / 服务实例在播"，也不
+  能只查询不打扰。
+- 影响：多附属并存时，效果类播放（碰壁动画、滑动动画）缺少统一的节流依据，只能
+  各自靠去抖窗口。
+- 建议：服务 v2 加 `isPlaying(): { enter: boolean; external: boolean }` 之类的只读
+  查询（overlay-session 从 director.transitionInFlight + externalInstances 派生，
+  成本极低）。当前各附属自带去抖够用，暂缓。

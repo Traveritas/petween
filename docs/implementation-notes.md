@@ -560,3 +560,17 @@ cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 O
 **`dsh-motion-pet-physics` v0.1.0**（平级独立仓库，首个附属插件）：拖拽甩出 → 重力/碰壁反弹（半隐式欧拉纯函数引擎）→ 碰壁可选播放动画（默认 `user:physics-bounce-pop`，interaction kind——schema 强制 transition 恰好一个 pose-swap，纯变形只有 interaction 合法）与 flashPose（默认关）；落定 commit+release；人手抓取/页面隐藏/会话消失各有干净退出路径；同壁 150ms 效果去抖、20s 飞行兜底。3 文件 / 52 用例独立全绿，client bundle 纯净。**真机端到端**：link 安装成功，host 半经真实 `motion-pet` 服务完成首装注册（`~/.dsh/motion-pet/animations/user_physics-bounce-pop.json` 落盘核对无误）；浏览器侧视觉验证待用户重启 `dsh web`（验证时被无关第三方插件的进程锁挡住）。
 
 配置承载调查结论（对后续附属插件同样适用）：rc.7 **没有**外部插件的 schema 配置表单路径——Plugins 设置页只渲染插件自注册的卡片命名空间（dsh-client-ui-settings-plugins README："A served namespace no card claims renders nothing"），shell 冻结模块表无 schema-form，浏览器侧插件 entry 经 `loader.create({ name })` 创建不携带 config。附属的可调项当前以源码常量 + README 承载；要 UI 就得像主插件那样自带 settings 卡片。
+
+## flashPose 统一记账 + 附属物理地面滑动（2026-08-25，评审第二轮）
+
+主插件（commit `f23f7c4`）：附属 flashPose 上线后的真机反馈评审,核心结论是**pose 的多写入方（状态机 / 点击恢复 / 附属 flash / 配置热刷新）缺一本账**。统一方案:OverlaySession 持有"活跃 flash 保持"（pose + 截止时刻;holdMs≤0 为 Infinity,直到下个状态变化）,MotionDirector 持有 `stagePoseUrl` 台账并开放 `noteExternalPose(url)` 记账钩子;全部先红后绿修复:
+
+- **M1（保持期被广播截断）**：`updateConfig` 末尾无条件 `refreshCurrentPose`,看到舞台显示 flash pose ≠ 状态机 pose 就换回（B 落定 commit 的 hub.publish 是最常见触发者;网络往返时序导致"有时没那么快"）。修复:`refreshCurrentPose` 在保持期内跳过 pose 强制,保持结束由 flash 自己的恢复对齐（恢复时按**新配置**重新解析,期间错过的热编辑不丢失）。
+- **M2（stagePoseUrl 漂移卡死）**：flashPose 直写舞台绕过了 director 台账;holdMs=0 + activityTransition='none' + 新旧 poseKey 经 fallback 解析到同一 URL 时,`swapPoseSilently` 的跳过守卫误判"该 URL 已在台上"而漏换,宠物卡在闪换图。修复:所有带外 pose 写入（flash、恢复、两会话的 refreshCurrentPose）一律 `noteExternalPose` 记账——与 playInteraction 早已保持台账同步的做法对称;守卫本身（`swapPoseSilently` / playInteraction 两处）不改语义,只让输入变真。
+- **M3（点击顶保持,用户实测不复现）**：代码层证实假设——默认 `interactions.click.pose === null`,`playInteraction` 在 `flashPose === null` 时提前返回、完全不碰 pose,故默认配置下点击不可能顶掉保持（已加锁定测试固化该解释）。可达变体（用户配置了点击闪图）确实会截断:点击恢复现在经可选 `getExternalPoseHold` 接缝查询未决保持,活跃则恢复到**保持中的 pose**（非状态机 pose）,由保持自己的恢复/下个状态变化收尾;保持已过期则照常恢复。接缝可选,PreviewSession 与既有 director 语义零变化。
+- 保持的终止条件统一为:截止时刻**或** director target 变化（先到者）——目标变化即状态机收回 pose 所有权,enter/silent-swap 自己决定下一张图,避免恢复与在途 transition 打架。
+- **L1**：页面 hidden 时立即完成未决的定时恢复（纯换图无动画,不违反 §23;浏览器后台限流 timer 不会把闪图拖过截止）;**L2**：`DragController.dispose` 中断真实拖拽手势时补发 `onDragEnd`（与 pointercancel 同契约）,`OverlaySession.dispose` 相应先结束手势再落最终位置写——卸载瞬间的拖拽位置不再丢失。
+- 不修记账入 backlog:M4（commit 往返期间租约未还、快速再掷被吞——用户拍板"不好修就没必要修"）、L3（commit 与在途防抖 PUT 交错,极窄窗口）,以及"未来在服务上暴露 isPlaying 查询供附属节流"的想法,见 `docs/deferred-backlog.md`。
+- 验证：新增 9 测试（extension-service 4:广播不截断/同 URL 静默换图收回/默认点击不碰保持/配置点击闪图恢复到保持 pose;overlay-session 2:hidden 立即恢复/卸载中手势持久化;motion-director 3:记账后守卫为真/恢复到保持 pose/保持过期恢复常态,其中 drag-controller 原"dispose 静默"锁更新为新契约）。45 文件 / **741 用例**全绿,双工程 typecheck 零错误,四产物 build 通过。
+
+附属 `dsh-motion-pet-physics`（commit `b1a8f43`,99 用例,较 82 增 17）:落地**地面滑动**状态——弹跳后期预测反弹高度（vy²/2g,restitution 后）低于 `minBounceHeightPx`（默认 12px）即不再反弹、不触发碰壁效果,贴地滑动（vy=0、侧壁只夹不弹、`groundFriction` 默认 2/s 衰减）,低于 `settleSpeed` 照常落定;阈值调 0 恢复旧的连弹行为（用户注:"反复触发可能是一些人要的效果"）。新增配置 `physics.minBounceHeightPx` / `physics.groundFriction` / `slideAnimationId`（滑动开始播一次,默认 null）,卡片加"落地滑动"组,README 配置表同步。测试缺口补齐:M5a（settle 的 commit→release 顺序断言 + commit 失败仍 release 只告警）、M5b（路由 same-origin Origin 放行 / 'null' Origin 拒绝变体）、L4（config-hub 的 getConfig 未加载/加载失败路径返回 DEFAULT_CONFIG 克隆而非共享引用）。

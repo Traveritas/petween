@@ -84,7 +84,7 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 ```bash
 pnpm install
 pnpm run build       # tsc -b && tsdown → lib/index.js（host）、lib/client.js、lib/editor.js（独立编辑器页）、preview/preview.js
-pnpm vitest run      # 测试（tests/，649 用例）
+pnpm vitest run      # 测试（tests/，741 用例）
 pnpm run typecheck   # 双工程类型检查
 ```
 

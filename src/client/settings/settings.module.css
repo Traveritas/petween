@@ -33,11 +33,6 @@
   min-width: 0;
 }
 
-.hintFull {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
-}
-
 /* Pet preset switcher: select and actions share a row on wide screens and
    wrap naturally without compressing names on smaller editor windows. */
 .petToolbar {

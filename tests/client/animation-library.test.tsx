@@ -442,7 +442,7 @@ describe('AnimationLibrary — editing, validation, save', () => {
     act(() => libraryButton('应用 JSON').click())
     expect(librarySection().querySelector('textarea[aria-label="JSON 编辑"]')).toBeNull()
     expect(keyframeDiamonds('transition.scaleY')[1].getAttribute('aria-label')).toContain('@ 0.25')
-    expect(librarySection().querySelector('[aria-label="pose-swap 事件 @ 0.25"]')).not.toBeNull()
+    expect(librarySection().querySelector('[aria-label="pose-swap（换图）事件 @ 0.25"]')).not.toBeNull()
 
     // the read-only view stays in sync with visual edits
     stubRect(lane('transition.scaleY'), 0, 200)
@@ -477,12 +477,12 @@ describe('AnimationLibrary — editing, validation, save', () => {
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'ambient'))
     expect(librarySection().textContent).not.toContain('must not declare events')
-    expect(librarySection().querySelector('[aria-label^="pose-swap 事件"]')).toBeNull()
+    expect(librarySection().querySelector('[aria-label^="pose-swap"]')).toBeNull()
     expect(libraryButton('保存').disabled).toBe(false)
 
     // Back to transition adds the required pose-swap.
     act(() => choose(kindSelect, 'transition'))
-    expect(librarySection().querySelector('[aria-label="pose-swap 事件 @ 0.5"]')).not.toBeNull()
+    expect(librarySection().querySelector('[aria-label="pose-swap（换图）事件 @ 0.5"]')).not.toBeNull()
     expect(libraryButton('保存').disabled).toBe(false)
   })
 
@@ -494,7 +494,7 @@ describe('AnimationLibrary — editing, validation, save', () => {
     const kindSelect = libraryControlRow('类型').querySelector('select')
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'interaction'))
-    expect(librarySection().querySelector('[aria-label^="pose-swap 事件"]')).toBeNull()
+    expect(librarySection().querySelector('[aria-label^="pose-swap"]')).toBeNull()
     expect(librarySection().textContent).not.toContain('must not declare pose-swap')
     expect(libraryButton('保存').disabled).toBe(false)
 

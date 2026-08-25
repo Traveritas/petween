@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware for Agent Pets**。
 
-你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与环境动态（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
+你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与循环动画（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
 
 ![Overlay 宠物](docs/images/overlay.png)
 
@@ -10,7 +10,7 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware fo
 
 - **少量图片即可工作**：至少一张图；六个状态槽位（待机/思考/工作/等待/成功/错误）各自可配，缺失状态自动 fallback
 - **漫画式过渡动画**：Comic Pop / Soft / Jelly / Jump / Snap / Celebrate / Deflate，强度与时长可调
-- **状态环境动态**：六个状态可分别组合 Bounce（随机间隔）、Sway、Breathing，并挂载一个自定义环境动画
+- **状态循环动画**：六个状态可分别组合 Bounce（随机间隔）、Sway、Breathing，并挂载一个自定义循环动画
 - **Anchor 真实对齐**：换图时脚底不瞬移，squash/stretch 围绕地面锚点
 - **跟随 Agent 状态**：思考摇摆弹跳、等待用户时安静等待、完成时庆祝、出错时泄气——基于宿主事件归一化 + 状态稳定器，流式输出不会导致宠物乱跳
 - **可拖动、可缩放、位置持久化**；尊重 `prefers-reduced-motion`
@@ -54,7 +54,7 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 1. **管理宠物**：顶部「宠物」区可把当前配置保存为副本，或新建空白宠物；切换后，下面所有面板都编辑当前宠物。姿势、状态动画与整体缩放会自动镜像进当前预设。
 2. **导入图片**：在左侧选择状态（如「待机」），点击「更换图片」。支持 PNG / WebP / JPEG（JPEG 无透明背景，会提示）。推荐透明背景、近似正方形画布、角色完整的图片；不同姿势尽量保持角色视觉尺寸一致。
 3. **调 Anchor**：Anchor X/Y 标记角色的「脚底中心」（默认 0.5 / 0.96）。多张图的 Anchor 对齐后，切换姿势时角色不会瞬移。可用「图片缩放」微调大小。
-4. **调动画**：每个状态可选进入过渡（Preset / 强度 / 时长）与环境动态（自定义环境动画 + Bounce / Sway / Breathing）；「全局」区设置默认过渡、整体缩放（0.3~4.0）、减少动态（跟随系统 / 总是 / 从不）、成功/失败停留时长。底部动画库可创建和编辑自定义时间轴动画。
+4. **调动画**：每个状态可选进入过渡（Preset / 强度 / 时长）与循环动画（自定义循环动画 + Bounce / Sway / Breathing）；「全局」区设置默认过渡、整体缩放（0.3~4.0）、减少动态（跟随系统 / 总是 / 从不）、成功/失败停留时长。底部动画库可创建和编辑自定义时间轴动画。
 5. **实时预览**：右侧预览区点击状态按钮即可模拟状态切换（走与正式 Overlay 相同的渲染与状态机），改动会即时进入预览；点击“保存修改”后写入当前宠物预设，主界面的宠物会在数秒内跟进。
 
 也可以直接访问 `http://127.0.0.1:3080/motion-pet-editor/`（端口以你的 DSH web 配置为准）。

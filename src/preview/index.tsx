@@ -17,6 +17,7 @@ import { ManualStateSource } from '../client/manual-state-source'
 import { PetRenderer } from '../client/overlay/PetRenderer'
 import type { PetStage } from '../client/overlay/pet-stage'
 import { PreviewSession } from '../client/preview-session'
+import { STATE_LABELS } from '../client/settings/state-labels'
 
 /* ------------------------------------------------------------------ poses */
 
@@ -169,13 +170,13 @@ const DEFAULT_CUSTOM_DEFINITION = `{
 
 /* ------------------------------------------------------------------- UI --- */
 
-const STATE_BUTTONS: Array<{ label: string; slot: PoseKey; send: (source: ManualStateSource) => void }> = [
-  { label: 'Idle', slot: 'idle', send: (source) => source.sendState('idle') },
-  { label: 'Thinking', slot: 'thinking', send: (source) => source.sendState('active', 'thinking') },
-  { label: 'Working', slot: 'working', send: (source) => source.sendState('active', 'working') },
-  { label: 'Waiting', slot: 'waiting', send: (source) => source.sendState('waiting') },
-  { label: 'Success', slot: 'success', send: (source) => source.sendState('success') },
-  { label: 'Error', slot: 'error', send: (source) => source.sendState('error') },
+const STATE_BUTTONS: Array<{ slot: PoseKey; send: (source: ManualStateSource) => void }> = [
+  { slot: 'idle', send: (source) => source.sendState('idle') },
+  { slot: 'thinking', send: (source) => source.sendState('active', 'thinking') },
+  { slot: 'working', send: (source) => source.sendState('active', 'working') },
+  { slot: 'waiting', send: (source) => source.sendState('waiting') },
+  { slot: 'success', send: (source) => source.sendState('success') },
+  { slot: 'error', send: (source) => source.sendState('error') },
 ]
 
 const TRANSITION_PRESETS: readonly TransitionPreset[] = [
@@ -190,6 +191,27 @@ const TRANSITION_PRESETS: readonly TransitionPreset[] = [
   'celebrate',
   'deflate',
 ]
+
+/** Same wording as the editor's 过渡动画 select (raw preset id stays the value). */
+const PRESET_LABELS: Record<TransitionPreset, string> = {
+  global: '跟随全局',
+  none: '无',
+  soft: '柔和 Soft',
+  'comic-pop': '漫画弹出 Comic Pop',
+  jelly: '果冻 Jelly',
+  jump: '跳跃 Jump',
+  snap: '闪现 Snap',
+  flip: '翻转 Flip',
+  celebrate: '庆祝 Celebrate',
+  deflate: '泄气 Deflate',
+}
+
+/** Same wording as the editor's 减少动态 select. */
+const REDUCED_MOTION_LABELS = {
+  system: '跟随系统',
+  always: '始终减弱',
+  never: '从不减弱',
+} as const
 
 function Slider(props: {
   label: string
@@ -281,14 +303,14 @@ function App(): JSX.Element {
     try {
       parsed = JSON.parse(customText)
     } catch (error) {
-      setCustomMessage(`JSON parse error: ${(error as Error).message}`)
+      setCustomMessage(`JSON 解析失败：${(error as Error).message}`)
       return
     }
     try {
       assertValidAnimationDefinition(parsed)
       if (session.registry.get(parsed.id) === undefined) session.registry.register(parsed)
       session.playCustom(parsed.id)
-      setCustomMessage(`playing "${parsed.id}" — registered + executed with zero dedicated branches (§36)`)
+      setCustomMessage(`正在播放「${parsed.id}」—— 已注册并以零专用分支执行（§36）`)
     } catch (error) {
       setCustomMessage((error as Error).message)
     }
@@ -297,10 +319,10 @@ function App(): JSX.Element {
   return (
     <div className="app">
       <aside className="controls">
-        <h1>motion-pet preview</h1>
+        <h1>Motion Pet 预览</h1>
 
         <section>
-          <h2>State (ManualStateSource → StateMachine → MotionDirector)</h2>
+          <h2>状态（ManualStateSource → StateMachine → MotionDirector）</h2>
           <div className="state-buttons">
             {STATE_BUTTONS.map((button) => (
               <button
@@ -313,25 +335,25 @@ function App(): JSX.Element {
                   if (session !== null) button.send(session.source)
                 }}
               >
-                {button.label}
+                {STATE_LABELS[button.slot]}
               </button>
             ))}
           </div>
           <div className="row">
             <button type="button" onClick={() => void sessionRef.current?.director.replayEnter()}>
-              ▶ Replay Enter
+              ▶ 重播进入动画
             </button>
-            <Toggle label="Anchor marker" checked={showAnchor} onChange={setShowAnchor} />
+            <Toggle label="锚点十字" checked={showAnchor} onChange={setShowAnchor} />
           </div>
         </section>
 
         <section>
           <h2>
-            Slot: <code>{selected}</code>
+            当前状态：<code>{selected}</code>
           </h2>
-          <h3>Enter transition</h3>
+          <h3>进入过渡</h3>
           <label className="row">
-            <span className="label">Preset</span>
+            <span className="label">预设</span>
             <select
               value={appearance.enter.preset}
               onChange={(event) => {
@@ -341,14 +363,14 @@ function App(): JSX.Element {
             >
               {TRANSITION_PRESETS.map((preset) => (
                 <option key={preset} value={preset}>
-                  {preset}
+                  {PRESET_LABELS[preset]}
                 </option>
               ))}
             </select>
           </label>
-          {inherited ? <p className="hint">inherits the global transition below</p> : null}
+          {inherited ? <p className="hint">继承下方全局过渡</p> : null}
           <Slider
-            label="Strength"
+            label="强度"
             min={0}
             max={1.8}
             step={0.05}
@@ -360,7 +382,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Duration"
+            label="时长"
             min={80}
             max={650}
             step={10}
@@ -373,9 +395,9 @@ function App(): JSX.Element {
             }}
           />
 
-          <h3>Global transition</h3>
+          <h3>全局过渡</h3>
           <label className="row">
-            <span className="label">Preset</span>
+            <span className="label">预设</span>
             <select
               value={globalTransition.preset}
               onChange={(event) => {
@@ -385,13 +407,13 @@ function App(): JSX.Element {
             >
               {TRANSITION_PRESETS.filter((preset) => preset !== 'global').map((preset) => (
                 <option key={preset} value={preset}>
-                  {preset}
+                  {PRESET_LABELS[preset]}
                 </option>
               ))}
             </select>
           </label>
           <Slider
-            label="Strength"
+            label="强度"
             min={0}
             max={1.8}
             step={0.05}
@@ -402,7 +424,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Duration"
+            label="时长"
             min={80}
             max={650}
             step={10}
@@ -416,9 +438,9 @@ function App(): JSX.Element {
         </section>
 
         <section>
-          <h2>Ambient (slot: {selected})</h2>
+          <h2>循环动画（状态：{selected}）</h2>
           <Toggle
-            label="Bounce"
+            label="Bounce 弹跳"
             checked={ambient.bounce.enabled}
             onChange={(checked) => {
               ambient.bounce.enabled = checked
@@ -426,7 +448,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Strength"
+            label="强度"
             min={0}
             max={1.8}
             step={0.05}
@@ -437,7 +459,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Min interval"
+            label="最小间隔"
             min={200}
             max={3000}
             step={50}
@@ -450,7 +472,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Max interval"
+            label="最大间隔"
             min={200}
             max={3000}
             step={50}
@@ -462,7 +484,7 @@ function App(): JSX.Element {
             }}
           />
           <Toggle
-            label="Sway"
+            label="Sway 摇摆"
             checked={ambient.sway.enabled}
             onChange={(checked) => {
               ambient.sway.enabled = checked
@@ -470,7 +492,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Angle"
+            label="角度"
             min={0}
             max={15}
             step={0.1}
@@ -482,7 +504,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Period"
+            label="周期"
             min={800}
             max={8000}
             step={100}
@@ -494,7 +516,7 @@ function App(): JSX.Element {
             }}
           />
           <Toggle
-            label="Breathing"
+            label="Breathing 呼吸"
             checked={ambient.breathe.enabled}
             onChange={(checked) => {
               ambient.breathe.enabled = checked
@@ -502,7 +524,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Strength"
+            label="强度"
             min={0}
             max={1}
             step={0.02}
@@ -513,7 +535,7 @@ function App(): JSX.Element {
             }}
           />
           <Slider
-            label="Period"
+            label="周期"
             min={800}
             max={6000}
             step={100}
@@ -527,7 +549,7 @@ function App(): JSX.Element {
         </section>
 
         <section>
-          <h2>Reduced motion</h2>
+          <h2>减少动态</h2>
           <div className="row">
             {(['system', 'always', 'never'] as const).map((mode) => (
               <label key={mode} className="radio">
@@ -541,14 +563,14 @@ function App(): JSX.Element {
                     bump()
                   }}
                 />
-                <span>{mode}</span>
+                <span>{REDUCED_MOTION_LABELS[mode]}</span>
               </label>
             ))}
           </div>
         </section>
 
         <section>
-          <h2>Custom AnimationDefinition (§36)</h2>
+          <h2>自定义 AnimationDefinition（§36）</h2>
           <textarea
             className="custom-definition"
             spellCheck={false}
@@ -557,7 +579,7 @@ function App(): JSX.Element {
           />
           <div className="row">
             <button type="button" onClick={registerAndPlayCustom}>
-              Validate → register → play
+              校验 → 注册 → 播放
             </button>
           </div>
           {customMessage !== null ? <pre className="custom-message">{customMessage}</pre> : null}
@@ -568,7 +590,7 @@ function App(): JSX.Element {
         <div className="stage-box">
           <PetRenderer onStage={handleStage} showAnchorMarker={showAnchor} />
         </div>
-        <p className="hint">hidden tab? ambient + transitions pause via visibilitychange (§23)</p>
+        <p className="hint">标签页隐藏时，循环动画与过渡动画会通过 visibilitychange 暂停（§23）</p>
       </main>
     </div>
   )

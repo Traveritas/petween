@@ -5,7 +5,8 @@
 > 项目暂定名：`dsh-motion-pet`  
 > 目标平台：DeepSeek Harness（DSH）Web UI  
 > 状态：可直接交给编码智能体执行（Timeline Engine 架构版）  
-> 核心理念：**用少量静态 Pose 图片 + 程序化 Motion Engine，生成具有漫画感、弹性形变和环境动态的 Agent Pet。**
+> 核心理念：**用少量静态 Pose 图片 + 程序化 Motion Engine，生成具有漫画感、弹性形变和循环动画的 Agent Pet。**  
+> 术语对照：中文叙述中的「循环动画」即本规格技术体系里的 ambient（环境动画）能力——`AmbientEngine`、`states.*.ambient` 配置字段与 `bounce.*` / `sway.*` / `breathe.*` motion property 通道等标识符一律保留原名。
 
 
 ## v0.2 关键架构变更

@@ -237,14 +237,14 @@ describe('MotionPetSettings', () => {
     const api = makeApi(true)
     await render(api)
     // changePoseWithinActive is off by default: the select starts disabled
-    expect(findControlRow('活跃内切换动画').querySelector('select')?.disabled).toBe(true)
+    expect(findControlRow('活跃内换图方式').querySelector('select')?.disabled).toBe(true)
 
     const toggle = findControlRow('活跃状态内切换姿势').querySelector('input')
     if (toggle === null) throw new Error('change-pose toggle missing')
     act(() => toggle.click())
-    expect(findControlRow('活跃内切换动画').querySelector('select')?.disabled).toBe(false)
+    expect(findControlRow('活跃内换图方式').querySelector('select')?.disabled).toBe(false)
 
-    const select = findControlRow('活跃内切换动画').querySelector('select')
+    const select = findControlRow('活跃内换图方式').querySelector('select')
     if (select === null) throw new Error('activity-transition select missing')
     act(() => choose(select, 'state'))
     await saveChanges()

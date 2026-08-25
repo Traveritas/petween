@@ -471,7 +471,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 disabled={readOnly}
                 onChange={changeKind}
               />
-              <p className={styles.hint}>切换类型时会自动移除不适用的事件；切回过渡类型时会补充 pose-swap。</p>
+              <p className={styles.hint}>切换类型时会自动移除不适用的事件；切回过渡类型时会补充 pose-swap（换图）。</p>
               <NumberField
                 label="时长"
                 min={1}

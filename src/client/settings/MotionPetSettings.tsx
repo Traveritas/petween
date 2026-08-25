@@ -385,7 +385,7 @@ function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefini
             }
           />
           <SelectRow
-            label="活跃内切换动画"
+            label="活跃内换图方式"
             value={config.advanced.activityTransition}
             options={ACTIVITY_TRANSITION_OPTIONS}
             disabled={!config.advanced.changePoseWithinActive}

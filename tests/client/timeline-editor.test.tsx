@@ -206,10 +206,10 @@ describe('TimelineEditor — chrome per kind', () => {
     expect(container.textContent).toContain('50%')
     expect(container.textContent).toContain('100%')
     expect(q('[aria-label="事件轨"]')).toBeDefined()
-    expect(q('[aria-label="pose-swap 事件 @ 0.5"]')).toBeDefined()
+    expect(q('[aria-label="pose-swap（换图）事件 @ 0.5"]')).toBeDefined()
     expect(q('select[aria-label="添加粒子事件"]')).toBeDefined()
     // a valid lone pose-swap needs no heal button
-    expect(container.textContent).not.toContain('＋ 添加 pose-swap')
+    expect(container.textContent).not.toContain('＋ 添加 pose-swap（换图）')
     // no selection yet: the inspector slot shows the hint
     expect(container.querySelector('[aria-label="关键帧检查器"]')).toBeNull()
     expect(container.textContent).toContain('选中关键帧或事件标记进行编辑')
@@ -218,7 +218,7 @@ describe('TimelineEditor — chrome per kind', () => {
   it('interaction keeps the event overlay (particles only), ambient drops all event chrome', async () => {
     await mount('interaction', linearTracks(), [])
     expect(q('[aria-label="事件轨"]')).toBeDefined()
-    expect(container.querySelector('[aria-label^="pose-swap 事件"]')).toBeNull()
+    expect(container.querySelector('[aria-label^="pose-swap"]')).toBeNull()
     expect(q('select[aria-label="添加粒子事件"]')).toBeDefined()
 
     await remount('ambient', linearTracks(), [])
@@ -235,7 +235,7 @@ describe('TimelineEditor — keyframe creation and selection', () => {
     expect(keyframeDiamonds('transition.scaleY')).toHaveLength(3)
     const added = changes[0].tracks[0].keyframes[2]
     expect(added).toEqual({ at: 0.45, value: 1.45 }) // linear sample, no easing
-    expect(inspector().textContent).toContain('关键帧：transition.scaleY @ 0.45')
+    expect(inspector().textContent).toContain('关键帧：transition.scaleY（纵向挤压） @ 0.45')
 
     clickLane('transition.scaleY', 90) // same slot: no duplicate
     expect(changes).toHaveLength(1)
@@ -251,7 +251,7 @@ describe('TimelineEditor — keyframe creation and selection', () => {
     move(202) // 2px — under the 3px threshold
     up(202)
     expect(changes).toHaveLength(0)
-    expect(inspector().textContent).toContain('关键帧：transition.scaleY @ 1')
+    expect(inspector().textContent).toContain('关键帧：transition.scaleY（纵向挤压） @ 1')
   })
 })
 
@@ -415,6 +415,11 @@ describe('TimelineEditor — tracks', () => {
     expect(values).not.toContain('transition.scaleY')
     expect(values).not.toContain('transition.scaleX')
     expect(values).toContain('transition.rotation')
+    // display-layer Chinese gloss rides along; the raw value stays the contract
+    const rotationOption = [...select.querySelectorAll('option')].find(
+      (option) => option.value === 'transition.rotation',
+    )
+    expect(rotationOption?.textContent).toBe('transition.rotation（旋转）')
     const groups = [...select.querySelectorAll('optgroup')].map((group) => group.label)
     expect(groups).toEqual(['过渡层', '摇摆层', '弹跳层', '呼吸层'])
 
@@ -427,7 +432,7 @@ describe('TimelineEditor — tracks', () => {
       { at: 0.5, value: 0, easing: 'ease-out' },
       { at: 1, value: 0 },
     ])
-    expect(inspector().textContent).toContain('关键帧：transition.rotation @ 0')
+    expect(inspector().textContent).toContain('关键帧：transition.rotation（旋转） @ 0')
     expectValidDrafts('transition', changes)
   })
 
@@ -459,16 +464,16 @@ describe('TimelineEditor — events', () => {
     const { changes } = await mount('transition', linearTracks(), poseSwap())
     const overlay = q<HTMLElement>('[aria-label="事件轨"]')
     stubRect(overlay, 0, 200)
-    const marker = q<HTMLButtonElement>('[aria-label="pose-swap 事件 @ 0.5"]')
+    const marker = q<HTMLButtonElement>('[aria-label="pose-swap（换图）事件 @ 0.5"]')
     down(marker, 100)
     move(60) // 0.3
     move(500) // clamped to 1
     up(500)
     expect(changes.map((change) => change.events[0].at)).toEqual([0.3, 1])
-    expect(q('[aria-label="pose-swap 事件 @ 1"]')).toBeDefined()
+    expect(q('[aria-label="pose-swap（换图）事件 @ 1"]')).toBeDefined()
 
     // select it: the inspector offers no delete for the only pose-swap
-    down(q('[aria-label="pose-swap 事件 @ 1"]'), 200)
+    down(q('[aria-label="pose-swap（换图）事件 @ 1"]'), 200)
     up(200)
     const eventInspector = q<HTMLElement>('[aria-label="事件检查器"]')
     expect(eventInspector.textContent).toContain('不可删除')
@@ -512,7 +517,7 @@ describe('TimelineEditor — validation surfacing', () => {
     const { changes, validations } = await mount('transition', linearTracks(), [])
     expect(validations[0].some((error) => error.includes('pose-swap'))).toBe(true)
     expect(container.textContent).toContain('pose-swap')
-    const heal = [...container.querySelectorAll('button')].find((el) => el.textContent === '＋ 添加 pose-swap')
+    const heal = [...container.querySelectorAll('button')].find((el) => el.textContent === '＋ 添加 pose-swap（换图）')
     if (heal === undefined) throw new Error('heal button missing')
     act(() => heal.click())
     expect(changes[0].events).toEqual([{ at: 0.5, type: 'pose-swap' }])
@@ -523,7 +528,7 @@ describe('TimelineEditor — validation surfacing', () => {
   it('an interaction carrying a pose-swap (invalid input) can delete it to heal', async () => {
     const { changes, validations } = await mount('interaction', linearTracks(), poseSwap())
     expect(validations[0].some((error) => error.includes('pose-swap'))).toBe(true)
-    const marker = q<HTMLButtonElement>('[aria-label="pose-swap 事件 @ 0.5"]')
+    const marker = q<HTMLButtonElement>('[aria-label="pose-swap（换图）事件 @ 0.5"]')
     down(marker, 100)
     up(100)
     const eventInspector = q<HTMLElement>('[aria-label="事件检查器"]')

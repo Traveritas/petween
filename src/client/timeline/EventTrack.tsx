@@ -15,6 +15,7 @@ import { useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AnimationKind, ParticleEffectId, TimelineEvent } from '../../motion/animation-definition'
 import { NumberField, SelectRow } from '../settings/controls'
 import settingsStyles from '../settings/settings.module.css'
+import { eventTypeDisplayName } from './display-labels'
 import { beginPointerGesture } from './pointer-gesture'
 import { snapAt } from './timeline-model'
 import styles from './timeline.module.css'
@@ -26,7 +27,9 @@ export const PARTICLE_EFFECT_OPTIONS: ReadonlyArray<{ value: ParticleEffectId; l
 ]
 
 export function eventLabel(event: TimelineEvent): string {
-  return event.type === 'pose-swap' ? `pose-swap 事件 @ ${event.at}` : `粒子事件 ${event.effect} @ ${event.at}`
+  return event.type === 'pose-swap'
+    ? `${eventTypeDisplayName('pose-swap')}事件 @ ${event.at}`
+    : `粒子事件 ${event.effect} @ ${event.at}`
 }
 
 export interface EventTrackProps {
@@ -98,7 +101,7 @@ export function EventInspector(props: EventInspectorProps): JSX.Element {
       {event.type === 'particle' ? (
         <SelectRow label="特效" value={event.effect} options={PARTICLE_EFFECT_OPTIONS} onChange={props.onSetEffect} />
       ) : (
-        <p className={styles.hint}>过渡动画必须恰好包含一个 pose-swap，因此唯一的 pose-swap 不可删除。</p>
+        <p className={styles.hint}>过渡动画必须恰好包含一个 pose-swap（换图），因此唯一的 pose-swap 不可删除。</p>
       )}
       {deletable ? (
         <button type="button" className={settingsStyles.button} onClick={props.onDelete}>

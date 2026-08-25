@@ -7,6 +7,7 @@
  */
 import { useRef, type JSX, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { MotionTrack } from '../../motion/animation-definition'
+import { motionPropertyDisplayName } from './display-labels'
 import { beginPointerGesture } from './pointer-gesture'
 import { snapAt } from './timeline-model'
 import styles from './timeline.module.css'
@@ -51,8 +52,10 @@ export function TrackLane(props: TrackLaneProps): JSX.Element {
   return (
     <div className={styles.timelineRow}>
       <div className={styles.trackLabel}>
+        {/* Visible label carries the Chinese gloss; the tooltip keeps the raw
+            property as the canonical identifier for copy/reference. */}
         <span className={styles.trackProperty} title={track.property}>
-          {track.property}
+          {motionPropertyDisplayName(track.property)}
         </span>
         <button
           type="button"

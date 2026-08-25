@@ -585,3 +585,15 @@ cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 O
 - **测试同步**：motion-pet-settings（环境动态→循环动画 ×2、Anchor 十字→锚点十字、成功/失败停留→停留方式）、animation-library（Preset→预设 ×2、自定义环境→自定义循环动画 ×2）、editor-entry / motion-pet-card / editor-store 的环境动态断言。45 文件 / **741 用例**全绿，双工程 typecheck 零错误，四产物 build 通过。
 
 **发现但未改（待用户拍板）**：① 「活跃内切换动画」措辞略歧义（可读成"切换动画"而非"换图用的动画"），候选「活跃内换图方式」，涉及既有心智未动；② 动画库/TimelineEditor 面向 Motion Pack 作者，保留 pose-swap、transition.scaleY 等格式原文（与 motion-format.md 一致），普通用户路径（状态面板）不接触这些词；③ 独立 preview 页（src/preview/index.tsx）为开发者工具，全英文标签，刻意未纳入本轮中文化；④ development-spec.md 为规格存档，仍用规格术语「环境动态」，未追改。
+
+## 界面跟进五项：命名歧义 / 中文注释 / preview 中文化 / 规格措辞 / 死 CSS（2026-08-25）
+
+用户拍板的五项跟进，上一节「发现但未改」①~④ 全部落地。仍然只动 UI 文案、展示层映射与文档；配置字段名、动画 id、kind 值、HTTP API、引擎逻辑、JSON 视图零变化。
+
+- **「活跃内切换动画」→「活跃内换图方式」**：MotionPetSettings 高级区 SelectRow 标签（旧名可误读为"切换动画"，实为换图所用的方式）；下方提示本已是「按上方所选方式换图」无需再动。motion-pet-settings 测试三处断言同步。
+- **格式原文加中文注释（展示名映射表）**：新增 `src/client/timeline/display-labels.ts`——motion property 白名单（13 项）与事件类型的 Record 映射 + `motionPropertyDisplayName` / `eventTypeDisplayName`（未知值原样透传）。接入四处：TimelineEditor 添加轨道下拉 option 文本与「＋ 添加 pose-swap（换图）」按钮、TrackLane 可见轨道标签（title 提示保留裸 property 作规范标识）、KeyframeInspector 标题「关键帧：transition.scaleY（纵向挤压） @ 0.45」、EventTrack 的 `eventLabel`「pose-swap（换图）事件 @ …」及检视器提示；AnimationLibrary 类型切换提示同步。值全部不变（option value / aria-label 查询钩子 / JSON 视图原样）。
+- **preview 独立页中文化**：评估为单文件纯控件文案（无结构改动），全量落地——状态按钮改用 state-labels.ts 的 STATE_LABELS、过渡/循环动画/减少动态/预设下拉与滑杆标签对齐编辑器用语（Bounce 弹跳 / Sway 摇摆 / Breathing 呼吸 / 跟随系统…）、按钮「▶ 重播进入动画」「校验 → 注册 → 播放」、自定义定义反馈消息中文化、stage 提示与 index.html `<title>` 同步。未入 backlog。
+- **规格措辞同步**：development-spec.md 仅存一处中文功能名「环境动态」→「循环动画」（核心理念行），并在文档头部新增一行术语对照（「循环动画」即 ambient/环境动画，AmbientEngine / `states.*.ambient` / `bounce.*` 等标识符保留原名）；README 三处残留的「环境动态/环境动画」一并同步。交接包历史副本未动。
+- **删除 `.hintFull`**：grep 确认全仓仅 settings.module.css 定义自身一处引用（迁移后失引用），删除该类块。
+
+**验证**：timeline-editor / animation-library 测试断言同步（关键帧标题、pose-swap 事件标签、heal 按钮精确匹配、`^="pose-swap"` 前缀查询改为不空洞的形式），新增一处下拉展示名断言（option 文本 = `transition.rotation（旋转）`，value 不变）。45 文件 / **742 用例**全绿（数量与基线一致），双工程 typecheck 零错误，四产物 build 通过。

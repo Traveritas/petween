@@ -29,6 +29,7 @@ import {
   type MotionProperty,
 } from '../../motion/motion-properties'
 import settingsStyles from '../settings/settings.module.css'
+import { motionPropertyDisplayName } from './display-labels'
 import { EventInspector, EventTrack, PARTICLE_EFFECT_OPTIONS } from './EventTrack'
 import { KeyframeInspector } from './KeyframeInspector'
 import { TimelineRuler } from './TimelineRuler'
@@ -227,7 +228,7 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
               <optgroup key={layer} label={LAYER_LABELS[layer]}>
                 {available.map((property) => (
                   <option key={property} value={property}>
-                    {property}
+                    {motionPropertyDisplayName(property)}
                   </option>
                 ))}
               </optgroup>
@@ -253,7 +254,7 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
         ) : null}
         {kind === 'transition' && poseSwapCount === 0 ? (
           <button type="button" className={settingsStyles.button} onClick={handleAddPoseSwap}>
-            ＋ 添加 pose-swap
+            ＋ 添加 pose-swap（换图）
           </button>
         ) : null}
         <span className={styles.timelineHint}>

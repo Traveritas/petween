@@ -19,6 +19,7 @@ import { EASING_BEZIERS, isParameterizedValue, parseEasing } from '../../motion/
 import { MOTION_PROPERTIES } from '../../motion/motion-properties'
 import { NumberField, SelectRow } from '../settings/controls'
 import settingsStyles from '../settings/settings.module.css'
+import { motionPropertyDisplayName } from './display-labels'
 import { roundValue } from './timeline-model'
 import styles from './timeline.module.css'
 
@@ -104,7 +105,7 @@ export function KeyframeInspector(props: KeyframeInspectorProps): JSX.Element | 
   return (
     <div className={styles.inspector} aria-label="关键帧检查器">
       <div className={styles.inspectorTitle}>
-        关键帧：{props.track.property} @ {keyframe.at}
+        关键帧：{motionPropertyDisplayName(props.track.property)} @ {keyframe.at}
       </div>
       <NumberField
         label="时间 at"

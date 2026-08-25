@@ -236,6 +236,7 @@ export class PreviewSession {
     await this.stage.preload([next])
     if (this.disposed || seq !== this.poseRefreshSeq) return // superseded by a newer edit
     this.stage.swapPose(next)
+    this.director.noteExternalPose(next.asset.url)
   }
 
   /** §22: push the effective reduced-motion flag into stage + ambient engine. */

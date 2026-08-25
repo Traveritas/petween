@@ -225,16 +225,21 @@ describe('DragController — gesture hygiene', () => {
     harness.controller.dispose()
   })
 
-  it('dispose mid-gesture swallows the rest silently', () => {
+  it('dispose mid-gesture ends the drag with a final onDragEnd and swallows the rest (L2)', () => {
     const harness = setup()
     const onUp = vi.fn()
     down(harness, 100, 100)
     move(200, 200)
     harness.controller.dispose()
+    // Real travel happened: the gesture ends like a cancel — the final
+    // position is handed to onDragEnd so teardown can persist it.
+    expect(harness.clicks).toBe(0)
+    expect(harness.dragEnds).toEqual([{ x: 900, y: 600 }])
+    expect(harness.controller.isDragging).toBe(false)
     window.addEventListener('pointerup', onUp)
     up(200, 200)
-    expect(harness.clicks).toBe(0)
-    expect(harness.dragEnds).toHaveLength(0)
+    expect(harness.clicks).toBe(0) // the post-dispose gesture is dead
+    expect(harness.dragEnds).toHaveLength(1)
     window.removeEventListener('pointerup', onUp)
   })
 })

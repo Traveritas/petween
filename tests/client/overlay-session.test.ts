@@ -522,6 +522,39 @@ describe('OverlaySession — position, drag persistence, click (§27/§28)', () 
   })
 })
 
+describe('OverlaySession — flash hold + teardown edges (review round 2)', () => {
+  it('going hidden completes a pending flash restore immediately (L1)', async () => {
+    const context = setup()
+    const { session, image } = context
+    await boot(context)
+    expect(session.flashPose('success', 5000)).toBe(true)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+
+    setVisibility(true)
+    // The restore is a pure pose swap (no animation): complete it at hide
+    // time instead of letting a hidden-tab-throttled timer drag it out.
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-idle'))
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-idle')) // no late swap
+    session.dispose()
+  })
+
+  it('dispose mid-gesture still persists the dragged position (L2)', async () => {
+    const context = setup()
+    const { stage, session, patchConfig } = context
+    await boot(context)
+    const body = stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 940, 640))
+    expect(stage.element.style.left).toBe('880px')
+
+    session.dispose() // gesture interrupted by teardown
+    expect(patchConfig).toHaveBeenCalledTimes(1) // the final position was not lost
+    expect(patchConfig.mock.calls[0][0]).toEqual({ overlay: { x: 880, y: 624 } })
+  })
+})
+
 describe('OverlaySession — custom animation sync (V1.1)', () => {
   const makeCustom = (id: string, durationMs = 300): AnimationDefinition => ({
     version: 1,

@@ -569,6 +569,102 @@ describe('extension service — flashPose', () => {
   })
 })
 
+describe('extension service — flashPose competition (pose hold ledger)', () => {
+  const srcOf = (context: Setup): string | null => context.stage.interactiveElement.getAttribute('src')
+
+  it('a hub publish during the hold does not truncate the flashed pose (M1)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    expect(motionPetClientService.flashPose('success', 2000)).toBe(true)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    // The physics companion's settle commit broadcasts the config mid-hold —
+    // updateConfig's refresh pass must not force the state pose back early.
+    publish(context.hub, context.config, context.assets)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    await vi.advanceTimersByTimeAsync(1900)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // the hold's own restore realigned
+  })
+
+  it('holdMs=0: a later silent swap to the pre-flash URL re-owns the pose (M2)', async () => {
+    const context = setup((config) => {
+      config.advanced.activityTransition = 'none'
+      // thinking/working share the idle image through fallback resolution
+      delete config.poses.thinking.assetId
+      delete config.poses.working.assetId
+    })
+    setActivePetSession(context.session)
+    await boot(context)
+
+    const pending = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await settleTransitions()
+    await pending
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // thinking fell back to idle
+
+    expect(motionPetClientService.flashPose('success', 0)).toBe(true)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    // Same visual state, new poseKey: working ALSO resolves to the idle asset.
+    // Without the ledger the silent swap's same-URL guard strands the flash.
+    const silent = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'command',
+      poseKey: 'working',
+      reason: 'agent-state',
+    })
+    await silent
+    expect(srcOf(context)).toBe(assetUrl('asset-idle'))
+  })
+
+  it('a click without a configured click pose leaves a pending hold untouched (M3 default lock)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(motionPetClientService.flashPose('success', 1000)).toBe(true)
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointerup', 901, 600)) // a click
+    await settleTransitions() // the pop plays out; flashPose===null never touched the pose
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // the hold still rules its deadline
+  })
+
+  it('a configured click restore returns to the HELD pose instead of cutting the hold short (M3)', async () => {
+    const context = setup((config) => {
+      config.interactions.click.pose = 'success'
+    })
+    setActivePetSession(context.session)
+    await boot(context)
+
+    expect(motionPetClientService.flashPose('error', 5000)).toBe(true)
+    expect(srcOf(context)).toBe(assetUrl('asset-error'))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointerup', 901, 600))
+    expect(srcOf(context)).toBe(assetUrl('asset-success')) // the click's own flash
+
+    await settleTransitions()
+    await flushUntil(() => srcOf(context) === assetUrl('asset-error'))
+    expect(srcOf(context)).toBe(assetUrl('asset-error')) // back to the held pose, not idle
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // the hold's restore realigned at its deadline
+  })
+})
+
 describe('extension service — active session bridge', () => {
   it('a stale clear never detaches the current session', async () => {
     const first = setup()

@@ -72,7 +72,11 @@ export class DragController {
     if (this.disposed) return
     this.disposed = true
     this.options.handle.removeEventListener('pointerdown', this.handlePointerDown)
+    // An interrupted gesture with real travel ends like a cancel: the final
+    // position is handed to onDragEnd so teardown (unmount) can persist it.
+    const wasDragging = this.dragging
     this.endGesture(null)
+    if (wasDragging) this.options.onDragEnd(this.last.x, this.last.y)
   }
 
   private clamp(point: DragPoint): DragPoint {

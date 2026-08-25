@@ -47,6 +47,15 @@ export interface MotionDirectorOptions {
   config: MotionPetConfig
   /** Pose fallback resolution (core/pose-resolver); null = no image imported. */
   resolvePose: (poseKey: PoseKey) => ResolvedPose | null
+  /**
+   * External pose-hold ledger (the overlay session's attachment flashPose):
+   * returns the pose a hold is currently showing, or null when no hold is
+   * active. playInteraction's restore consults it so a click never cuts a
+   * pending hold short — the click returns to the HELD pose and the hold's
+   * own restore (its timer, or the next state change) realigns afterwards.
+   * Optional: without it the restore keeps its original semantics.
+   */
+  getExternalPoseHold?: () => ResolvedPose | null
 }
 
 /** A fully resolved enter-transition request (preset already dereferenced). */
@@ -289,6 +298,18 @@ export class MotionDirector {
   }
 
   /**
+   * Pose-ledger hook for external stage writers (the overlay session's
+   * flashPose and its restore): records that `url` is what the stage shows
+   * now. Without the note, a flash followed by a same-URL silent swap would
+   * trip the skip guard in swapPoseSilently and strand the flashed image
+   * (the M2 drift) — playInteraction already keeps the ledger honest for its
+   * own flash; this is the same bookkeeping for out-of-band writers.
+   */
+  noteExternalPose(url: string): void {
+    this.stagePoseUrl = url
+  }
+
+  /**
    * §15.2 silent pose change (the activityTransition='none' path): the target
    * keeps the current visual state but carries a new poseKey. Any in-flight enter transition is invalidated via
    * the generation guard (cancel bumps it), so its pose-swap event can never
@@ -411,6 +432,17 @@ export class MotionDirector {
     if (instance.status !== 'finished') return // cancelled (dispose): leave the stage alone
     if (interactionGeneration !== this.interactionGeneration) return // a newer click owns the restore
     if (!enterGuard.isCurrent()) return // preempted by a real target
+    // An external flash hold (attachment flashPose) owns the stage pose: the
+    // click returns to the HELD pose — never the state machine's pose — and
+    // the hold's own restore (timer or next state change) realigns later.
+    const held = this.options.getExternalPoseHold?.() ?? null
+    if (held !== null) {
+      if (held.asset.url !== this.stagePoseUrl) {
+        this.options.stage.swapPose(held)
+        this.stagePoseUrl = held.asset.url
+      }
+      return
+    }
     const restore = this.current === null ? null : this.options.resolvePose(this.current.poseKey)
     if (restore === null || restore.asset.url === this.stagePoseUrl) return
     this.options.stage.swapPose(restore)

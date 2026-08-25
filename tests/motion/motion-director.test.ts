@@ -473,6 +473,106 @@ describe('MotionDirector — playInteraction (§28)', () => {
   })
 })
 
+describe('MotionDirector — external pose ledger (flash holds)', () => {
+  const bootThinking = async (director: MotionDirector): Promise<void> => {
+    const pending = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await settleTransitions()
+    await pending
+  }
+
+  it('noteExternalPose keeps the silent-swap guard truthful after an out-of-band swap (M2)', async () => {
+    const { stage, config, director } = setup()
+    config.advanced.activityTransition = 'none'
+    config.poses.working.assetId = 'thinking' // working shares the thinking asset
+    await bootThinking(director)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking'])
+
+    // What the overlay session's flashPose does: a direct stage write plus a
+    // ledger note. Without the note, stagePoseUrl still says 'thinking' and
+    // the silent swap below would skip and strand the flashed image.
+    const resolve = createPoseResolver(config.poses, {
+      thinking: asset('thinking'),
+      success: asset('success'),
+    })
+    const flashed = resolve('success')
+    if (flashed === null) throw new Error('flash pose unresolvable')
+    stage.swapPose(flashed)
+    director.noteExternalPose(flashed.asset.url)
+
+    await director.setTarget(target({ visualState: 'active', activityMode: 'command', poseKey: 'working' }))
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'success', 'working'])
+    director.dispose()
+  })
+
+  it('playInteraction restores to a held external pose; the hold realigns later (M3)', async () => {
+    const stage = createFakeStage()
+    const registry = createBuiltinRegistry()
+    for (const definition of BUILTIN_INTERACTION_DEFINITIONS) registry.registerBuiltin(definition)
+    const config = createDefaultMotionPetConfig()
+    const assets: Record<string, AssetMeta> = {}
+    for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
+      assets[key] = asset(key)
+      config.poses[key].assetId = key
+    }
+    const resolvePose = createPoseResolver(config.poses, assets)
+    const held = resolvePose('error')
+    if (held === null) throw new Error('held pose unresolvable')
+    let holdActive = true
+    const director = new MotionDirector({
+      stage,
+      registry,
+      config,
+      resolvePose,
+      getExternalPoseHold: () => (holdActive ? held : null),
+    })
+    config.interactions.click.pose = 'success'
+    await bootThinking(director)
+
+    const done = director.playInteraction()
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'success']) // the click's flash
+
+    harness.finishPending()
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    // The pending external hold owns the stage pose: the click returned to
+    // the HELD pose (error), not the state machine's pose (thinking).
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'success', 'error'])
+    director.dispose()
+  })
+
+  it('playInteraction restores normally once the hold has expired', async () => {
+    const stage = createFakeStage()
+    const registry = createBuiltinRegistry()
+    for (const definition of BUILTIN_INTERACTION_DEFINITIONS) registry.registerBuiltin(definition)
+    const config = createDefaultMotionPetConfig()
+    const assets: Record<string, AssetMeta> = {}
+    for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
+      assets[key] = asset(key)
+      config.poses[key].assetId = key
+    }
+    const held = createPoseResolver(config.poses, assets)('error')
+    if (held === null) throw new Error('held pose unresolvable')
+    let holdActive = false // the hold ended before the click's animation did
+    const director = new MotionDirector({
+      stage,
+      registry,
+      config,
+      resolvePose: createPoseResolver(config.poses, assets),
+      getExternalPoseHold: () => (holdActive ? held : null),
+    })
+    config.interactions.click.pose = 'success'
+    await bootThinking(director)
+
+    const done = director.playInteraction()
+    holdActive = false // the hold's deadline passes mid-animation
+    harness.finishPending()
+    await vi.advanceTimersByTimeAsync(0)
+    await done
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'success', 'thinking'])
+    director.dispose()
+  })
+})
+
 describe('MotionDirector — custom definitions (§36 acceptance)', () => {
   it('registry.register(custom) + director.play(custom.id) executes with zero branches', async () => {
     const { stage, registry, director } = setup()

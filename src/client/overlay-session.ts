@@ -120,6 +120,15 @@ export class OverlaySession {
   private unsubscribeTarget: (() => void) | null = null
   /** Extension service: pending flashPose restore timer, if any. */
   private flashTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Extension service: the active external flash hold (attachment flashPose).
+   * `until` is a Date.now() deadline — Infinity for holdMs<=0 (hold until the
+   * next state change). One ledger for every pose writer: while a hold is
+   * active it owns the stage pose (refreshCurrentPose defers to its restore),
+   * and a director target change clears it (the state machine re-owns the
+   * pose through its own enter/silent-swap path).
+   */
+  private flashHold: { pose: ResolvedPose; until: number } | null = null
 
   constructor(options: OverlaySessionOptions) {
     const snapshot = options.hub.getCurrent()
@@ -149,11 +158,24 @@ export class OverlaySession {
       config: this.config,
       // Indirection: updateConfig swaps the resolver on config changes.
       resolvePose: (poseKey) => this.resolvePose(poseKey),
+      // Pose-hold ledger: while an attachment's flashPose hold is active, a
+      // click interaction's restore returns to the HELD pose instead of
+      // cutting the hold short (M3); the hold's own restore realigns.
+      getExternalPoseHold: () => {
+        const hold = this.flashHold
+        return hold !== null && Date.now() < hold.until ? hold.pose : null
+      },
     })
     // Extension service: every target assignment (state/pose change) is a
     // snapshot event. Fired synchronously inside setTarget, before any
     // transition segment runs — subscribers see the NEW target immediately.
-    this.unsubscribeTarget = this.director.subscribeTarget(() => this.notifySnapshot())
+    // It also ends any active flash hold: a new target's own enter/silent
+    // swap path decides what the stage shows next (the hold's restore would
+    // only fight it or no-op late).
+    this.unsubscribeTarget = this.director.subscribeTarget(() => {
+      this.clearFlashHold()
+      this.notifySnapshot()
+    })
 
     this.position = readOverlayPosition(this.config)
     this.stage.setUserScale(this.config.global.scale)
@@ -345,14 +367,15 @@ export class OverlaySession {
     }
     this.snapshotListeners.clear()
     this.userDragListeners.clear()
-    if (this.flashTimer !== null) {
-      clearTimeout(this.flashTimer)
-      this.flashTimer = null
-    }
+    this.clearFlashHold()
     this.unsubscribeTarget?.()
     this.unsubscribeTarget = null
     for (const instance of this.externalInstances) instance.dispose()
     this.externalInstances.clear()
+    // L2: end an interrupted drag gesture FIRST — its onDragEnd schedules the
+    // debounced save the block below then converts into the final write, so
+    // a teardown mid-gesture never loses the dragged position.
+    this.drag.dispose()
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -368,7 +391,6 @@ export class OverlaySession {
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.handleResize)
     }
-    this.drag.dispose()
     this.director.dispose()
     this.mediaQuery = null
   }
@@ -438,30 +460,57 @@ export class OverlaySession {
    * follows the refreshCurrentPose precedent (every pose is boot-preloaded,
    * §16.3); swapPose is idempotent by src, so a restore racing a real
    * transition's own swap is a no-op, and a transition firing during the
-   * hold simply plays from the flashed pose. A second flash replaces the
-   * pending restore; dispose cancels it (the stage is going away anyway).
+   * hold simply plays from the flashed pose (its target change also ends the
+   * hold). A second flash replaces the pending restore; dispose cancels it
+   * (the stage is going away anyway).
+   *
+   * Every write here goes through the director's pose ledger
+   * (noteExternalPose) so its silent-swap skip guard stays truthful — a
+   * flash followed by a same-URL silent swap must not skip the swap and
+   * strand the flashed image (M2).
    */
   flashPose(poseKey: PoseKey, holdMs: number): boolean {
     if (this.disposed) return false
     const pose = this.resolvePose(poseKey)
     if (pose === null) return false
     this.stage.swapPose(pose)
+    this.director.noteExternalPose(pose.asset.url)
+    this.clearFlashHold()
+    this.flashHold = { pose, until: holdMs > 0 ? Date.now() + holdMs : Number.POSITIVE_INFINITY }
+    if (!(holdMs > 0)) return true // hold until the next state change (the target hook clears it)
+    this.flashTimer = setTimeout(() => {
+      this.flashTimer = null
+      this.restoreFlashPose()
+    }, holdMs)
+    return true
+  }
+
+  /** Drop the hold state and its pending restore timer, if any. */
+  private clearFlashHold(): void {
     if (this.flashTimer !== null) {
       clearTimeout(this.flashTimer)
       this.flashTimer = null
     }
-    if (!(holdMs > 0)) return true // hold until the next state change
-    this.flashTimer = setTimeout(() => {
-      this.flashTimer = null
-      if (this.disposed) return
-      const target = this.director.currentTarget
-      if (target === null) return
-      const restore = this.resolvePose(target.poseKey)
-      if (restore === null) return
-      if (restore.asset.url === this.stage.currentPose?.asset.url) return
-      this.stage.swapPose(restore)
-    }, holdMs)
-    return true
+    this.flashHold = null
+  }
+
+  /**
+   * Complete the active flash hold: re-align the stage to the CURRENT
+   * target's freshly resolved pose (a config publish during the hold may
+   * have changed what that pose means) and record the write in the
+   * director's ledger. Runs at the hold deadline and, early, when the page
+   * goes hidden (the swap is pure image work — no animation — so completing
+   * it at hide time beats a hidden-tab-throttled timer).
+   */
+  private restoreFlashPose(): void {
+    this.clearFlashHold()
+    if (this.disposed) return
+    const target = this.director.currentTarget
+    if (target === null) return
+    const restore = this.resolvePose(target.poseKey)
+    if (restore === null) return
+    this.director.noteExternalPose(restore.asset.url)
+    if (restore.asset.url !== this.stage.currentPose?.asset.url) this.stage.swapPose(restore)
   }
 
   /**
@@ -567,6 +616,11 @@ export class OverlaySession {
    * resolved fresh values; the refresh leaves the stage to it.
    */
   private async refreshCurrentPose(): Promise<void> {
+    // M1: an active external flash hold owns the stage pose — forcing the
+    // state pose here (a hub publish's refresh pass) would truncate it. The
+    // hold's own restore re-resolves against the fresh config at its
+    // deadline, so nothing is lost by skipping.
+    if (this.flashHold !== null && Date.now() < this.flashHold.until) return
     const seq = ++this.poseRefreshSeq
     if (this.director.transitionInFlight) {
       await this.director.whenSettled()
@@ -588,6 +642,7 @@ export class OverlaySession {
     await this.stage.preload([next])
     if (this.disposed || seq !== this.poseRefreshSeq) return // superseded
     this.stage.swapPose(next)
+    this.director.noteExternalPose(next.asset.url)
   }
 
   /**
@@ -665,8 +720,16 @@ export class OverlaySession {
   private setHidden(hidden: boolean): void {
     if (hidden === this.hidden) return
     this.hidden = hidden
-    if (hidden) this.director.pause()
-    else this.director.resume()
+    if (hidden) {
+      // L1: a pending flash restore is a pure pose swap (no animation) —
+      // complete it now instead of letting a hidden-tab-throttled timer drag
+      // the flashed image past its deadline. (A holdMs<=0 hold has no
+      // restore to complete; the next state change still clears it.)
+      if (this.flashTimer !== null) this.restoreFlashPose()
+      this.director.pause()
+    } else {
+      this.director.resume()
+    }
   }
 
   private readonly handleMediaChange = (): void => {

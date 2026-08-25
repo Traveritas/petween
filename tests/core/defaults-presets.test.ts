@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { resolveAmbientChannel } from '../../src/core/ambient-presets'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import {
   BUILTIN_ACTIVITY_SWAP,
   BUILTIN_CELEBRATE,
@@ -24,7 +24,7 @@ import { validateAnimationDefinition, type ParameterizedValue } from '../../src/
 
 describe('default config (§26)', () => {
   it('matches the spec defaults', () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     expect(config.version).toBe(1)
     expect(config.enabled).toBe(true)
     expect(config.global).toEqual({
@@ -43,7 +43,7 @@ describe('default config (§26)', () => {
   })
 
   it('state appearances: enter presets and ambient defaults (§26, §11)', () => {
-    const { states } = createDefaultMotionPetConfig()
+    const { states } = createDefaultPetweenConfig()
     expect(states.idle.enter.preset).toBe('soft')
     expect(states.thinking.enter.preset).toBe('global')
     expect(states.working.enter.preset).toBe('global')
@@ -214,7 +214,7 @@ describe('built-in click interactions (§28)', () => {
 })
 
 describe('ambient config → timeline mapping (§8.16)', () => {
-  const { states } = createDefaultMotionPetConfig()
+  const { states } = createDefaultPetweenConfig()
 
   it('disabled channels resolve to null', () => {
     expect(resolveAmbientChannel('bounce', states.idle.ambient)).toBeNull()

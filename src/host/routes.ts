@@ -4,13 +4,13 @@
  * and error mapping are all hand-rolled (M0 finding §6).
  *
  * Registered routes:
- * - exact  `/api/motion-pet/config`     GET / PUT
- * - prefix `/api/motion-pet/assets`     POST (base path) / DELETE `<id>` subpath
- * - exact  `/api/motion-pet/animations` GET (V1.1)
- * - prefix `/api/motion-pet/animations` PUT / DELETE `<id>` subpath (V1.1)
- * - exact  `/api/motion-pet/pets`       GET / POST (V1.1)
- * - prefix `/api/motion-pet/pets`       PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
- * - prefix `/motion-pet-assets`         GET / HEAD `<id>` subpath (static)
+ * - exact  `/api/petween/config`     GET / PUT
+ * - prefix `/api/petween/assets`     POST (base path) / DELETE `<id>` subpath
+ * - exact  `/api/petween/animations` GET (V1.1)
+ * - prefix `/api/petween/animations` PUT / DELETE `<id>` subpath (V1.1)
+ * - exact  `/api/petween/pets`       GET / POST (V1.1)
+ * - prefix `/api/petween/pets`       PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
+ * - prefix `/petween-assets`         GET / HEAD `<id>` subpath (static)
  *
  * The `/api` prefix belongs to the connection gateway, but exact routes win
  * over prefixes, so the exact config route is safe (M0 finding §8); the
@@ -21,7 +21,7 @@
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import { AnimationError, validateAnimationId } from './animations'
@@ -29,11 +29,11 @@ import { AssetError } from './assets'
 import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
 import { ConfigValidationError, validateAssetId } from './validation'
 
-const CONFIG_PATH = '/api/motion-pet/config'
-const ASSETS_PATH = '/api/motion-pet/assets'
-const ANIMATIONS_PATH = '/api/motion-pet/animations'
-const PETS_PATH = '/api/motion-pet/pets'
-const STATIC_PATH = '/motion-pet-assets'
+const CONFIG_PATH = '/api/petween/config'
+const ASSETS_PATH = '/api/petween/assets'
+const ANIMATIONS_PATH = '/api/petween/animations'
+const PETS_PATH = '/api/petween/pets'
+const STATIC_PATH = '/petween-assets'
 
 const JSON_BODY_LIMIT = 64 * 1024 // M0 §2: dsh-pet's readJsonBody precedent
 /** multipart framing (boundary lines, headers) on top of the file bytes. */
@@ -41,14 +41,14 @@ const MULTIPART_FORM_OVERHEAD = 256 * 1024
 
 /** Everything the routes need from config/asset persistence, injected for tests. */
 export interface RoutesDeps {
-  loadConfig(): Promise<MotionPetConfig>
+  loadConfig(): Promise<PetweenConfig>
   /**
    * PUT path: strictly validate the patch against the current config and
    * atomically save it, resolving the merged config. Implementations must
    * serialize concurrent calls (ConfigStore.update) — a bare read-modify-write
    * loses fields when two writers overlap.
    */
-  updateConfig(patch: unknown): Promise<MotionPetConfig>
+  updateConfig(patch: unknown): Promise<PetweenConfig>
   listAssets(): Promise<Record<string, AssetMeta>>
   saveAsset(buffer: Buffer, declaredMime: string | undefined): Promise<AssetMeta>
   deleteAsset(id: string, referencedBy: (assetId: string) => boolean): Promise<void>
@@ -323,12 +323,12 @@ async function handleAnimationsIndex(req: IncomingMessage, res: ServerResponse, 
 }
 
 /** A state references an animation via its enter or custom ambient timeline. */
-function stateReferencesAnimation(state: MotionPetConfig['states'][PoseKey], id: string): boolean {
+function stateReferencesAnimation(state: PetweenConfig['states'][PoseKey], id: string): boolean {
   return state.enter.animationId === id || state.ambient.customAnimationId === id
 }
 
 /** A config references an animation via a state timeline or the click interaction. */
-function animationReferenced(config: MotionPetConfig, id: string): boolean {
+function animationReferenced(config: PetweenConfig, id: string): boolean {
   if (config.interactions.click.animation === id) return true
   return POSE_KEYS.some((key) => stateReferencesAnimation(config.states[key], id))
 }

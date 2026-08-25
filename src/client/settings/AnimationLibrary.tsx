@@ -1,6 +1,6 @@
 /**
  * client/settings/AnimationLibrary.tsx — the V1.1 animation library.
- * Standalone editor page only (MotionPetSettings renders it in wide mode):
+ * Standalone editor page only (PetweenSettings renders it in wide mode):
  * built-in definitions (cloneable) and the host-persisted customs on the
  * left; the scalar form (name / kind / durationMs / repeat) plus the visual
  * TimelineEditor (P1) on the right, with a collapsible JSON view for
@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { BUILTIN_AMBIENT_DEFINITIONS } from '../../core/ambient-presets'
 import { BUILTIN_INTERACTION_DEFINITIONS, BUILTIN_TRANSITION_DEFINITIONS } from '../../core/transition-presets'
-import type { AssetMeta, MotionPetConfig } from '../../core/types'
+import type { AssetMeta, PetweenConfig } from '../../core/types'
 import type {
   AnimationDefinition,
   AnimationKind,
@@ -153,7 +153,7 @@ function evaluateDraft(
 export interface AnimationLibraryProps {
   store: EditorStore
   customs: AnimationDefinition[]
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   configRevision: number
 }

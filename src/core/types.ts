@@ -113,7 +113,7 @@ export interface StateAppearance {
 }
 
 /** Root persisted config, version 1 (spec §7.7). */
-export interface MotionPetConfig {
+export interface PetweenConfig {
   version: 1
   enabled: boolean
   global: {
@@ -167,7 +167,7 @@ export interface MotionPetConfig {
   activePetId: string | null
 }
 
-/** Same-state pose-swap animation policy for MotionPetConfig.advanced. */
+/** Same-state pose-swap animation policy for PetweenConfig.advanced. */
 export type ActivityTransition = 'subtle' | 'none' | 'state'
 
 /**
@@ -181,7 +181,7 @@ export interface ClickInteraction {
   pose: PoseKey | null
 }
 
-/** Terminal-state exit policy for MotionPetConfig.advanced.terminalHold. */
+/** Terminal-state exit policy for PetweenConfig.advanced.terminalHold. */
 export type TerminalHold = 'timed' | 'until-interaction'
 
 /** The preset-owned slice of the config (V1.1 pet presets, host/pets.ts). */

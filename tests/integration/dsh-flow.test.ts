@@ -11,9 +11,9 @@
  * THINKING→TOOL→THINKING never plays a full transition (ambient-only).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { createPoseResolver } from '../../src/core/pose-resolver'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import { DshStateSource } from '../../src/integration/dsh/dsh-state-source'
 import {
   normalizeAgentStatus,
@@ -50,7 +50,7 @@ class FakeEventSource implements EventSourceLike {
 
 let harness: FakeAnimateHarness
 let stage: FakeStage
-let config: MotionPetConfig
+let config: PetweenConfig
 let director: MotionDirector
 let source: DshStateSource
 let clock = 0
@@ -60,7 +60,7 @@ beforeEach(() => {
   harness = installFakeAnimate()
   stage = createFakeStage()
   clock = 0
-  config = createDefaultMotionPetConfig()
+  config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
     assets[key] = {
@@ -71,7 +71,7 @@ beforeEach(() => {
       height: 240,
       sizeBytes: 1024,
       sha256: `sha-${key}`,
-      url: `/motion-pet-assets/${key}.webp`,
+      url: `/petween-assets/${key}.webp`,
     }
     config.poses[key].assetId = key
   }

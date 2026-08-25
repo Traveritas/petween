@@ -1,8 +1,8 @@
 /**
- * host service (ctx.provide('motion-pet')) — the companion-facing registration
+ * host service (ctx.provide('petween')) — the companion-facing registration
  * surface (L1).
  *
- * Unit level: createMotionPetHostService over a real AnimationsStore in a
+ * Unit level: createPetweenHostService over a real AnimationsStore in a
  * tmpdir. save() already validates the schema, enforces the `user:` id
  * namespace and persists atomically — the service must not weaken any of
  * that, so every rejection path is asserted with its error code.
@@ -10,7 +10,7 @@
  * Entry level: src/index.ts provides the service once every route
  * registration succeeded (see plugin-entry.test.ts for the mount-once flag
  * interplay); here we only pin the provided shape so companions can code
- * against `inject: ['motion-pet']`.
+ * against `inject: ['petween']`.
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -19,10 +19,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply } from '../../src/index'
 import { AnimationsStore, AnimationError } from '../../src/host/animations'
-import { createMotionPetHostService, type MotionPetHostService } from '../../src/host/service'
+import { createPetweenHostService, type PetweenHostService } from '../../src/host/service'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
-const MOUNT_FLAG = Symbol.for('dsh-motion-pet/host')
+const MOUNT_FLAG = Symbol.for('petween/host')
 
 let dir: string | undefined
 
@@ -58,11 +58,11 @@ const makeTransition = (id: string): AnimationDefinition => ({
   events: [{ at: 0.5, type: 'pose-swap' }],
 })
 
-describe('createMotionPetHostService', () => {
+describe('createPetweenHostService', () => {
   it('persists a valid definition into the shared library', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
     const store = makeStore()
-    const service = createMotionPetHostService(store)
+    const service = createPetweenHostService(store)
 
     await service.registerAnimation(makeTransition('user:motion-run-wall-bounce'))
 
@@ -72,8 +72,8 @@ describe('createMotionPetHostService', () => {
   })
 
   it('rejects schema violations with INVALID_DEFINITION', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
-    const service = createMotionPetHostService(makeStore())
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
+    const service = createPetweenHostService(makeStore())
     const broken = makeTransition('user:broken')
     // Keyframe times are normalized 0..1 — an `at` beyond 1 must be rejected.
     broken.tracks[0]!.keyframes[0]!.at = 1.5
@@ -86,8 +86,8 @@ describe('createMotionPetHostService', () => {
   })
 
   it("rejects ids outside the user: namespace (builtin:, pack:, bare)", async () => {
-    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
-    const service = createMotionPetHostService(makeStore())
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
+    const service = createPetweenHostService(makeStore())
 
     for (const id of ['builtin:wall-bounce', 'pack:wall-bounce', 'wall-bounce']) {
       await expect(service.registerAnimation(makeTransition(id))).rejects.toBeInstanceOf(AnimationError)
@@ -95,9 +95,9 @@ describe('createMotionPetHostService', () => {
   })
 
   it('re-registering the same id overwrites in place (idempotent installs)', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
     const store = makeStore()
-    const service = createMotionPetHostService(store)
+    const service = createPetweenHostService(store)
 
     const first = makeTransition('user:motion-run-wall-bounce')
     first.durationMs = 200
@@ -112,8 +112,8 @@ describe('createMotionPetHostService', () => {
   })
 
   it('hasAnimation reports library membership (first-install guard)', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
-    const service = createMotionPetHostService(makeStore())
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
+    const service = createPetweenHostService(makeStore())
 
     await expect(service.hasAnimation('user:motion-run-wall-bounce')).resolves.toBe(false)
     await service.registerAnimation(makeTransition('user:motion-run-wall-bounce'))
@@ -147,12 +147,12 @@ describe('host entry provides the service', () => {
     return { ctx: ctx as unknown as Context, provides }
   }
 
-  it("provides 'motion-pet' with the v1 shape", () => {
+  it("provides 'petween' with the v1 shape", () => {
     const { ctx, provides } = makeCtx()
     apply(ctx)
 
-    expect(provides.map((entry) => entry.name)).toEqual(['motion-pet'])
-    const service = provides[0]!.value as MotionPetHostService
+    expect(provides.map((entry) => entry.name)).toEqual(['petween'])
+    const service = provides[0]!.value as PetweenHostService
     expect(service.version).toBe(1)
     expect(typeof service.registerAnimation).toBe('function')
   })

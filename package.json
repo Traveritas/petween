@@ -1,14 +1,14 @@
 {
-  "name": "dsh-motion-pet",
-  "version": "1.1.0",
-  "description": "DSH Web UI motion pet — animation middleware for agent pets (Host + Client dual-half plugin)",
+  "name": "petween",
+  "version": "1.2.0",
+  "description": "Petween — DSH Web UI motion pet: animation middleware for agent pets (Host + Client dual-half plugin)",
   "license": "MIT",
   "packageManager": "pnpm@10.34.5",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Traveritas/dsh-motion-pet.git"
+    "url": "https://github.com/Traveritas/petween.git"
   },
-  "homepage": "https://github.com/Traveritas/dsh-motion-pet",
+  "homepage": "https://github.com/Traveritas/petween",
   "keywords": [
     "dsh",
     "deepseek-harness",

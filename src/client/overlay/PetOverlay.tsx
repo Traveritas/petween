@@ -38,7 +38,7 @@ export function PetOverlay(props: PetOverlayProps): JSX.Element | null {
           if (active) setSnapshot(loaded)
         },
         (error: unknown) => {
-          console.error('motion-pet: failed to load the config', error)
+          console.error('petween: failed to load the config', error)
         },
       )
     }

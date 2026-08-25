@@ -17,7 +17,7 @@ let assetsDir: string
 let manifestPath: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'motion-pet-assets-'))
+  dir = await mkdtemp(join(tmpdir(), 'petween-assets-'))
   assetsDir = join(dir, 'assets')
   manifestPath = join(dir, 'assets.json')
   store = new AssetStore({ assetsDir, manifestPath })
@@ -64,7 +64,7 @@ describe('AssetStore.save (§20)', () => {
       width: 2,
       height: 3,
       sizeBytes: png.length,
-      url: `/motion-pet-assets/${meta.id}`,
+      url: `/petween-assets/${meta.id}`,
     })
     expect(meta.sha256).toMatch(/^[0-9a-f]{64}$/)
     // Disk file uses the host-generated name and carries the exact bytes.

@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigHub } from '../../src/client/config-hub'
 import { OverlaySession, type OverlayStateSourceHandle } from '../../src/client/overlay-session'
 import { PetStage } from '../../src/client/overlay/pet-stage'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
@@ -53,7 +53,7 @@ const makeAsset = (id: string): AssetMeta => ({
 interface Setup {
   session: OverlaySession
   hub: ConfigHub
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   factory: ReturnType<typeof vi.fn>
   handles: OverlayStateSourceHandle[]
@@ -63,7 +63,7 @@ const setup = (options?: { withImages?: boolean }): Setup => {
   const withImages = options?.withImages ?? true
   const stage = new PetStage()
   document.body.appendChild(stage.element)
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   if (withImages) {
     for (const key of POSE_KEYS) {

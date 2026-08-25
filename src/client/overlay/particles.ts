@@ -146,7 +146,7 @@ export class ParticleEmitter {
 
   private spawn(spec: ParticleEffectSpec): void {
     const element = document.createElement('div')
-    element.className = 'dsh-motion-pet-particle'
+    element.className = 'petween-particle'
     this.styleParticle(element, spec)
 
     const angle = Math.random() * Math.PI * 2

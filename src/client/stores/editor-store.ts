@@ -14,7 +14,7 @@
  * saveAnimation/deleteAnimation hit the API immediately and broadcast the
  * customs list through the hub; they never touch the config draft.
  */
-import type { AssetMeta, MotionPetConfig, PetPreset, PoseKey } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PetPreset, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
@@ -52,12 +52,12 @@ export interface EditorApi {
   getAnimations(): Promise<GetAnimationsResponse>
   /** V1.1: named character presets and the active config pointer. */
   getPets(): Promise<GetPetsResponse>
-  createPet(input: { name: string; from: 'current' | 'blank' }): Promise<{ pet: PetPreset; config: MotionPetConfig }>
+  createPet(input: { name: string; from: 'current' | 'blank' }): Promise<{ pet: PetPreset; config: PetweenConfig }>
   renamePet(id: string, name: string): Promise<void>
   deletePet(id: string): Promise<void>
-  applyPet(id: string): Promise<MotionPetConfig>
+  applyPet(id: string): Promise<PetweenConfig>
   /** Patch PUT of the editor-owned sections; resolves the host-merged full config. */
-  patchConfig(patch: ConfigPatch): Promise<MotionPetConfig>
+  patchConfig(patch: ConfigPatch): Promise<PetweenConfig>
   /** Explicit-save custom animation write (no debounce — plan §3/P0). */
   putAnimation(definition: AnimationDefinition): Promise<void>
   deleteAnimation(id: string): Promise<void>
@@ -102,7 +102,7 @@ export interface EditorNotice {
 export interface EditorSnapshot {
   status: EditorStatus
   /** The local draft; mutated in place, every mutation bumps configRevision. */
-  config: MotionPetConfig | null
+  config: PetweenConfig | null
   assets: Record<string, AssetMeta>
   /** V1.1 custom animations (explicit-save; separate from the config draft). */
   customs: AnimationDefinition[]
@@ -135,7 +135,7 @@ function describeError(error: unknown): string {
 }
 
 /** §2.1 gate: at least one pose references an asset that actually exists. */
-export function hasAnyUsableImage(config: MotionPetConfig, assets: Record<string, AssetMeta>): boolean {
+export function hasAnyUsableImage(config: PetweenConfig, assets: Record<string, AssetMeta>): boolean {
   return POSE_KEYS.some((key) => {
     const assetId = config.poses[key].assetId
     return assetId !== undefined && assets[assetId] !== undefined
@@ -195,7 +195,7 @@ export class EditorStore {
     if (this.disposed) return
     this.emit({ status: 'loading', loadError: null })
     try {
-      let config: MotionPetConfig
+      let config: PetweenConfig
       let assets: Record<string, AssetMeta>
       let customs: AnimationDefinition[]
       let animationWarnings: string[]
@@ -282,7 +282,7 @@ export class EditorStore {
    * Apply a local edit: the draft and Live Preview update immediately. The
    * user decides when to persist it with saveConfig().
    */
-  updateConfig(mutate: (draft: MotionPetConfig) => void): void {
+  updateConfig(mutate: (draft: PetweenConfig) => void): void {
     const draft = this.snapshot.config
     if (draft === null || this.disposed) return
     mutate(draft)
@@ -587,7 +587,7 @@ export class EditorStore {
   }
 
   /** Adopt the full config returned by create/apply and publish it immediately. */
-  private adoptPetConfig(config: MotionPetConfig): void {
+  private adoptPetConfig(config: PetweenConfig): void {
     const next = structuredClone(config)
     this.dirty = false
     this.emit({
@@ -671,7 +671,7 @@ export class EditorStore {
   }
 
   private async writeLoop(): Promise<boolean> {
-    let savedConfig: MotionPetConfig | null = null
+    let savedConfig: PetweenConfig | null = null
     this.saveInFlight = true
     while (this.dirty && this.snapshot.config !== null) {
       this.dirty = false
@@ -698,7 +698,7 @@ export class EditorStore {
             },
           ]
         }),
-      ) as unknown as MotionPetConfig['states']
+      ) as unknown as PetweenConfig['states']
       const payload: ConfigPatch = {
         enabled: draft.enabled,
         global: structuredClone(draft.global),

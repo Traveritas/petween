@@ -4,25 +4,25 @@
  * error code (`INVALID_CONFIG`, `ASSET_IN_USE`, …) or `NETWORK`/`HTTP_*`.
  *
  * Endpoints (host/routes.ts):
- * - GET    /api/motion-pet/config         → { config, assets }
- * - PUT    /api/motion-pet/config         → { config } | 400 INVALID_CONFIG
- * - POST   /api/motion-pet/assets         → { asset }  | 413 / 415
- * - DELETE /api/motion-pet/assets/<id>    → { deleted } | 404 | 409 ASSET_IN_USE
- * - GET    /api/motion-pet/animations     → { customs, warnings } (V1.1)
- * - PUT    /api/motion-pet/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
- * - DELETE /api/motion-pet/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
- * - GET/POST /api/motion-pet/pets and PUT/DELETE/apply subpaths (V1.1 presets)
+ * - GET    /api/petween/config         → { config, assets }
+ * - PUT    /api/petween/config         → { config } | 400 INVALID_CONFIG
+ * - POST   /api/petween/assets         → { asset }  | 413 / 415
+ * - DELETE /api/petween/assets/<id>    → { deleted } | 404 | 409 ASSET_IN_USE
+ * - GET    /api/petween/animations     → { customs, warnings } (V1.1)
+ * - PUT    /api/petween/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
+ * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
+ * - GET/POST /api/petween/pets and PUT/DELETE/apply subpaths (V1.1 presets)
  */
-import type { AssetMeta, MotionPetConfig, PetPreset } from '../core/types'
+import type { AssetMeta, PetweenConfig, PetPreset } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 
-const CONFIG_URL = '/api/motion-pet/config'
-const ASSETS_URL = '/api/motion-pet/assets'
-const ANIMATIONS_URL = '/api/motion-pet/animations'
-const PETS_URL = '/api/motion-pet/pets'
+const CONFIG_URL = '/api/petween/config'
+const ASSETS_URL = '/api/petween/assets'
+const ANIMATIONS_URL = '/api/petween/animations'
+const PETS_URL = '/api/petween/pets'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
-export const EDITOR_PAGE_URL = '/motion-pet-editor/'
+export const EDITOR_PAGE_URL = '/petween-editor/'
 
 export class ApiError extends Error {
   override readonly name = 'ApiError'
@@ -37,12 +37,12 @@ export class ApiError extends Error {
 }
 
 export interface GetConfigResponse {
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
 }
 
 export interface PutConfigResponse {
-  config: MotionPetConfig
+  config: PetweenConfig
 }
 
 /** The POST response carries only these fields (host/routes.ts §19.3). */
@@ -119,7 +119,7 @@ export function getConfig(): Promise<GetConfigResponse> {
  * helper; the settings editor and the overlay send partial patches instead
  * (see {@link ConfigPatch}) so concurrent writers cannot clobber each other.
  */
-export function putConfig(config: MotionPetConfig): Promise<PutConfigResponse> {
+export function putConfig(config: PetweenConfig): Promise<PutConfigResponse> {
   return request(CONFIG_URL, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -136,12 +136,12 @@ export function putConfig(config: MotionPetConfig): Promise<PutConfigResponse> {
  */
 export interface ConfigPatch {
   enabled?: boolean
-  global?: Partial<MotionPetConfig['global']>
-  poses?: MotionPetConfig['poses']
-  states?: MotionPetConfig['states']
-  overlay?: Partial<MotionPetConfig['overlay']>
-  advanced?: MotionPetConfig['advanced']
-  interactions?: MotionPetConfig['interactions']
+  global?: Partial<PetweenConfig['global']>
+  poses?: PetweenConfig['poses']
+  states?: PetweenConfig['states']
+  overlay?: Partial<PetweenConfig['overlay']>
+  advanced?: PetweenConfig['advanced']
+  interactions?: PetweenConfig['interactions']
 }
 
 /**
@@ -207,7 +207,7 @@ export function getPets(): Promise<GetPetsResponse> {
 
 export interface CreatePetResponse {
   pet: PetPreset
-  config: MotionPetConfig
+  config: PetweenConfig
 }
 
 export function createPet(input: { name: string; from: 'current' | 'blank' }): Promise<CreatePetResponse> {
@@ -230,6 +230,6 @@ export function deletePet(id: string): Promise<{ deleted: string }> {
   return request(`${PETS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export function applyPet(id: string): Promise<{ config: MotionPetConfig }> {
+export function applyPet(id: string): Promise<{ config: PetweenConfig }> {
   return request(`${PETS_URL}/${encodeURIComponent(id)}/apply`, { method: 'POST' })
 }

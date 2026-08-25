@@ -107,7 +107,7 @@ async function openStream(query?: string): Promise<{ text: () => string; waitFor
   }
 }
 
-describe('GET /api/motion-pet/events (SSE)', () => {
+describe('GET /api/petween/events (SSE)', () => {
   it('sends an empty snapshot frame on connect when nothing is known', async () => {
     const stream = await openStream('?session=s1')
     await stream.waitFor((text) => text.includes('"kind":"snapshot"'))
@@ -178,7 +178,7 @@ describe('GET /api/motion-pet/events (SSE)', () => {
 
   it('sends heartbeat comment lines', async () => {
     const stream = await openStream('?session=s1')
-    await stream.waitFor((text) => text.includes(': motion-pet'))
+    await stream.waitFor((text) => text.includes(': petween'))
     await stream.close()
   })
 
@@ -236,7 +236,7 @@ describe('attachStateChannel rollback', () => {
   })
 })
 
-describe('GET /api/motion-pet/state', () => {
+describe('GET /api/petween/state', () => {
   it('returns the per-session snapshot, empty for unknown sessions', async () => {
     emitSessionEvent('s1', 'turn/start', { turn: 1 })
     const hit = await (await fetch(`${base}${STATE_PATH}?session=s1`)).json()

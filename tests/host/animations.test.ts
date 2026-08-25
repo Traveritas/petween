@@ -14,7 +14,7 @@ let dir: string
 let store: AnimationsStore
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'motion-pet-animations-'))
+  dir = await mkdtemp(join(tmpdir(), 'petween-animations-'))
   store = new AnimationsStore({ animationsDir: join(dir, 'animations') })
 })
 

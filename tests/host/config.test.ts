@@ -6,14 +6,14 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { ConfigStore, loadConfig } from '../../src/host/config'
 
 let dir: string
 let store: ConfigStore
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'motion-pet-config-'))
+  dir = await mkdtemp(join(tmpdir(), 'petween-config-'))
   store = new ConfigStore({ configPath: join(dir, 'config.json') })
 })
 
@@ -23,9 +23,9 @@ afterEach(async () => {
 
 describe('loadConfig (§18.3)', () => {
   it('returns defaults for null / non-object input', () => {
-    expect(loadConfig(null)).toEqual(createDefaultMotionPetConfig())
-    expect(loadConfig(42)).toEqual(createDefaultMotionPetConfig())
-    expect(loadConfig('broken')).toEqual(createDefaultMotionPetConfig())
+    expect(loadConfig(null)).toEqual(createDefaultPetweenConfig())
+    expect(loadConfig(42)).toEqual(createDefaultPetweenConfig())
+    expect(loadConfig('broken')).toEqual(createDefaultPetweenConfig())
   })
 
   it('strips unknown fields and unknown pose keys', () => {
@@ -45,7 +45,7 @@ describe('loadConfig (§18.3)', () => {
   })
 
   it('repairs invalid values field-wise instead of rejecting the document', () => {
-    const defaults = createDefaultMotionPetConfig()
+    const defaults = createDefaultPetweenConfig()
     const config = loadConfig({
       version: 1,
       enabled: 'yes', // wrong type → default
@@ -80,17 +80,17 @@ describe('loadConfig (§18.3)', () => {
 
 describe('ConfigStore', () => {
   it('loads defaults when the file does not exist', async () => {
-    expect(await store.load()).toEqual(createDefaultMotionPetConfig())
+    expect(await store.load()).toEqual(createDefaultPetweenConfig())
   })
 
   it('loads defaults when the file is corrupt', async () => {
     const { writeFile } = await import('node:fs/promises')
     await writeFile(store.configPath, '### not json ###', 'utf8')
-    expect(await store.load()).toEqual(createDefaultMotionPetConfig())
+    expect(await store.load()).toEqual(createDefaultPetweenConfig())
   })
 
   it('saves atomically: readable afterwards, no .tmp residue', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.enabled = false
     config.global.scale = 1.8
     await store.save(config)
@@ -106,7 +106,7 @@ describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
     const merged = await store.update({ global: { scale: 1.5 } })
     expect(merged.global.scale).toBe(1.5)
     // untouched fields come from the current config (defaults here)
-    expect(merged.overlay).toEqual(createDefaultMotionPetConfig().overlay)
+    expect(merged.overlay).toEqual(createDefaultPetweenConfig().overlay)
     expect(await store.load()).toEqual(merged)
   })
 
@@ -127,6 +127,6 @@ describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
     const merged = await store.update({ overlay: { x: 1, y: 2 } })
     expect(merged.overlay).toEqual({ x: 1, y: 2 })
     // the invalid patch never reached the disk
-    expect((await store.load()).enabled).toBe(createDefaultMotionPetConfig().enabled)
+    expect((await store.load()).enabled).toBe(createDefaultPetweenConfig().enabled)
   })
 })

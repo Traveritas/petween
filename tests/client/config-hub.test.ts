@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigPatch, GetConfigResponse } from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
 import { EditorStore, type EditorApi } from '../../src/client/stores/editor-store'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
 const asset = (id: string): AssetMeta => ({
@@ -20,7 +20,7 @@ const asset = (id: string): AssetMeta => ({
   height: 240,
   sizeBytes: 1,
   sha256: `sha-${id}`,
-  url: `/motion-pet-assets/${id}.webp`,
+  url: `/petween-assets/${id}.webp`,
 })
 
 const makeCustom = (id: string, name = id): AnimationDefinition => ({
@@ -41,8 +41,8 @@ const makeCustom = (id: string, name = id): AnimationDefinition => ({
   ],
 })
 
-const makeSnapshot = (mutate?: (config: MotionPetConfig) => void, customs: AnimationDefinition[] = []): ConfigSnapshot => {
-  const config = createDefaultMotionPetConfig()
+const makeSnapshot = (mutate?: (config: PetweenConfig) => void, customs: AnimationDefinition[] = []): ConfigSnapshot => {
+  const config = createDefaultPetweenConfig()
   config.poses.idle.assetId = 'idle-asset'
   const assets = { 'idle-asset': asset('idle-asset') }
   mutate?.(config)
@@ -222,7 +222,7 @@ describe('ConfigHub — polling (3s, §23 visibility)', () => {
 })
 
 describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
-  const makeEditorApi = (base: MotionPetConfig): { api: EditorApi; patchConfig: ReturnType<typeof vi.fn> } => {
+  const makeEditorApi = (base: PetweenConfig): { api: EditorApi; patchConfig: ReturnType<typeof vi.fn> } => {
     // Host stand-in: merge the patch onto the base, resolve the full config.
     const patchConfig = vi.fn(async (patch: ConfigPatch) => ({
       ...structuredClone(base),
@@ -323,10 +323,10 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     const hub = new ConfigHub({ fetchConfig: fetcherFor(snapshot), fetchAnimations: animationsFetcherFor() })
     await hub.load()
     const { api } = makeEditorApi(snapshot.config)
-    let resolveSave!: (config: MotionPetConfig) => void
+    let resolveSave!: (config: PetweenConfig) => void
     api.patchConfig = vi.fn(
       () =>
-        new Promise<MotionPetConfig>((resolve) => {
+        new Promise<PetweenConfig>((resolve) => {
           resolveSave = resolve
         }),
     )

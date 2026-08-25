@@ -9,7 +9,7 @@
  * runs the real transition through the Live Preview session.
  */
 import type { JSX } from 'react'
-import type { MotionPetConfig, PoseKey, TransitionPreset } from '../../core/types'
+import type { PetweenConfig, PoseKey, TransitionPreset } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import type { EditorStore } from '../stores/editor-store'
 import { GroupedSelectRow, Slider } from './controls'
@@ -30,7 +30,7 @@ export const TRANSITION_PRESET_OPTIONS: ReadonlyArray<{ value: TransitionPreset;
 
 export interface TransitionEditorProps {
   state: PoseKey
-  config: MotionPetConfig
+  config: PetweenConfig
   /** V1.1 customs (all kinds; only transition-kind ones are listed). */
   customs: AnimationDefinition[]
   store: EditorStore

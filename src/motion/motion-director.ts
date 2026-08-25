@@ -24,7 +24,7 @@
 import { BUILTIN_ACTIVITY_SWAP, BUILTIN_CLICK_POP, transitionDefinitionId } from '../core/transition-presets'
 import { stateSlotFor } from '../core/state-machine'
 import type {
-  MotionPetConfig,
+  PetweenConfig,
   MotionTarget,
   PoseKey,
   ResolvedPose,
@@ -44,7 +44,7 @@ import { TransitionEngine } from './transition-engine'
 export interface MotionDirectorOptions {
   stage: MotionStage
   registry: AnimationRegistry
-  config: MotionPetConfig
+  config: PetweenConfig
   /** Pose fallback resolution (core/pose-resolver); null = no image imported. */
   resolvePose: (poseKey: PoseKey) => ResolvedPose | null
   /**

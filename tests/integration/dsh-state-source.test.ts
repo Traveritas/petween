@@ -5,7 +5,7 @@
  * reconnects. Node env is enough — neither class touches the DOM.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { MotionTarget } from '../../src/core/types'
 import type { MotionDirector } from '../../src/motion/motion-director'
 import type { EventSourceLike } from '../../src/integration/dsh/state-adapter'
@@ -53,14 +53,14 @@ class FakeSessionSource implements CurrentSessionSource {
 
 let targets: MotionTarget[]
 let director: MotionDirector
-let config: ReturnType<typeof createDefaultMotionPetConfig>
+let config: ReturnType<typeof createDefaultPetweenConfig>
 
 beforeEach(() => {
   vi.useFakeTimers()
   FakeEventSource.instances = []
   targets = []
   director = { setTarget: vi.fn(async (target: MotionTarget) => void targets.push(target)) } as unknown as MotionDirector
-  config = createDefaultMotionPetConfig()
+  config = createDefaultPetweenConfig()
 })
 
 afterEach(() => {
@@ -189,18 +189,18 @@ describe('DshStateSource', () => {
   it('connects with the bridge-provided current session and follows changes', () => {
     const sessions = new FakeSessionSource()
     const source = makeSource(sessions)
-    expect(lastSource().url).toBe('/api/motion-pet/events?session=s1')
+    expect(lastSource().url).toBe('/api/petween/events?session=s1')
     sessions.select('s2')
-    expect(lastSource().url).toBe('/api/motion-pet/events?session=s2')
+    expect(lastSource().url).toBe('/api/petween/events?session=s2')
     expect(FakeEventSource.instances[0].closed).toBe(true)
     sessions.select(undefined) // no current session → aggregate stream
-    expect(lastSource().url).toBe('/api/motion-pet/events')
+    expect(lastSource().url).toBe('/api/petween/events')
     source.dispose()
   })
 
   it('without a bridge it connects to the aggregate stream', () => {
     const source = makeSource()
-    expect(lastSource().url).toBe('/api/motion-pet/events')
+    expect(lastSource().url).toBe('/api/petween/events')
     source.dispose()
   })
 

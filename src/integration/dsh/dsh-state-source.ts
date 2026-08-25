@@ -12,7 +12,7 @@
  * session) the adapter connects to the aggregate stream — the §14.5 fallback.
  */
 import { PetStateResolver } from '../../core/pet-state-resolver'
-import type { MotionPetConfig } from '../../core/types'
+import type { PetweenConfig } from '../../core/types'
 import type { MotionDirector } from '../../motion/motion-director'
 import { StateAdapter, type EventSourceFactory, type StateFetcher } from './state-adapter'
 
@@ -39,7 +39,7 @@ export function getCurrentSessionSource(): CurrentSessionSource | null {
 
 export interface DshStateSourceOptions {
   /** Session-owned config object; field updates are read live by the resolver. */
-  config: Pick<MotionPetConfig, 'states' | 'global' | 'advanced'>
+  config: Pick<PetweenConfig, 'states' | 'global' | 'advanced'>
   director: MotionDirector
   /** Bridge to the DSH current-session selection; aggregate mode when absent. */
   sessionSource?: CurrentSessionSource
@@ -60,7 +60,7 @@ export class DshStateSource {
       coalesceMs: options.coalesceMs,
       onTarget: (target) => {
         options.director.setTarget(target).catch((error: unknown) => {
-          console.error('motion-pet: DSH state setTarget failed', error)
+          console.error('petween: DSH state setTarget failed', error)
         })
       },
     })

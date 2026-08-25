@@ -1,5 +1,5 @@
 /**
- * client/settings/MotionPetSettings.tsx — the full settings editor (spec §17).
+ * client/settings/PetweenSettings.tsx — the full settings editor (spec §17).
  * Owns the EditorStore (load on mount, dispose on unmount) and the
  * PreviewSession lifecycle (the session binds to the Live Preview's PetStage
  * via onStage). Renders: the global-settings card on top, then the three
@@ -9,9 +9,9 @@
  * (visual timeline editor for custom animations, P1) at the bottom.
  *
  * Two hosts mount this component: the standalone editor page
- * (src/editor/index.tsx, served at /motion-pet-editor/) with `wide` — the
+ * (src/editor/index.tsx, served at /petween-editor/) with `wide` — the
  * spec §17 three-column layout — and nothing else: the in-dialog settings
- * section is the compact MotionPetCard. It has no slot-owner props; the only
+ * section is the compact PetweenCard. It has no slot-owner props; the only
  * inputs are the optional `api` test seam and the optional
  * `saveIndicatorTarget` portal host (the editor page header).
  *
@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type JSX } from 'react'
 import { createPortal } from 'react-dom'
-import type { ActivityTransition, MotionPetConfig, PoseKey, TerminalHold, TransitionPreset } from '../../core/types'
+import type { ActivityTransition, PetweenConfig, PoseKey, TerminalHold, TransitionPreset } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { configHub } from '../config-hub'
@@ -41,7 +41,7 @@ import { StateList, STATE_LABELS } from './StateList'
 import { TransitionEditor } from './TransitionEditor'
 import styles from './settings.module.css'
 
-export interface MotionPetSettingsProps {
+export interface PetweenSettingsProps {
   /** Test seam; production always uses the default same-origin HTTP API. */
   api?: EditorApi
   /**
@@ -282,7 +282,7 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
  * the AdvancedCard's 成功/失败 group next to their mode select (one concept,
  * one place).
  */
-function GlobalCard(props: { config: MotionPetConfig; store: EditorStore }): JSX.Element {
+function GlobalCard(props: { config: PetweenConfig; store: EditorStore }): JSX.Element {
   const { config, store } = props
   const global = config.global
   return (
@@ -366,7 +366,7 @@ function GlobalCard(props: { config: MotionPetConfig; store: EditorStore }): JSX
  * and the click interactions in a third. Long explanations live on their own
  * hint lines so they never break a control row.
  */
-function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefinition[]; store: EditorStore }): JSX.Element {
+function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefinition[]; store: EditorStore }): JSX.Element {
   const { config, customs, store } = props
   const timedHold = config.advanced.terminalHold === 'timed'
   return (
@@ -481,7 +481,7 @@ function AdvancedCard(props: { config: MotionPetConfig; customs: AnimationDefini
   )
 }
 
-export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
+export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
   // With an injected api (tests) the store talks to it directly; in production
   // it shares the config hub with the overlay (M3: one config, one GET).
   const [store] = useState(
@@ -564,7 +564,7 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
     return (
       <>
         {saveIndicator}
-        <div className={styles.status}>正在加载 Motion Pet 配置…</div>
+        <div className={styles.status}>正在加载 Petween 配置…</div>
       </>
     )
   }
@@ -590,7 +590,7 @@ export function MotionPetSettings(props: MotionPetSettingsProps): JSX.Element {
         {saveIndicator}
         {props.wide === true ? <PetPresetCard snapshot={snapshot} store={store} /> : null}
         <div className={styles.empty}>
-          <h2 className={styles.emptyTitle}>Motion Pet</h2>
+          <h2 className={styles.emptyTitle}>Petween</h2>
           <p className={styles.hint}>
             请先导入至少一张图片（将作为「待机」姿势；推荐透明背景的 PNG 或 WebP，正方形画布）。
           </p>

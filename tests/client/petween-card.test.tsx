@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * MotionPetCard tests: the settings.section entry card — status summary
+ * PetweenCard tests: the settings.section entry card — status summary
  * (imported poses · enabled state), the enable toggle and scale slider saving
  * through the editor store's explicit-save discipline, the no-image hint,
  * and the link to the standalone full-page editor.
@@ -9,9 +9,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EDITOR_PAGE_URL, type ConfigPatch } from '../../src/client/api'
-import { MotionPetCard } from '../../src/client/settings/MotionPetCard'
+import { PetweenCard } from '../../src/client/settings/PetweenCard'
 import type { EditorApi } from '../../src/client/stores/editor-store'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AssetMeta } from '../../src/core/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -43,7 +43,7 @@ const idleAsset: AssetMeta = {
   height: 240,
   sizeBytes: 10,
   sha256: 'x',
-  url: '/motion-pet-assets/aaaa1111bbbb2222',
+  url: '/petween-assets/aaaa1111bbbb2222',
 }
 
 interface ApiMocks {
@@ -52,7 +52,7 @@ interface ApiMocks {
 }
 
 const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   if (withImage) {
     config.poses.idle.assetId = idleAsset.id
@@ -90,7 +90,7 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
 
 const render = async (api: EditorApi): Promise<void> => {
   await act(async () => {
-    root.render(<MotionPetCard api={api} />)
+    root.render(<PetweenCard api={api} />)
   })
 }
 
@@ -102,11 +102,11 @@ const moveSlider = (input: HTMLInputElement, value: string): void => {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('MotionPetCard', () => {
+describe('PetweenCard', () => {
   it('renders the summary, quick controls and the editor link', async () => {
     const { api } = makeApi(true)
     await render(api)
-    expect(container.textContent).toContain('Motion Pet')
+    expect(container.textContent).toContain('Petween')
     expect(container.textContent).toContain('已导入 1/6 张图 · 启用中')
     expect(container.textContent).toContain('启用宠物')
     expect(container.textContent).toContain('整体缩放')
@@ -116,7 +116,7 @@ describe('MotionPetCard', () => {
     expect(link?.textContent).toContain('打开完整编辑器')
     // the card never mounts the full editor columns or a stage
     expect(container.textContent).not.toContain('循环动画')
-    expect(container.querySelector('.dsh-motion-pet-position')).toBeNull()
+    expect(container.querySelector('.petween-position')).toBeNull()
   })
 
   it('without any image it shows the 0/6 summary plus the import hint', async () => {

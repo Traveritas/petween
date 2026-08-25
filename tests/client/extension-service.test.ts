@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Extension service tests (motion-pet/client): the three windows degrade
+ * Extension service tests (petween/client): the three windows degrade
  * through the "no active session" window (the overlay mounts/unmounts with
  * §2.1), snapshots follow drag/driver/target changes, the position-driver
  * lease arbitrates with user drags and remote overlay coordinates, and
@@ -16,15 +16,15 @@ import type { ConfigPatch } from '../../src/client/api'
 import { ConfigHub } from '../../src/client/config-hub'
 import {
   clearActivePetSession,
-  motionPetClientService,
+  petweenClientService,
   setActivePetSession,
   type StageSnapshot,
 } from '../../src/client/extension-service'
 import { OverlaySession } from '../../src/client/overlay-session'
 import { PetOverlay } from '../../src/client/overlay/PetOverlay'
 import { PetStage } from '../../src/client/overlay/pet-stage'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
@@ -84,7 +84,7 @@ const makeAsset = (id: string): AssetMeta => ({
 
 interface Setup {
   stage: PetStage
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   hub: ConfigHub
   session: OverlaySession
@@ -92,12 +92,12 @@ interface Setup {
 }
 
 const setup = (
-  mutateConfig?: (config: MotionPetConfig, assets: Record<string, AssetMeta>) => void,
+  mutateConfig?: (config: PetweenConfig, assets: Record<string, AssetMeta>) => void,
   customs: AnimationDefinition[] = [],
 ): Setup => {
   const stage = new PetStage()
   document.body.appendChild(stage.element)
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of POSE_KEYS) {
     config.poses[key].assetId = `asset-${key}`
@@ -147,7 +147,7 @@ const boot = async ({ session }: Setup): Promise<void> => {
 
 const publish = (
   hub: ConfigHub,
-  config: MotionPetConfig,
+  config: PetweenConfig,
   assets: Record<string, AssetMeta>,
   customs: AnimationDefinition[] = [],
 ): void => {
@@ -177,14 +177,14 @@ const makeCustom = (id: string, durationMs = 300): AnimationDefinition => ({
 
 describe('extension service — no active session', () => {
   it('all three APIs degrade to null', () => {
-    expect(motionPetClientService.getStageSnapshot()).toBeNull()
-    expect(motionPetClientService.requestPositionControl()).toBeNull()
-    expect(motionPetClientService.playAnimation('builtin:comic-pop')).toBeNull()
+    expect(petweenClientService.getStageSnapshot()).toBeNull()
+    expect(petweenClientService.requestPositionControl()).toBeNull()
+    expect(petweenClientService.playAnimation('builtin:comic-pop')).toBeNull()
   })
 
   it('subscribeStage immediately pushes null', () => {
     const seen: Array<StageSnapshot | null> = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
     expect(seen).toEqual([null])
   })
 })
@@ -194,13 +194,13 @@ describe('extension service — active session', () => {
     const context = setup()
     setActivePetSession(context.session)
     // before boot: no target yet, boot not finished
-    const early = motionPetClientService.getStageSnapshot()
+    const early = petweenClientService.getStageSnapshot()
     expect(early?.visualState).toBeNull()
     expect(early?.activityMode).toBeNull()
     expect(early?.started).toBe(false)
 
     await boot(context)
-    const snapshot = motionPetClientService.getStageSnapshot()
+    const snapshot = petweenClientService.getStageSnapshot()
     expect(snapshot).not.toBeNull()
     // jsdom viewport 1024×768, 160px stage, 24px margin (§27 default corner)
     expect(snapshot?.x).toBe(1024 - 160 - 24)
@@ -215,7 +215,7 @@ describe('extension service — active session', () => {
     const context = setup()
     setActivePetSession(context.session)
     const seen: Array<StageSnapshot | null> = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
     expect(seen).toHaveLength(1) // contract: the current value arrives immediately
 
     await boot(context)
@@ -228,7 +228,7 @@ describe('extension service — active session', () => {
     window.dispatchEvent(pointer('pointerup', 950, 650))
 
     // a driver apply → snapshot push
-    const driver = motionPetClientService.requestPositionControl()
+    const driver = petweenClientService.requestPositionControl()
     expect(driver).not.toBeNull()
     expect(driver?.apply(100, 100)).toBe(true)
     expect(seen[seen.length - 1]).toMatchObject({ x: 100, y: 100 })
@@ -250,13 +250,13 @@ describe('extension service — active session', () => {
     setActivePetSession(context.session)
     await boot(context)
     const seen: Array<StageSnapshot | null> = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
 
-    const next = structuredClone(context.hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
     next.global.scale = 1.5
     publish(context.hub, next, context.assets)
     await vi.advanceTimersByTimeAsync(0) // updateConfig notifies at its end
-    expect(motionPetClientService.getStageSnapshot()?.scale).toBe(1.5)
+    expect(petweenClientService.getStageSnapshot()?.scale).toBe(1.5)
     expect(seen.some((snapshot) => snapshot?.scale === 1.5)).toBe(true)
   })
 })
@@ -266,14 +266,14 @@ describe('extension service — position driver', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const driver = motionPetClientService.requestPositionControl()
+    const driver = petweenClientService.requestPositionControl()
     if (driver === null) throw new Error('driver missing')
 
     expect(driver.apply(-500, -500)).toBe(true)
     // §27 negative edge: -(stageSize - 32) on both axes
     expect(context.stage.element.style.left).toBe('-128px')
     expect(context.stage.element.style.top).toBe('-128px')
-    expect(motionPetClientService.getStageSnapshot()).toMatchObject({ x: -128, y: -128 })
+    expect(petweenClientService.getStageSnapshot()).toMatchObject({ x: -128, y: -128 })
 
     expect(driver.apply(333.6, 444.4)).toBe(true)
     await driver.commit()
@@ -287,7 +287,7 @@ describe('extension service — position driver', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const driver = motionPetClientService.requestPositionControl()
+    const driver = petweenClientService.requestPositionControl()
     if (driver === null) throw new Error('driver missing')
 
     // a user drag ends → debounced save pending
@@ -310,11 +310,11 @@ describe('extension service — position driver', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const driver = motionPetClientService.requestPositionControl()
+    const driver = petweenClientService.requestPositionControl()
     if (driver === null) throw new Error('driver missing')
     expect(driver.apply(300, 300)).toBe(true)
 
-    const next = structuredClone(context.hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
     next.overlay = { x: 11, y: 22 }
     publish(context.hub, next, context.assets)
     await vi.advanceTimersByTimeAsync(0)
@@ -331,11 +331,11 @@ describe('extension service — position driver', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const first = motionPetClientService.requestPositionControl()
+    const first = petweenClientService.requestPositionControl()
     expect(first).not.toBeNull()
-    expect(motionPetClientService.requestPositionControl()).toBeNull()
+    expect(petweenClientService.requestPositionControl()).toBeNull()
     first?.release()
-    const second = motionPetClientService.requestPositionControl()
+    const second = petweenClientService.requestPositionControl()
     expect(second).not.toBeNull()
     second?.release()
   })
@@ -346,7 +346,7 @@ describe('extension service — drag arbitration', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const driver = motionPetClientService.requestPositionControl()
+    const driver = petweenClientService.requestPositionControl()
     if (driver === null) throw new Error('driver missing')
     let dragStarts = 0
     const offDrag = driver.onUserDrag(() => {
@@ -380,12 +380,12 @@ describe('extension service — playAnimation', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    expect(motionPetClientService.playAnimation('user:missing')).toBeNull()
+    expect(petweenClientService.playAnimation('user:missing')).toBeNull()
 
     publish(context.hub, context.config, context.assets, [makeCustom('user:spin', 320)])
     await flushUntil(() => context.session.registry.get('user:spin') !== undefined)
 
-    const instance = motionPetClientService.playAnimation('user:spin')
+    const instance = petweenClientService.playAnimation('user:spin')
     expect(instance).not.toBeNull()
     const animation = harness.animations[harness.animations.length - 1]
     expect(animation.target).toBe(context.stage.layers.transition)
@@ -407,7 +407,7 @@ describe('extension service — playAnimation', () => {
     })
     await vi.advanceTimersByTimeAsync(0)
     expect(context.session.director.transitionInFlight).toBe(true)
-    expect(motionPetClientService.playAnimation('user:spin', { interrupt: false })).toBeNull()
+    expect(petweenClientService.playAnimation('user:spin', { interrupt: false })).toBeNull()
 
     await settleTransitions()
     await pending
@@ -430,7 +430,7 @@ describe('extension service — playAnimation', () => {
       (animation) => animation.target === context.stage.layers.transition,
     )
 
-    const instance = motionPetClientService.playAnimation('user:spin', { interrupt: true })
+    const instance = petweenClientService.playAnimation('user:spin', { interrupt: true })
     expect(instance).not.toBeNull()
     // §10.2: the enter's WAAPI animations were cancelled (FakeAnimation → idle)
     for (const animation of enterAnimations) expect(animation.playState).toBe('idle')
@@ -445,13 +445,13 @@ describe('extension service — playAnimation', () => {
     setActivePetSession(context.session)
     await boot(context)
 
-    const first = motionPetClientService.playAnimation('user:spin')
+    const first = petweenClientService.playAnimation('user:spin')
     expect(first).not.toBeNull()
     const firstAnimations = harness.pending().filter(
       (animation) => animation.target === context.stage.layers.transition,
     )
 
-    const second = motionPetClientService.playAnimation('user:wig')
+    const second = petweenClientService.playAnimation('user:wig')
     expect(second).not.toBeNull()
     expect(first?.status).toBe('cancelled') // disposed by the newer interrupting play
     for (const animation of firstAnimations) expect(animation.playState).toBe('idle')
@@ -466,7 +466,7 @@ describe('extension service — stageSize', () => {
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    const snapshot = motionPetClientService.getStageSnapshot()
+    const snapshot = petweenClientService.getStageSnapshot()
     expect(snapshot?.stageSize).toBe(context.stage.stageSize)
     expect(snapshot?.stageSize).toBe(160)
   })
@@ -478,7 +478,7 @@ describe('extension service — subscribeUserDrag (service level)', () => {
     setActivePetSession(context.session)
     await boot(context)
     const phases: string[] = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeUserDrag((phase) => phases.push(phase)))
+    serviceUnsubscribers.push(petweenClientService.subscribeUserDrag((phase) => phases.push(phase)))
 
     // a click (sub-threshold travel) is no drag
     context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
@@ -500,12 +500,12 @@ describe('extension service — subscribeUserDrag (service level)', () => {
     setActivePetSession(context.session)
     await boot(context)
     const phases: string[] = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeUserDrag((phase) => phases.push(phase)))
+    serviceUnsubscribers.push(petweenClientService.subscribeUserDrag((phase) => phases.push(phase)))
     context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
     window.dispatchEvent(pointer('pointermove', 920, 620))
     window.dispatchEvent(pointer('pointerup', 920, 620))
     expect(phases).toEqual(['start', 'end'])
-    expect(motionPetClientService.getStageSnapshot()).toMatchObject({ x: 860, y: 604 }) // drag moved it
+    expect(petweenClientService.getStageSnapshot()).toMatchObject({ x: 860, y: 604 }) // drag moved it
   })
 })
 
@@ -518,7 +518,7 @@ describe('extension service — flashPose', () => {
     await boot(context)
     expect(srcOf(context)).toBe(assetUrl('asset-idle'))
 
-    expect(motionPetClientService.flashPose('success', 800)).toBe(true)
+    expect(petweenClientService.flashPose('success', 800)).toBe(true)
     expect(srcOf(context)).toBe(assetUrl('asset-success'))
 
     await vi.advanceTimersByTimeAsync(799)
@@ -532,8 +532,8 @@ describe('extension service — flashPose', () => {
     setActivePetSession(context.session)
     await boot(context)
 
-    expect(motionPetClientService.flashPose('success', 10_000)).toBe(true)
-    expect(motionPetClientService.flashPose('error', 200)).toBe(true)
+    expect(petweenClientService.flashPose('success', 10_000)).toBe(true)
+    expect(petweenClientService.flashPose('error', 200)).toBe(true)
     expect(srcOf(context)).toBe(assetUrl('asset-error'))
 
     await vi.advanceTimersByTimeAsync(200)
@@ -547,7 +547,7 @@ describe('extension service — flashPose', () => {
     setActivePetSession(context.session)
     await boot(context)
 
-    expect(motionPetClientService.flashPose('success', 0)).toBe(true)
+    expect(petweenClientService.flashPose('success', 0)).toBe(true)
     await vi.advanceTimersByTimeAsync(5_000)
     expect(srcOf(context)).toBe(assetUrl('asset-success'))
 
@@ -565,7 +565,7 @@ describe('extension service — flashPose', () => {
   })
 
   it('returns false without a session', () => {
-    expect(motionPetClientService.flashPose('success', 500)).toBe(false)
+    expect(petweenClientService.flashPose('success', 500)).toBe(false)
   })
 })
 
@@ -577,7 +577,7 @@ describe('extension service — flashPose competition (pose hold ledger)', () =>
     setActivePetSession(context.session)
     await boot(context)
 
-    expect(motionPetClientService.flashPose('success', 2000)).toBe(true)
+    expect(petweenClientService.flashPose('success', 2000)).toBe(true)
     expect(srcOf(context)).toBe(assetUrl('asset-success'))
 
     // The physics companion's settle commit broadcasts the config mid-hold —
@@ -610,7 +610,7 @@ describe('extension service — flashPose competition (pose hold ledger)', () =>
     await pending
     expect(srcOf(context)).toBe(assetUrl('asset-idle')) // thinking fell back to idle
 
-    expect(motionPetClientService.flashPose('success', 0)).toBe(true)
+    expect(petweenClientService.flashPose('success', 0)).toBe(true)
     expect(srcOf(context)).toBe(assetUrl('asset-success'))
 
     // Same visual state, new poseKey: working ALSO resolves to the idle asset.
@@ -629,7 +629,7 @@ describe('extension service — flashPose competition (pose hold ledger)', () =>
     const context = setup()
     setActivePetSession(context.session)
     await boot(context)
-    expect(motionPetClientService.flashPose('success', 1000)).toBe(true)
+    expect(petweenClientService.flashPose('success', 1000)).toBe(true)
 
     const body = context.stage.interactiveElement
     body.dispatchEvent(pointer('pointerdown', 900, 600))
@@ -648,7 +648,7 @@ describe('extension service — flashPose competition (pose hold ledger)', () =>
     setActivePetSession(context.session)
     await boot(context)
 
-    expect(motionPetClientService.flashPose('error', 5000)).toBe(true)
+    expect(petweenClientService.flashPose('error', 5000)).toBe(true)
     expect(srcOf(context)).toBe(assetUrl('asset-error'))
 
     const body = context.stage.interactiveElement
@@ -671,21 +671,21 @@ describe('extension service — active session bridge', () => {
     const second = setup()
     setActivePetSession(second.session)
     const seen: Array<StageSnapshot | null> = []
-    serviceUnsubscribers.push(motionPetClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
     expect(seen).toEqual([second.session.getStageSnapshot()])
 
     // the FIRST session's teardown arrives late: must not clear the second
     clearActivePetSession(first.session)
     expect(seen).toHaveLength(1)
-    expect(motionPetClientService.getStageSnapshot()).not.toBeNull()
+    expect(petweenClientService.getStageSnapshot()).not.toBeNull()
 
     clearActivePetSession(second.session)
-    expect(motionPetClientService.getStageSnapshot()).toBeNull()
+    expect(petweenClientService.getStageSnapshot()).toBeNull()
     expect(seen[seen.length - 1]).toBeNull()
   })
 
   it('PetOverlay mount publishes the live session; unmount clears it', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     const assets: Record<string, AssetMeta> = {}
     for (const key of POSE_KEYS) {
       config.poses[key].assetId = `asset-${key}`
@@ -704,9 +704,9 @@ describe('extension service — active session bridge', () => {
     await act(async () => {
       root.render(createElement(PetOverlay, { hub }))
     })
-    expect(motionPetClientService.getStageSnapshot()).not.toBeNull()
+    expect(petweenClientService.getStageSnapshot()).not.toBeNull()
 
     act(() => root.unmount())
-    expect(motionPetClientService.getStageSnapshot()).toBeNull()
+    expect(petweenClientService.getStageSnapshot()).toBeNull()
   })
 })

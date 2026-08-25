@@ -1,7 +1,7 @@
 /**
  * host/pets.ts — pet preset persistence (V1.1).
  *
- * Layout: `$DSH_HOME/motion-pet/pets/<id>.json` — one PetPreset per file,
+ * Layout: `$DSH_HOME/petween/pets/<id>.json` — one PetPreset per file,
  * written atomically (host/storage.ts). A preset owns the character slice of
  * the config — poses, states and the global scale; everything else (overlay,
  * enabled, advanced, interactions, …) stays global and never enters a
@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { MotionPetConfig, PetPreset, PetSlice } from '../core/types'
+import type { PetweenConfig, PetPreset, PetSlice } from '../core/types'
 import { writeJsonAtomic } from './storage'
 import { repairConfig } from './validation'
 
@@ -45,11 +45,11 @@ export function validatePetId(id: unknown): string | null {
 }
 
 export function defaultPetsDir(): string {
-  return dshHomePath('motion-pet', 'pets')
+  return dshHomePath('petween', 'pets')
 }
 
 /** The preset-owned slice of a config (poses/states/global scale). */
-export function petSliceFromConfig(config: MotionPetConfig): PetSlice {
+export function petSliceFromConfig(config: PetweenConfig): PetSlice {
   return { scale: config.global.scale, poses: config.poses, states: config.states }
 }
 

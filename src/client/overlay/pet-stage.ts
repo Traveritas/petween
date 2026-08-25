@@ -13,7 +13,7 @@
  *
  *   position → user-scale → sway → bounce → breathe → transition → stage → img
  *
- * The stage layer also holds a particle layer above the img (`.dsh-motion-pet-
+ * The stage layer also holds a particle layer above the img (`.petween-
  * particles`, §8.5 `particle` events) — not a transform-ownership layer; only
  * the ParticleEmitter writes into it.
  *
@@ -104,13 +104,13 @@ function px(value: number): string {
  * ::after silhouette. Injected once per document; everything else the stage
  * styles stays inline (same mechanism as the particle emitter).
  */
-const STAGE_STYLE_ELEMENT_ID = 'dsh-motion-pet-stage-styles'
+const STAGE_STYLE_ELEMENT_ID = 'petween-stage-styles'
 const STAGE_STYLE_TEXT = `
-.dsh-motion-pet-pose:focus-visible {
+.petween-pose:focus-visible {
   outline: 2px solid rgba(59, 130, 246, 0.75);
   outline-offset: 2px;
 }
-.dsh-motion-pet-stage.dsh-motion-pet-image-error::after {
+.petween-stage.petween-image-error::after {
   content: '';
   position: absolute;
   inset: 12%;
@@ -181,15 +181,15 @@ export class PetStage implements MotionStage {
     this.reducedMotionValue = options.reducedMotion ?? false
     this.embedded = options.embedded ?? false
 
-    this.root = div('dsh-motion-pet-position')
-    this.userScaleLayer = div('dsh-motion-pet-user-scale')
-    const sway = div('dsh-motion-pet-sway')
-    const bounce = div('dsh-motion-pet-bounce')
-    const breathe = div('dsh-motion-pet-breathe')
-    const transition = div('dsh-motion-pet-transition')
-    this.stageLayer = div('dsh-motion-pet-stage')
+    this.root = div('petween-position')
+    this.userScaleLayer = div('petween-user-scale')
+    const sway = div('petween-sway')
+    const bounce = div('petween-bounce')
+    const breathe = div('petween-breathe')
+    const transition = div('petween-transition')
+    this.stageLayer = div('petween-stage')
     this.image = document.createElement('img')
-    this.image.className = 'dsh-motion-pet-pose'
+    this.image.className = 'petween-pose'
     this.layers = { transition, sway, bounce, breathe }
 
     this.root.append(this.userScaleLayer)
@@ -199,7 +199,7 @@ export class PetStage implements MotionStage {
     breathe.append(transition)
     transition.append(this.stageLayer)
     this.stageLayer.append(this.image)
-    this.particleLayer = div('dsh-motion-pet-particles')
+    this.particleLayer = div('petween-particles')
     this.stageLayer.append(this.particleLayer)
     this.particles = new ParticleEmitter(this.particleLayer, {
       enabled: options.particles ?? true,
@@ -379,7 +379,7 @@ export class PetStage implements MotionStage {
   }
 
   private readonly handleImageLoad = (): void => {
-    this.stageLayer.classList.remove('dsh-motion-pet-image-error')
+    this.stageLayer.classList.remove('petween-image-error')
     this.layoutPose()
   }
 
@@ -392,14 +392,14 @@ export class PetStage implements MotionStage {
   private readonly handleImageError = (): void => {
     if (this.disposed) return
     const url = this.pose?.asset.url
-    console.warn(`motion-pet: pose image failed to load${url === undefined ? '' : `: ${url}`}`)
-    this.stageLayer.classList.add('dsh-motion-pet-image-error')
+    console.warn(`petween: pose image failed to load${url === undefined ? '' : `: ${url}`}`)
+    this.stageLayer.classList.add('petween-image-error')
   }
 
   private buildAnchorMarker(): HTMLDivElement {
-    const marker = div('dsh-motion-pet-anchor-marker')
-    const horizontal = div('dsh-motion-pet-anchor-marker-h')
-    const vertical = div('dsh-motion-pet-anchor-marker-v')
+    const marker = div('petween-anchor-marker')
+    const horizontal = div('petween-anchor-marker-h')
+    const vertical = div('petween-anchor-marker-v')
     marker.append(horizontal, vertical)
     return marker
   }

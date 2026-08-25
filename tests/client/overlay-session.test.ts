@@ -13,8 +13,8 @@ import type { ConfigPatch } from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
 import { OverlaySession, type OverlaySessionOptions } from '../../src/client/overlay-session'
 import { PetStage } from '../../src/client/overlay/pet-stage'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
@@ -59,7 +59,7 @@ const makeAsset = (id: string): AssetMeta => ({
 
 interface Setup {
   stage: PetStage
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   hub: ConfigHub
   session: OverlaySession
@@ -68,13 +68,13 @@ interface Setup {
 }
 
 const setup = (
-  mutateConfig?: (config: MotionPetConfig, assets: Record<string, AssetMeta>) => void,
+  mutateConfig?: (config: PetweenConfig, assets: Record<string, AssetMeta>) => void,
   sessionOptions?: Partial<OverlaySessionOptions>,
   customs: AnimationDefinition[] = [],
 ): Setup => {
   const stage = new PetStage()
   document.body.appendChild(stage.element)
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of POSE_KEYS) {
     config.poses[key].assetId = `asset-${key}`
@@ -124,7 +124,7 @@ const boot = async ({ session }: Setup): Promise<void> => {
 
 const publish = (
   hub: ConfigHub,
-  config: MotionPetConfig,
+  config: PetweenConfig,
   assets: Record<string, AssetMeta>,
   customs: AnimationDefinition[] = [],
 ): void => {
@@ -173,7 +173,7 @@ describe('OverlaySession — boot and the §2.1 gate', () => {
     expect(harness.animations).toHaveLength(0)
 
     // the editor imports the first image and its save publishes (M3 path)
-    const config = structuredClone(hub.getCurrent()?.config) as MotionPetConfig
+    const config = structuredClone(hub.getCurrent()?.config) as PetweenConfig
     config.poses.idle.assetId = 'asset-idle'
     publish(hub, config, { 'asset-idle': makeAsset('asset-idle') })
     await flushUntil(() => harness.animations.length > 0)
@@ -191,7 +191,7 @@ describe('OverlaySession — hub-driven config hot-apply', () => {
     await boot(context)
     expect(image.getAttribute('src')).toBe(assetUrl('asset-idle'))
 
-    const next = structuredClone(hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(hub.getCurrent()?.config) as PetweenConfig
     next.poses.idle.assetId = 'asset-new'
     next.global.scale = 1.5
     publish(hub, next, { ...context.assets, 'asset-new': makeAsset('asset-new') })
@@ -218,7 +218,7 @@ describe('OverlaySession — hub-driven config hot-apply', () => {
     expect(image.getAttribute('src')).toBe(assetUrl('asset-idle')) // pre segment: no swap yet
 
     // mid-transition edit: the thinking anchor/zoom change
-    const next = structuredClone(hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(hub.getCurrent()?.config) as PetweenConfig
     next.poses.thinking.anchor = { x: 0.5, y: 0.8 }
     next.poses.thinking.zoom = 1.5
     publish(hub, next, context.assets)
@@ -242,13 +242,13 @@ describe('OverlaySession — hub-driven config hot-apply', () => {
     const countBefore = harness.animations.length
 
     // identical content republished (e.g. a poll diff false positive): no restart
-    publish(hub, hub.getCurrent()?.config as MotionPetConfig, context.assets)
+    publish(hub, hub.getCurrent()?.config as PetweenConfig, context.assets)
     await vi.advanceTimersByTimeAsync(0)
     expect(harness.animations).toHaveLength(countBefore)
     expect(harness.pending().find((animation) => animation.target === stage.layers.sway)).toBe(swayBefore)
 
     // a real ambient change restarts the affected channel
-    const next = structuredClone(hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(hub.getCurrent()?.config) as PetweenConfig
     next.states.idle.ambient.sway.angleDeg = 2.2
     publish(hub, next, context.assets)
     await vi.advanceTimersByTimeAsync(0)
@@ -309,7 +309,7 @@ describe('OverlaySession — reduced motion (§22)', () => {
     expect(runningLoopsOn(stage.layers.sway)).toBe(1)
 
     // switch the config to 'system' → reduce applies; flip the OS setting → lifts
-    const next = structuredClone(context.hub.getCurrent()?.config) as MotionPetConfig
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
     next.global.reducedMotion = 'system'
     publish(context.hub, next, context.assets)
     await vi.advanceTimersByTimeAsync(0)

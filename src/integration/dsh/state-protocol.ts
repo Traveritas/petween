@@ -5,9 +5,9 @@
  * client bundle must never inline host code.
  *
  * Endpoints (both exact routes, host/state-channel.ts):
- * - `GET /api/motion-pet/events[?session=<id>]` — SSE stream of StateFrame
- *   blocks (`data: {json}\n\n`), plus `: motion-pet` heartbeat comments.
- * - `GET /api/motion-pet/state[?session=<id>]` — plain JSON `{ events }`,
+ * - `GET /api/petween/events[?session=<id>]` — SSE stream of StateFrame
+ *   blocks (`data: {json}\n\n`), plus `: petween` heartbeat comments.
+ * - `GET /api/petween/state[?session=<id>]` — plain JSON `{ events }`,
  *   the same payload a snapshot frame carries.
  */
 
@@ -33,5 +33,5 @@ export type StateFrame =
   | { kind: 'snapshot'; events: NormalizedAgentEvent[] }
   | { kind: 'event'; event: NormalizedAgentEvent }
 
-export const EVENTS_PATH = '/api/motion-pet/events'
-export const STATE_PATH = '/api/motion-pet/state'
+export const EVENTS_PATH = '/api/petween/events'
+export const STATE_PATH = '/api/petween/state'

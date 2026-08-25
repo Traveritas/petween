@@ -3,19 +3,19 @@
  * self-contained browser page (the settings dialog is ~600px wide; the page
  * restores spec §17's three-column layout). The host answers the HTML shell
  * plus the prebuilt IIFE bundle (lib/editor.js, react inlined); the page then
- * talks to the same-origin `/api/motion-pet/*` HTTP API. No shell module
+ * talks to the same-origin `/api/petween/*` HTTP API. No shell module
  * loader involved — the same pattern as preview/preview.js.
  *
- * Routes (one prefix registration, `/motion-pet-editor`):
- * - GET/HEAD `/motion-pet-editor` and `/motion-pet-editor/` → the HTML shell
- * - GET/HEAD `/motion-pet-editor/client.js`                 → the editor bundle
+ * Routes (one prefix registration, `/petween-editor`):
+ * - GET/HEAD `/petween-editor` and `/petween-editor/` → the HTML shell
+ * - GET/HEAD `/petween-editor/client.js`                 → the editor bundle
  * Everything below the prefix: 404. Other methods: 405.
  */
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { RoutesHost } from './routes'
 
-export const EDITOR_PAGE_PATH = '/motion-pet-editor'
+export const EDITOR_PAGE_PATH = '/petween-editor'
 
 export interface EditorPageDeps {
   /**
@@ -36,8 +36,8 @@ const EDITOR_HTML = `<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <base href="/motion-pet-editor/" />
-    <title>Motion Pet 编辑器</title>
+    <base href="/petween-editor/" />
+    <title>Petween 编辑器</title>
     <style>
       html, body { margin: 0; padding: 0; }
     </style>

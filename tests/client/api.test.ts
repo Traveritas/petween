@@ -21,7 +21,7 @@ import {
   renamePet,
   uploadAsset,
 } from '../../src/client/api'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
 const makeDefinition = (id: string): AnimationDefinition => ({
@@ -84,27 +84,27 @@ describe('client api — request timeout', () => {
 })
 
 describe('client api', () => {
-  it('getConfig GETs /api/motion-pet/config and returns { config, assets }', async () => {
-    const config = createDefaultMotionPetConfig()
+  it('getConfig GETs /api/petween/config and returns { config, assets }', async () => {
+    const config = createDefaultPetweenConfig()
     const payload = { config, assets: {} }
     fetchMock.mockResolvedValue(jsonResponse(200, payload))
 
     await expect(getConfig()).resolves.toEqual(payload)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/config')
+    expect(url).toBe('/api/petween/config')
     expect(init.method ?? 'GET').toBe('GET')
   })
 
   it('putConfig PUTs the draft as JSON and unwraps { config }', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.global.scale = 1.5
     fetchMock.mockResolvedValue(jsonResponse(200, { config }))
 
     const response = await putConfig(config)
     expect(response.config.global.scale).toBe(1.5)
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/config')
+    expect(url).toBe('/api/petween/config')
     expect(init.method).toBe('PUT')
     expect((init.headers as Record<string, string>)['content-type']).toBe('application/json')
     expect(JSON.parse(init.body as string)).toEqual(JSON.parse(JSON.stringify(config)))
@@ -116,7 +116,7 @@ describe('client api', () => {
       jsonResponse(400, { error: { code: 'INVALID_CONFIG', message: 'global.scale: expected 0.5..2', details } }),
     )
 
-    const failure = await putConfig(createDefaultMotionPetConfig()).catch((error: unknown) => error)
+    const failure = await putConfig(createDefaultPetweenConfig()).catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(ApiError)
     const apiError = failure as ApiError
     expect(apiError.status).toBe(400)
@@ -125,14 +125,14 @@ describe('client api', () => {
   })
 
   it('patchConfig PUTs a partial patch and unwraps the merged { config }', async () => {
-    const merged = createDefaultMotionPetConfig()
+    const merged = createDefaultPetweenConfig()
     merged.overlay = { x: 12, y: 34 }
     fetchMock.mockResolvedValue(jsonResponse(200, { config: merged }))
 
     const response = await patchConfig({ overlay: { x: 12, y: 34 } })
     expect(response.config.overlay).toEqual({ x: 12, y: 34 })
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/config')
+    expect(url).toBe('/api/petween/config')
     expect(init.method).toBe('PUT')
     expect((init.headers as Record<string, string>)['content-type']).toBe('application/json')
     // only the patch travels — not a full config copy
@@ -140,13 +140,13 @@ describe('client api', () => {
   })
 
   it('uploadAsset POSTs multipart with the file under the "file" field', async () => {
-    const asset = { id: '0123456789abcdef', url: '/motion-pet-assets/0123456789abcdef', width: 240, height: 240 }
+    const asset = { id: '0123456789abcdef', url: '/petween-assets/0123456789abcdef', width: 240, height: 240 }
     fetchMock.mockResolvedValue(jsonResponse(200, { asset }))
     const file = new File(['png-bytes'], 'pet.png', { type: 'image/png' })
 
     await expect(uploadAsset(file)).resolves.toEqual({ asset })
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/assets')
+    expect(url).toBe('/api/petween/assets')
     expect(init.method).toBe('POST')
     expect(init.body).toBeInstanceOf(FormData)
     const form = init.body as FormData
@@ -172,7 +172,7 @@ describe('client api', () => {
 
     await expect(deleteAsset('0123456789abcdef')).resolves.toEqual({ deleted: '0123456789abcdef' })
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/assets/0123456789abcdef')
+    expect(url).toBe('/api/petween/assets/0123456789abcdef')
     expect(init.method).toBe('DELETE')
   })
 
@@ -205,13 +205,13 @@ describe('client api', () => {
 })
 
 describe('client api — animations (V1.1)', () => {
-  it('getAnimations GETs /api/motion-pet/animations and returns { customs, warnings }', async () => {
+  it('getAnimations GETs /api/petween/animations and returns { customs, warnings }', async () => {
     const payload = { customs: [makeDefinition('user:abc')], warnings: ['broken.json: skipped'] }
     fetchMock.mockResolvedValue(jsonResponse(200, payload))
 
     await expect(getAnimations()).resolves.toEqual(payload)
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/animations')
+    expect(url).toBe('/api/petween/animations')
     expect(init.method ?? 'GET').toBe('GET')
   })
 
@@ -222,7 +222,7 @@ describe('client api — animations (V1.1)', () => {
     const response = await putAnimation(definition)
     expect(response.animation.id).toBe('user:abc-123')
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/animations/user%3Aabc-123')
+    expect(url).toBe('/api/petween/animations/user%3Aabc-123')
     expect(init.method).toBe('PUT')
     expect((init.headers as Record<string, string>)['content-type']).toBe('application/json')
     expect(JSON.parse(init.body as string)).toEqual(JSON.parse(JSON.stringify(definition)))
@@ -256,7 +256,7 @@ describe('client api — animations (V1.1)', () => {
 
     await expect(deleteAnimation('user:abc')).resolves.toEqual({ deleted: 'user:abc' })
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/animations/user%3Aabc')
+    expect(url).toBe('/api/petween/animations/user%3Aabc')
     expect(init.method).toBe('DELETE')
   })
 
@@ -280,7 +280,7 @@ describe('client api — animations (V1.1)', () => {
 
 describe('client api — pet presets (V1.1)', () => {
   const makePet = () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     return {
       id: 'pet_abc-123',
       name: '蓝猫',
@@ -296,17 +296,17 @@ describe('client api — pet presets (V1.1)', () => {
     const payload = { pets: [makePet()], activePetId: 'pet_abc-123', warnings: ['bad file'] }
     fetchMock.mockResolvedValue(jsonResponse(200, payload))
     await expect(getPets()).resolves.toEqual(payload)
-    expect(lastCall().url).toBe('/api/motion-pet/pets')
+    expect(lastCall().url).toBe('/api/petween/pets')
     expect(lastCall().init.method ?? 'GET').toBe('GET')
   })
 
   it('createPet POSTs name/from and returns the pet plus applied config', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.activePetId = 'pet_abc-123'
     fetchMock.mockResolvedValue(jsonResponse(200, { pet: makePet(), config }))
     await expect(createPet({ name: '蓝猫', from: 'blank' })).resolves.toMatchObject({ config })
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/pets')
+    expect(url).toBe('/api/petween/pets')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({ name: '蓝猫', from: 'blank' })
   })
@@ -315,7 +315,7 @@ describe('client api — pet presets (V1.1)', () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { pet: { ...makePet(), name: '新名字' } }))
     await renamePet('pet_abc-123', '新名字')
     const { url, init } = lastCall()
-    expect(url).toBe('/api/motion-pet/pets/pet_abc-123')
+    expect(url).toBe('/api/petween/pets/pet_abc-123')
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body as string)).toEqual({ name: '新名字' })
   })
@@ -323,7 +323,7 @@ describe('client api — pet presets (V1.1)', () => {
   it('deletePet DELETEs the id and maps host error codes', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: 'pet_abc-123' }))
     await expect(deletePet('pet_abc-123')).resolves.toEqual({ deleted: 'pet_abc-123' })
-    expect(lastCall()).toMatchObject({ url: '/api/motion-pet/pets/pet_abc-123', init: { method: 'DELETE' } })
+    expect(lastCall()).toMatchObject({ url: '/api/petween/pets/pet_abc-123', init: { method: 'DELETE' } })
 
     fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'unknown pet' } }))
     const failure = await deletePet('pet_missing').catch((error: unknown) => error)
@@ -332,12 +332,12 @@ describe('client api — pet presets (V1.1)', () => {
   })
 
   it('applyPet POSTs the apply subpath and returns the host config', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.activePetId = 'pet_abc-123'
     fetchMock.mockResolvedValue(jsonResponse(200, { config }))
     await expect(applyPet('pet_abc-123')).resolves.toEqual({ config })
     expect(lastCall()).toMatchObject({
-      url: '/api/motion-pet/pets/pet_abc-123/apply',
+      url: '/api/petween/pets/pet_abc-123/apply',
       init: { method: 'POST' },
     })
   })

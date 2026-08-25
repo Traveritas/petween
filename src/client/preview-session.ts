@@ -12,7 +12,7 @@
  */
 import { createPoseResolver } from '../core/pose-resolver'
 import { stateSlotFor } from '../core/state-machine'
-import type { AssetMeta, MotionPetConfig, PoseKey, ResolvedPose } from '../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey, ResolvedPose } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import { assertValidAnimationDefinition } from '../motion/animation-definition'
@@ -28,7 +28,7 @@ const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 export interface PreviewSessionOptions {
   stage: PetStage
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   /** V1.1 custom animations to register on top of the built-ins. */
   customs?: AnimationDefinition[]
@@ -44,7 +44,7 @@ export class PreviewSession {
   readonly source: ManualStateSource
 
   private readonly stage: PetStage
-  private readonly config: MotionPetConfig
+  private readonly config: PetweenConfig
   private assets: Record<string, AssetMeta>
   private resolvePose: (poseKey: PoseKey) => ResolvedPose | null
   private readonly customInstances = new Set<TimelineInstance>()
@@ -119,7 +119,7 @@ export class PreviewSession {
    * the reduced-motion setting) actually changed: unrelated slider drags must
    * not restart loops mid-gesture.
    */
-  async updateConfig(config: MotionPetConfig, assets: Record<string, AssetMeta>): Promise<void> {
+  async updateConfig(config: PetweenConfig, assets: Record<string, AssetMeta>): Promise<void> {
     if (this.disposed) return
     const snapshot = structuredClone(config)
     const previousStates = JSON.stringify(this.config.states)
@@ -272,7 +272,7 @@ export class PreviewSession {
   replayEnter(): void {
     if (this.disposed) return
     this.director.replayEnter().catch((error: unknown) => {
-      console.error('motion-pet: replay enter failed', error)
+      console.error('petween: replay enter failed', error)
     })
   }
 
@@ -314,7 +314,7 @@ export class PreviewSession {
     if (this.disposed) return
     const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     for (const warning of syncCustomAnimations(this.registry, customs)) {
-      console.warn(`motion-pet: ${warning}`)
+      console.warn(`petween: ${warning}`)
     }
     const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     if (before !== after) this.director.refreshAmbient()

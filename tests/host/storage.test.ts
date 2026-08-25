@@ -11,7 +11,7 @@ import { readJsonFile, writeJsonAtomic } from '../../src/host/storage'
 let dir: string
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'motion-pet-storage-'))
+  dir = await mkdtemp(join(tmpdir(), 'petween-storage-'))
 })
 
 afterEach(async () => {

@@ -6,9 +6,9 @@
  * re-tagged as reason 'manual-preview'.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { createPoseResolver } from '../../src/core/pose-resolver'
-import type { AssetMeta, MotionPetConfig, MotionTarget } from '../../src/core/types'
+import type { AssetMeta, PetweenConfig, MotionTarget } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import { ManualStateSource } from '../../src/client/manual-state-source'
 import { createBuiltinRegistry } from '../../src/motion/animation-registry'
@@ -29,7 +29,7 @@ afterEach(() => {
 })
 
 interface Setup {
-  config: MotionPetConfig
+  config: PetweenConfig
   director: MotionDirector
   source: ManualStateSource
   targets: MotionTarget[]
@@ -38,7 +38,7 @@ interface Setup {
 const setup = (): Setup => {
   const stage = createFakeStage()
   const registry = createBuiltinRegistry()
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of POSE_KEYS) {
     config.poses[key].assetId = `asset-${key}`

@@ -1,12 +1,12 @@
 /**
- * host/validation.ts — MotionPetConfig schema enforcement (spec §7.7, §19.2)
+ * host/validation.ts — PetweenConfig schema enforcement (spec §7.7, §19.2)
  * plus small shared validators.
  *
  * One walker serves two modes:
  * - `repair` (config load, spec §18.3): never throws; every invalid known
  *   field falls back to the base config value, unknown fields are stripped,
  *   missing fields are filled from the base.
- * - `strict` (PUT /api/motion-pet/config): same walk, but any invalid known
+ * - `strict` (PUT /api/petween/config): same walk, but any invalid known
  *   field is collected as a field-path issue and reported via
  *   ConfigValidationError (→ HTTP 400). Unknown fields are still stripped
  *   rather than rejected (§19.2 "只接受 schema 中存在的字段").
@@ -18,7 +18,7 @@ import type {
   AmbientConfig,
   BounceConfig,
   BreatheConfig,
-  MotionPetConfig,
+  PetweenConfig,
   PoseAnchor,
   PoseConfig,
   PoseKey,
@@ -27,7 +27,7 @@ import type {
   TransitionPreset,
 } from '../core/types'
 import { POSE_KEYS, TRANSITION_DURATION_LIMITS, TRANSITION_STRENGTH_LIMITS } from '../core/types'
-import { createDefaultMotionPetConfig } from '../core/defaults'
+import { createDefaultPetweenConfig } from '../core/defaults'
 import type { AnimationKind } from '../motion/animation-definition'
 import { BUILTIN_TRANSITION_DEFINITIONS } from '../core/transition-presets'
 
@@ -379,7 +379,7 @@ function poseRecordField<V>(
   return out
 }
 
-function buildConfig(raw: unknown, base: MotionPetConfig, mode: Mode, options: ConfigValidationOptions = {}): MotionPetConfig {
+function buildConfig(raw: unknown, base: PetweenConfig, mode: Mode, options: ConfigValidationOptions = {}): PetweenConfig {
   const walk: Walk = { mode, issues: [], animationLookup: options.animationLookup }
   const source = objectField(raw ?? undefined, '', walk)
   // Version handling is decided by loadConfig (spec §18.3); here the v1 tag
@@ -393,7 +393,7 @@ function buildConfig(raw: unknown, base: MotionPetConfig, mode: Mode, options: C
   const interactionsSource = objectField(source.interactions, 'interactions', walk)
   const clickSource = objectField(interactionsSource.click, 'interactions.click', walk)
 
-  const config: MotionPetConfig = {
+  const config: PetweenConfig = {
     version: 1,
     enabled: booleanField(source.enabled, base.enabled, 'enabled', walk),
     global: {
@@ -463,8 +463,8 @@ function buildConfig(raw: unknown, base: MotionPetConfig, mode: Mode, options: C
 }
 
 /** Lenient load-time repair (spec §18.3): never throws, always returns v1. */
-export function repairConfig(raw: unknown, options: ConfigValidationOptions = {}): MotionPetConfig {
-  return buildConfig(raw, createDefaultMotionPetConfig(), 'repair', options)
+export function repairConfig(raw: unknown, options: ConfigValidationOptions = {}): PetweenConfig {
+  return buildConfig(raw, createDefaultPetweenConfig(), 'repair', options)
 }
 
 /**
@@ -474,9 +474,9 @@ export function repairConfig(raw: unknown, options: ConfigValidationOptions = {}
  */
 export function validateConfigPatch(
   raw: unknown,
-  base: MotionPetConfig = createDefaultMotionPetConfig(),
+  base: PetweenConfig = createDefaultPetweenConfig(),
   options: ConfigValidationOptions = {},
-): MotionPetConfig {
+): PetweenConfig {
   return buildConfig(raw, base, 'strict', options)
 }
 

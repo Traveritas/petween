@@ -22,11 +22,11 @@
  *   while the turn-end is still coalescing and while success/error is held. A
  *   held terminal exits only via the hold timer, a new activity, or dismiss.
  */
-import type { MotionPetConfig, MotionTarget, MotionTargetReason, PetSemanticEvent, PoseKey } from './types'
+import type { PetweenConfig, MotionTarget, MotionTargetReason, PetSemanticEvent, PoseKey } from './types'
 import { reducePetState, stateSlotFor, type PetVisualSnapshot } from './state-machine'
 
 export interface PetStateResolverOptions {
-  config: Pick<MotionPetConfig, 'states' | 'global' | 'advanced'>
+  config: Pick<PetweenConfig, 'states' | 'global' | 'advanced'>
   onTarget: (target: MotionTarget) => void
   /** §15.3 event coalescing window; default 60ms. */
   coalesceMs?: number

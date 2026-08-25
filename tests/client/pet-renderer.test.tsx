@@ -62,7 +62,7 @@ describe('PetRenderer', () => {
     const stage = log[0]
     if (stage === null) throw new Error('stage missing')
     expect(stage).toBeInstanceOf(PetStage)
-    expect(container.querySelector('.dsh-motion-pet-position')).toBe(stage.element)
+    expect(container.querySelector('.petween-position')).toBe(stage.element)
 
     act(() => {
       root.unmount()
@@ -71,7 +71,7 @@ describe('PetRenderer', () => {
     // the controller is notified BEFORE the DOM is removed, so it can dispose
     // its MotionDirector (owner of all in-flight WAAPI animations, §23)
     expect(log).toEqual([stage, null])
-    expect(container.querySelector('.dsh-motion-pet-position')).toBeNull()
+    expect(container.querySelector('.petween-position')).toBeNull()
   })
 
   it('syncs reducedMotion and the anchor marker into the live stage', () => {
@@ -81,7 +81,7 @@ describe('PetRenderer', () => {
     const stage = log[0]
     if (stage === null) throw new Error('stage missing')
     expect(stage.reducedMotion).toBe(true)
-    const marker = stage.element.querySelector('.dsh-motion-pet-anchor-marker') as HTMLElement
+    const marker = stage.element.querySelector('.petween-anchor-marker') as HTMLElement
     expect(marker.style.display).toBe('none')
 
     render({ onStage, reducedMotion: false, showAnchorMarker: true })
@@ -98,6 +98,6 @@ describe('PetRenderer', () => {
     render({ onStage, visible: true })
     expect(log).toHaveLength(1)
     expect(log[0]).toBeInstanceOf(PetStage)
-    expect(container.querySelector('.dsh-motion-pet-position')).not.toBeNull()
+    expect(container.querySelector('.petween-position')).not.toBeNull()
   })
 })

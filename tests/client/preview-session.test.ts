@@ -7,8 +7,8 @@
  * reduced motion and the §23 visibility policy.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import { PetStage } from '../../src/client/overlay/pet-stage'
 import { PreviewSession } from '../../src/client/preview-session'
@@ -46,16 +46,16 @@ const assetUrl = (key: PoseKey): string => `https://example.test/${key}.webp`
 
 interface Setup {
   stage: PetStage
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   session: PreviewSession
   image: HTMLImageElement
 }
 
-const setup = (mutateConfig?: (config: MotionPetConfig) => void): Setup => {
+const setup = (mutateConfig?: (config: PetweenConfig) => void): Setup => {
   const stage = new PetStage()
   document.body.appendChild(stage.element)
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of POSE_KEYS) {
     config.poses[key].assetId = `asset-${key}`
@@ -366,7 +366,7 @@ describe('PreviewSession — custom animation sync and 试播 (V1.1)', () => {
   it('registers option customs at construction and follows updateCustoms (add/change/remove)', async () => {
     const stage = new PetStage()
     document.body.appendChild(stage.element)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     const assets: Record<string, AssetMeta> = {}
     for (const key of POSE_KEYS) {
       config.poses[key].assetId = `asset-${key}`

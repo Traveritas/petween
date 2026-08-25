@@ -5,7 +5,7 @@
  * → idle and asserts transition counts and ambient-only updates.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { PetStateResolver } from '../../src/core/pet-state-resolver'
 import { createPoseResolver } from '../../src/core/pose-resolver'
 import type { AssetMeta, PetSemanticEvent } from '../../src/core/types'
@@ -22,7 +22,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   harness = installFakeAnimate()
   stage = createFakeStage()
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
     assets[key] = {
@@ -33,7 +33,7 @@ beforeEach(() => {
       height: 240,
       sizeBytes: 1024,
       sha256: `sha-${key}`,
-      url: `/motion-pet-assets/${key}.webp`,
+      url: `/petween-assets/${key}.webp`,
     }
     config.poses[key].assetId = key
   }

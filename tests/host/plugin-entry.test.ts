@@ -7,23 +7,38 @@
  * effect body runs synchronously while the fiber is active and a synchronous
  * failure rethrows out of ctx.effect.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply } from '../../src/index'
 
-const MOUNT_FLAG = Symbol.for('dsh-motion-pet/host')
+// apply() runs the one-time home-dir migration (host/migrate.ts) against
+// dshHomePath() BEFORE constructing stores. Point $DSH_HOME at a throwaway
+// tmpdir so these tests can never touch (let alone move) real user data.
+// dshHomePath reads the env on every call, so the per-file override sticks.
+const PREVIOUS_DSH_HOME = process.env.DSH_HOME
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'petween-entry-'))
+afterAll(() => {
+  rmSync(process.env.DSH_HOME!, { recursive: true, force: true })
+  if (PREVIOUS_DSH_HOME === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = PREVIOUS_DSH_HOME
+})
+
+const MOUNT_FLAG = Symbol.for('petween/host')
 
 const ALL_ROUTES = [
-  '/api/motion-pet/config',
-  '/api/motion-pet/assets',
-  '/api/motion-pet/animations', // exact GET
-  '/api/motion-pet/animations', // prefix PUT/DELETE
-  '/api/motion-pet/pets', // exact GET/POST
-  '/api/motion-pet/pets', // prefix PUT/DELETE + apply
-  '/motion-pet-assets',
-  '/motion-pet-editor',
-  '/api/motion-pet/events',
-  '/api/motion-pet/state',
+  '/api/petween/config',
+  '/api/petween/assets',
+  '/api/petween/animations', // exact GET
+  '/api/petween/animations', // prefix PUT/DELETE
+  '/api/petween/pets', // exact GET/POST
+  '/api/petween/pets', // prefix PUT/DELETE + apply
+  '/petween-assets',
+  '/petween-editor',
+  '/api/petween/events',
+  '/api/petween/state',
 ]
 
 type EffectCallback = () => (() => void) | void
@@ -79,7 +94,7 @@ describe('host apply — mount-once flag', () => {
     apply(first.ctx)
     expect(first.routes).toEqual(ALL_ROUTES)
     expect(first.listeners).toEqual(['session/event', 'agent/status', 'agent/error', 'session/disposed'])
-    expect(first.provides.map((entry) => entry.name)).toEqual(['motion-pet'])
+    expect(first.provides.map((entry) => entry.name)).toEqual(['petween'])
 
     const second = makeCtx()
     apply(second.ctx)
@@ -88,8 +103,25 @@ describe('host apply — mount-once flag', () => {
     expect(second.provides).toHaveLength(0)
   })
 
+  it('migrates a legacy motion-pet home onto petween before any store loads', () => {
+    const legacy = join(process.env.DSH_HOME!, 'motion-pet')
+    const target = join(process.env.DSH_HOME!, 'petween')
+    mkdirSync(join(legacy, 'assets'), { recursive: true })
+    writeFileSync(join(legacy, 'config.json'), JSON.stringify({ marker: 'real-user-data' }))
+    writeFileSync(join(legacy, 'assets', 'a.webp'), Buffer.from([0x89, 0x50]))
+
+    const { ctx } = makeCtx()
+    apply(ctx)
+    // Entry-level guarantee: the rename happened, content survived intact.
+    expect(existsSync(legacy)).toBe(false)
+    expect(readFileSync(join(target, 'config.json'), 'utf8')).toBe(JSON.stringify({ marker: 'real-user-data' }))
+    expect(readFileSync(join(target, 'assets', 'a.webp'))).toEqual(Buffer.from([0x89, 0x50]))
+    // Keep the isolated home clean for the tests that follow.
+    rmSync(target, { recursive: true, force: true })
+  })
+
   it('a mid-init failure releases the flag and rolls back: a retry mounts cleanly', () => {
-    const failing = makeCtx({ failOnPath: '/api/motion-pet/events' })
+    const failing = makeCtx({ failOnPath: '/api/petween/events' })
     expect(() => apply(failing.ctx)).toThrow(/duplicate/)
     // the config/asset routes registered before the throw were rolled back
     expect(failing.routes).toEqual([])
@@ -112,6 +144,6 @@ describe('host apply — mount-once flag', () => {
     const second = makeCtx()
     apply(second.ctx)
     expect(second.routes).toEqual(ALL_ROUTES)
-    expect(second.provides.map((entry) => entry.name)).toEqual(['motion-pet'])
+    expect(second.provides.map((entry) => entry.name)).toEqual(['petween'])
   })
 })

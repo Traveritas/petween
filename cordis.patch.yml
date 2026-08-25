@@ -1,6 +1,6 @@
-# Plugin patch layer: insert the motion-pet host plugin entry into the
+# Plugin patch layer: insert the petween host plugin entry into the
 # profile's cordis tree. `dsh plugin add` picks this file up via the
 # package.json `dsh.bundle.patch` field.
 - insert:
-    - id: motion-pet
-      name: 'dsh-motion-pet'
+    - id: petween
+      name: 'petween'

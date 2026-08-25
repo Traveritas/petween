@@ -11,7 +11,7 @@
  * §19.3), so this component never deals with local File objects.
  */
 import { useEffect, useState, type JSX, type MutableRefObject } from 'react'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../core/types'
 import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
 import { sendStateSlot, type PreviewSession } from '../preview-session'
@@ -24,11 +24,11 @@ import styles from './settings.module.css'
 const STATE_BUTTONS: readonly PoseKey[] = ['idle', 'thinking', 'working', 'waiting', 'success', 'error']
 
 export interface LivePreviewProps {
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   /** Bumped by the store on every content change; drives the session hot-sync. */
   configRevision: number
-  /** Owned by MotionPetSettings: the session is born/dies with the stage. */
+  /** Owned by PetweenSettings: the session is born/dies with the stage. */
   sessionRef: MutableRefObject<PreviewSession | null>
   onStage: (stage: PetStage | null) => void
   onReplay: () => void

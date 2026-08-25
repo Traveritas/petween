@@ -1,6 +1,6 @@
 # AnimationDefinition 数据格式说明
 
-本文面向未来要编写 **Motion Pack**（自定义动画包）的用户，说明 dsh-motion-pet 的动画数据格式。
+本文面向未来要编写 **Motion Pack**（自定义动画包）的用户，说明 petween 的动画数据格式。
 所有动画——无论是内置 Preset（Comic Pop / Bounce / Sway……）还是用户自定义动画——都是一份
 `AnimationDefinition` JSON，由同一个 Timeline Engine 编译执行（规格 §8）。运行时没有任何针对
 具体动画的专用分支，因此**你写的每一份合法 JSON 都能直接运行**。

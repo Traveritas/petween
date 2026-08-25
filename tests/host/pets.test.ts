@@ -8,7 +8,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig, createDefaultPoseConfigs, createDefaultStateAppearances } from '../../src/core/defaults'
+import { createDefaultPetweenConfig, createDefaultPoseConfigs, createDefaultStateAppearances } from '../../src/core/defaults'
 import { ConfigStore } from '../../src/host/config'
 import { PetError, PetsStore, petSliceFromConfig, validatePetId, type PetSlice } from '../../src/host/pets'
 
@@ -20,7 +20,7 @@ let tick: number
 const now = (): string => new Date(1_760_000_000_000 + tick++ * 1000).toISOString()
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'motion-pet-pets-'))
+  dir = await mkdtemp(join(tmpdir(), 'petween-pets-'))
   tick = 0
   store = new PetsStore({ petsDir: join(dir, 'pets'), now })
 })
@@ -31,7 +31,7 @@ afterEach(async () => {
 
 /** A slice with recognizable non-default content. */
 function makeSlice(scale = 1.5): PetSlice {
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   config.global.scale = scale
   config.poses.idle.assetId = '0123456789abcdef'
   config.states.success.enter = { preset: 'jump', strength: 1.2, durationMs: 400 }

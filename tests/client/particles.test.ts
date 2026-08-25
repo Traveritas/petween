@@ -36,7 +36,7 @@ describe('ParticleEmitter', () => {
     expect(PARTICLE_EFFECTS.confetti.count).toBeLessThanOrEqual(MAX_PARTICLES_PER_EMIT)
     expect(emitter.liveCount).toBe(PARTICLE_EFFECTS.confetti.count)
     for (const element of particles) {
-      expect(element.className).toBe('dsh-motion-pet-particle')
+      expect(element.className).toBe('petween-particle')
       expect((element as HTMLElement).style.pointerEvents).toBe('none')
     }
     // one animation per particle, finite duration from the spec range

@@ -5,7 +5,7 @@
  * slider (0.2..8, host validation bounds).
  */
 import type { JSX } from 'react'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../core/types'
 import type { EditorStore } from '../stores/editor-store'
 import { FileImportButton, Slider } from './controls'
 import { STATE_LABELS } from './StateList'
@@ -13,7 +13,7 @@ import styles from './settings.module.css'
 
 export interface PoseEditorProps {
   state: PoseKey
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   /** UX-3: true while this slot's image upload is in flight (shows 上传中…). */
   importing?: boolean

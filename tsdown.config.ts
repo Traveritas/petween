@@ -1,5 +1,5 @@
 /**
- * tsdown build for dsh-motion-pet — single-package adaptation of the DSH
+ * tsdown build for petween — single-package adaptation of the DSH
  * client bundle preset (deepseek-harness `packages/client/tsdown.client.ts`,
  * verified against dsh 0.1.0-rc.7; see docs/implementation-notes.md §5).
  *
@@ -13,7 +13,7 @@
  *                  no shell, react inlined; open preview/index.html via any
  *                  static server or file://)
  * - lib/editor.js   the standalone full-page settings editor the host serves
- *                  at /motion-pet-editor/ (same self-contained IIFE pattern
+ *                  at /petween-editor/ (same self-contained IIFE pattern
  *                  as the preview)
  */
 import { readFile } from 'node:fs/promises'
@@ -119,7 +119,7 @@ function clientBundlePurity() {
 }
 
 const lib: UserConfig = {
-  name: 'dsh-motion-pet',
+  name: 'petween',
   entry: ['src/index.ts'],
   outDir: 'lib',
   format: ['esm'],
@@ -136,7 +136,7 @@ const lib: UserConfig = {
 }
 
 const client: UserConfig = {
-  name: 'dsh-motion-pet/client',
+  name: 'petween/client',
   entry: { client: 'src/client/index.ts' },
   outDir: 'lib',
   format: 'cjs',
@@ -153,17 +153,17 @@ const client: UserConfig = {
     alwaysBundle: (id: string) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
   },
   define: ENV_DEFINES,
-  plugins: [clientBundlePurity(), cssModulesInline('dsh-motion-pet')],
+  plugins: [clientBundlePurity(), cssModulesInline('petween')],
   outputOptions: {
     entryFileNames: 'client.js',
-    banner: `window.__ModuleLoader__.load({ id: "dsh-motion-pet", factory: (require) => {`,
+    banner: `window.__ModuleLoader__.load({ id: "petween", factory: (require) => {`,
     footer: 'return module.exports; } });',
     intro: 'var module = { exports: {} }; var exports = module.exports;',
   },
 }
 
 const preview: UserConfig = {
-  name: 'dsh-motion-pet/preview',
+  name: 'petween/preview',
   entry: { preview: 'src/preview/index.tsx' },
   outDir: 'preview',
   format: 'iife',
@@ -178,14 +178,14 @@ const preview: UserConfig = {
     onlyBundle: false, // react et al. are inlined on purpose; silence the hint
   },
   define: ENV_DEFINES,
-  plugins: [cssModulesInline('dsh-motion-pet/preview')],
+  plugins: [cssModulesInline('petween/preview')],
   outputOptions: {
     entryFileNames: 'preview.js',
   },
 }
 
 const editor: UserConfig = {
-  name: 'dsh-motion-pet/editor',
+  name: 'petween/editor',
   entry: { editor: 'src/editor/index.tsx' },
   outDir: 'lib',
   format: 'iife',
@@ -201,7 +201,7 @@ const editor: UserConfig = {
     onlyBundle: false,
   },
   define: ENV_DEFINES,
-  plugins: [clientBundlePurity(), cssModulesInline('dsh-motion-pet/editor')],
+  plugins: [clientBundlePurity(), cssModulesInline('petween/editor')],
   outputOptions: {
     entryFileNames: 'editor.js',
   },

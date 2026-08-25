@@ -16,10 +16,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigPatch } from '../../src/client/api'
-import { MotionPetSettings } from '../../src/client/settings/MotionPetSettings'
+import { PetweenSettings } from '../../src/client/settings/PetweenSettings'
 import type { EditorApi } from '../../src/client/stores/editor-store'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { validateAnimationDefinition } from '../../src/motion/animation-definition'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
@@ -72,7 +72,7 @@ const idleAsset: AssetMeta = {
   height: 240,
   sizeBytes: 10,
   sha256: 'x',
-  url: '/motion-pet-assets/aaaa1111bbbb2222',
+  url: '/petween-assets/aaaa1111bbbb2222',
 }
 
 const transitionCustom = (id: string, name: string): AnimationDefinition => ({
@@ -140,9 +140,9 @@ interface ApiMocks {
 }
 
 const makeApi = (
-  options: { customs?: AnimationDefinition[]; mutateConfig?: (config: MotionPetConfig) => void } = {},
+  options: { customs?: AnimationDefinition[]; mutateConfig?: (config: PetweenConfig) => void } = {},
 ): { api: EditorApi; mocks: ApiMocks } => {
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   config.poses.idle.assetId = idleAsset.id
   options.mutateConfig?.(config)
   const assets = { [idleAsset.id]: idleAsset }
@@ -187,7 +187,7 @@ const makeApi = (
 
 const render = async (api: EditorApi, wide: boolean): Promise<void> => {
   await act(async () => {
-    root.render(<MotionPetSettings api={api} wide={wide} />)
+    root.render(<PetweenSettings api={api} wide={wide} />)
   })
 }
 

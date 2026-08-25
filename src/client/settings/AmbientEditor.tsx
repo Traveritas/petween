@@ -9,7 +9,7 @@
  * 400s on that).
  */
 import type { JSX } from 'react'
-import type { MotionPetConfig, PoseKey } from '../../core/types'
+import type { PetweenConfig, PoseKey } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import type { EditorStore } from '../stores/editor-store'
 import { NumberField, SelectRow, Slider, Toggle } from './controls'
@@ -17,7 +17,7 @@ import styles from './settings.module.css'
 
 export interface AmbientEditorProps {
   state: PoseKey
-  config: MotionPetConfig
+  config: PetweenConfig
   customs: AnimationDefinition[]
   store: EditorStore
 }

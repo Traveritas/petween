@@ -6,18 +6,18 @@
  */
 import type { JSX } from 'react'
 import { createPoseResolver } from '../../core/pose-resolver'
-import type { AssetMeta, MotionPetConfig, PoseKey } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import { STATE_LABELS } from './state-labels'
 import styles from './settings.module.css'
 
-// Re-exported for the existing import sites (MotionPetSettings, PoseEditor,
+// Re-exported for the existing import sites (PetweenSettings, PoseEditor,
 // LivePreview); the definition lives in state-labels.ts so non-React modules
 // (the editor store) can share it without pulling in components.
 export { STATE_LABELS }
 
 export interface StateListProps {
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   selected: PoseKey
   onSelect: (state: PoseKey) => void

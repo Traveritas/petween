@@ -4,14 +4,14 @@
  * integration/dsh/event-normalizer, keeps each session's latest normalized
  * event in memory, and serves:
  *
- * - exact `GET /api/motion-pet/events[?session=<id>]` — SSE stream. On
+ * - exact `GET /api/petween/events[?session=<id>]` — SSE stream. On
  *   connect a snapshot frame is sent first (`{kind:'snapshot',events:[...]}`:
  *   the session's last known event, zero-or-one when filtered, every known
  *   session when aggregate), then one frame per normalized event
- *   (`{kind:'event',event:{...}}`), then a `: motion-pet` heartbeat comment
+ *   (`{kind:'event',event:{...}}`), then a `: petween` heartbeat comment
  *   every 25s. The webServer WebRoute contract explicitly allows holding the
  *   response open for SSE (dsh-host-webserver types).
- * - exact `GET /api/motion-pet/state[?session=<id>]` — plain JSON snapshot
+ * - exact `GET /api/petween/state[?session=<id>]` — plain JSON snapshot
  *   with the same `{events:[...]}` payload, for initial load and the client's
  *   fallback polling.
  *
@@ -34,7 +34,7 @@ export { EVENTS_PATH, STATE_PATH }
 
 const DEFAULT_HEARTBEAT_MS = 25_000
 /** Keep-alive comment line (SSE convention), sent between data frames. */
-const HEARTBEAT_LINE = ': motion-pet\n\n'
+const HEARTBEAT_LINE = ': petween\n\n'
 
 /** SSE wire frame (one `data: {json}\n\n` block each). */
 

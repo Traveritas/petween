@@ -9,8 +9,8 @@
  */
 import { useCallback, useEffect, useReducer, useRef, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createDefaultMotionPetConfig } from '../core/defaults'
-import type { AssetMeta, MotionPetConfig, PoseKey, TransitionPreset } from '../core/types'
+import { createDefaultPetweenConfig } from '../core/defaults'
+import type { AssetMeta, PetweenConfig, PoseKey, TransitionPreset } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import { assertValidAnimationDefinition } from '../motion/animation-definition'
 import { ManualStateSource } from '../client/manual-state-source'
@@ -90,8 +90,8 @@ function poseSvgDataUri(spec: PreviewPoseSpec): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 }
 
-function createPreviewState(): { config: MotionPetConfig; assets: Record<string, AssetMeta> } {
-  const config = createDefaultMotionPetConfig()
+function createPreviewState(): { config: PetweenConfig; assets: Record<string, AssetMeta> } {
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of POSE_KEYS) {
     const spec = PREVIEW_POSE_SPECS[key]
@@ -319,7 +319,7 @@ function App(): JSX.Element {
   return (
     <div className="app">
       <aside className="controls">
-        <h1>Motion Pet 预览</h1>
+        <h1>Petween 预览</h1>
 
         <section>
           <h2>状态（ManualStateSource → StateMachine → MotionDirector）</h2>

@@ -5,20 +5,20 @@
  * event coalescing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { PetStateResolver } from '../../src/core/pet-state-resolver'
-import type { MotionPetConfig, MotionTarget, PetSemanticEvent } from '../../src/core/types'
+import type { PetweenConfig, MotionTarget, PetSemanticEvent } from '../../src/core/types'
 
 const COALESCE = 60
 
-let config: MotionPetConfig
+let config: PetweenConfig
 let targets: MotionTarget[]
 let resolver: PetStateResolver
 
 beforeEach(() => {
   vi.useFakeTimers()
   targets = []
-  config = createDefaultMotionPetConfig()
+  config = createDefaultPetweenConfig()
   resolver = new PetStateResolver({
     config,
     onTarget: (next) => targets.push(next),
@@ -122,7 +122,7 @@ describe('PetStateResolver — transient success/error (§14.4)', () => {
 
   it('hold durations are configurable via config.global', async () => {
     resolver.dispose()
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.global.successHoldMs = 500
     resolver = new PetStateResolver({ config, onTarget: (next) => targets.push(next) })
     await send({ type: 'turn-end', outcome: 'success' })

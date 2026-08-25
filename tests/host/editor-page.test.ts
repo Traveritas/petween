@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { registerEditorPage, type EditorPageDeps } from '../../src/host/editor-page'
 
-const TEST_BUNDLE = Buffer.from('/* motion-pet editor bundle (test) */')
+const TEST_BUNDLE = Buffer.from('/* petween editor bundle (test) */')
 
 let server: Server
 let base: string
@@ -58,23 +58,23 @@ afterEach(async () => {
   await new Promise((resolve) => server.close(resolve))
 })
 
-describe('GET /motion-pet-editor (HTML shell)', () => {
+describe('GET /petween-editor (HTML shell)', () => {
   it('serves the HTML shell at the bare path and the trailing slash', async () => {
-    for (const path of ['/motion-pet-editor', '/motion-pet-editor/']) {
+    for (const path of ['/petween-editor', '/petween-editor/']) {
       const res = await fetch(`${base}${path}`)
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('text/html')
       const html = await res.text()
-      expect(html).toContain('<title>Motion Pet 编辑器</title>')
+      expect(html).toContain('<title>Petween 编辑器</title>')
       expect(html).toContain('<div id="root"></div>')
       // relative bundle reference, anchored by <base> for the no-slash URL
-      expect(html).toContain('<base href="/motion-pet-editor/"')
+      expect(html).toContain('<base href="/petween-editor/"')
       expect(html).toContain('<script src="./client.js"></script>')
     }
   })
 
   it('answers HEAD with headers only', async () => {
-    const res = await fetch(`${base}/motion-pet-editor/`, { method: 'HEAD' })
+    const res = await fetch(`${base}/petween-editor/`, { method: 'HEAD' })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/html')
     expect(Number(res.headers.get('content-length'))).toBeGreaterThan(0)
@@ -82,9 +82,9 @@ describe('GET /motion-pet-editor (HTML shell)', () => {
   })
 })
 
-describe('GET /motion-pet-editor/client.js (bundle)', () => {
+describe('GET /petween-editor/client.js (bundle)', () => {
   it('serves the prebuilt bundle as javascript with the right length', async () => {
-    const res = await fetch(`${base}/motion-pet-editor/client.js`)
+    const res = await fetch(`${base}/petween-editor/client.js`)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/javascript')
     expect(res.headers.get('content-length')).toBe(String(TEST_BUNDLE.length))
@@ -99,29 +99,29 @@ describe('GET /motion-pet-editor/client.js (bundle)', () => {
         throw new Error('ENOENT: no such file')
       },
     })
-    const res = await fetch(`${base}/motion-pet-editor/client.js`)
+    const res = await fetch(`${base}/petween-editor/client.js`)
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error.code).toBe('EDITOR_BUNDLE_MISSING')
     expect(body.error.message).toContain('pnpm run build')
     // the HTML shell keeps working — only the bundle is missing
-    expect((await fetch(`${base}/motion-pet-editor/`)).status).toBe(200)
+    expect((await fetch(`${base}/petween-editor/`)).status).toBe(200)
   })
 })
 
 describe('route guards', () => {
   it('404s unknown subpaths', async () => {
-    for (const path of ['/motion-pet-editor/foo', '/motion-pet-editor/client.js.map']) {
+    for (const path of ['/petween-editor/foo', '/petween-editor/client.js.map']) {
       const res = await fetch(`${base}${path}`)
       expect(res.status).toBe(404)
     }
   })
 
   it('405s non-GET/HEAD methods', async () => {
-    const res = await fetch(`${base}/motion-pet-editor/`, { method: 'POST' })
+    const res = await fetch(`${base}/petween-editor/`, { method: 'POST' })
     expect(res.status).toBe(405)
     expect(res.headers.get('allow')).toBe('GET, HEAD')
-    const onBundle = await fetch(`${base}/motion-pet-editor/client.js`, { method: 'DELETE' })
+    const onBundle = await fetch(`${base}/petween-editor/client.js`, { method: 'DELETE' })
     expect(onBundle.status).toBe(405)
   })
 })

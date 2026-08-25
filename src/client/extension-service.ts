@@ -1,5 +1,5 @@
 /**
- * client/extension-service.ts — the `motion-pet/client` extension surface:
+ * client/extension-service.ts — the `petween/client` extension surface:
  * the first cordis service this plugin provides to OTHER DSH plugins (wired
  * with ctx.provide in client/index.ts, the only file allowed to touch ctx).
  * Three windows onto the live pet: stage snapshots, exclusive position
@@ -69,7 +69,7 @@ export interface PlayAnimationOptions {
   strength?: number
 }
 
-export interface MotionPetClientService {
+export interface PetweenClientService {
   readonly version: 1
   /** Null while no overlay session is active (pet disabled/unmounted). */
   getStageSnapshot(): StageSnapshot | null
@@ -161,8 +161,8 @@ export function clearActivePetSession(session: OverlaySession): void {
   emitSnapshot()
 }
 
-/** The service singleton client/index.ts provides as 'motion-pet/client'. */
-export const motionPetClientService: MotionPetClientService = {
+/** The service singleton client/index.ts provides as 'petween/client'. */
+export const petweenClientService: PetweenClientService = {
   version: 1,
   getStageSnapshot: () => snapshotOf(),
   subscribeStage: (listener) => {

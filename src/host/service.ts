@@ -1,11 +1,11 @@
 /**
  * host/service.ts — the cordis surface companion plugins consume
- * (`inject: ['motion-pet']`, provided by src/index.ts).
+ * (`inject: ['petween']`, provided by src/index.ts).
  *
  * V1 is deliberately one method: registerAnimation persists an
  * AnimationDefinition into the shared animation library
- * ($DSH_HOME/motion-pet/animations/) through the same AnimationsStore the
- * editor's PUT /api/motion-pet/animations writes — one library, one
+ * ($DSH_HOME/petween/animations/) through the same AnimationsStore the
+ * editor's PUT /api/petween/animations writes — one library, one
  * validation path, one atomic-write discipline. The browser-side editor keeps
  * using HTTP; in-process host companions get the service because cross-plugin
  * collaboration goes through cordis, not module imports.
@@ -25,7 +25,7 @@ import type { AnimationDefinition } from '../motion/animation-definition'
 import type { AnimationsStore } from './animations'
 
 /** The host-half service contract. Bump and widen, never mutate in place. */
-export interface MotionPetHostService {
+export interface PetweenHostService {
   readonly version: 1
   /**
    * Validate and persist a definition into the shared animation library.
@@ -43,7 +43,7 @@ export interface MotionPetHostService {
 }
 
 /** Build the service over a store; src/index.ts provides the result on ctx. */
-export function createMotionPetHostService(store: Pick<AnimationsStore, 'save' | 'exists'>): MotionPetHostService {
+export function createPetweenHostService(store: Pick<AnimationsStore, 'save' | 'exists'>): PetweenHostService {
   return {
     version: 1,
     registerAnimation: (definition) => store.save(definition),

@@ -1,8 +1,8 @@
 /**
  * host/assets.ts — image asset store (spec §7.2, §20).
  *
- * Layout (§18.1): files live in `$DSH_HOME/motion-pet/assets/<id>.<ext>`, the
- * manifest in `$DSH_HOME/motion-pet/assets.json` (Record<assetId, AssetMeta>,
+ * Layout (§18.1): files live in `$DSH_HOME/petween/assets/<id>.<ext>`, the
+ * manifest in `$DSH_HOME/petween/assets.json` (Record<assetId, AssetMeta>,
  * written atomically). Ids are the first 16 hex chars of the content sha256,
  * so identical bytes dedup naturally; disk file names are always host-
  * generated, never derived from the user's original filename.
@@ -149,11 +149,11 @@ export interface AssetStoreOptions {
 }
 
 export function defaultAssetsDir(): string {
-  return dshHomePath('motion-pet', 'assets')
+  return dshHomePath('petween', 'assets')
 }
 
 export function defaultManifestPath(): string {
-  return dshHomePath('motion-pet', 'assets.json')
+  return dshHomePath('petween', 'assets.json')
 }
 
 export class AssetStore {
@@ -217,7 +217,7 @@ export class AssetStore {
         height: detected.height,
         sizeBytes: buffer.length,
         sha256,
-        url: `/motion-pet-assets/${id}`,
+        url: `/petween-assets/${id}`,
       }
       await mkdir(this.options.assetsDir, { recursive: true })
       await writeFile(join(this.options.assetsDir, meta.fileName), buffer)

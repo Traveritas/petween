@@ -15,7 +15,7 @@ const asset = (id: string): AssetMeta => ({
   height: 240,
   sizeBytes: 1024,
   sha256: `sha-${id}`,
-  url: `/motion-pet-assets/${id}.webp`,
+  url: `/petween-assets/${id}.webp`,
 })
 
 /** poses: which pose slots have an asset (asset id === pose key). */
@@ -37,7 +37,7 @@ describe('resolvePose (§2.1 fallback)', () => {
     poses.thinking.zoom = 1.2
     const resolved = resolvePose('thinking', poses, lookup)
     expect(resolved?.poseKey).toBe('thinking')
-    expect(resolved?.asset.url).toBe('/motion-pet-assets/thinking.webp')
+    expect(resolved?.asset.url).toBe('/petween-assets/thinking.webp')
     expect(resolved?.asset.width).toBe(240)
     expect(resolved?.anchor).toEqual({ x: 0.4, y: 0.9 })
     expect(resolved?.zoom).toBe(1.2)

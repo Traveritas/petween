@@ -80,9 +80,9 @@ const lastSource = (): FakeEventSource => FakeEventSource.instances[FakeEventSou
 describe('connection modes', () => {
   it('connects filtered with ?session= and aggregate without', () => {
     makeAdapter('s1')
-    expect(lastSource().url).toBe('/api/motion-pet/events?session=s1')
+    expect(lastSource().url).toBe('/api/petween/events?session=s1')
     makeAdapter()
-    expect(lastSource().url).toBe('/api/motion-pet/events')
+    expect(lastSource().url).toBe('/api/petween/events')
   })
 
   it('an empty snapshot resets the pet to idle exactly once', () => {
@@ -414,7 +414,7 @@ describe('session switching', () => {
 
     adapter.setSession('s2')
     expect(first.closed).toBe(true)
-    expect(lastSource().url).toBe('/api/motion-pet/events?session=s2')
+    expect(lastSource().url).toBe('/api/petween/events?session=s2')
     // The new session's empty snapshot returns the pet to idle.
     lastSource().message({ kind: 'snapshot', events: [] })
     expect(events).toEqual([{ type: 'waiting' }, { type: 'idle' }])

@@ -7,22 +7,22 @@
  * migration chains in ahead of the repair pass.
  */
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { MotionPetConfig } from '../core/types'
+import type { PetweenConfig } from '../core/types'
 import type { AnimationKind } from '../motion/animation-definition'
 import { readJsonFile, writeJsonAtomic } from './storage'
 import { repairConfig, validateConfigPatch, type ConfigValidationOptions } from './validation'
 
 export function defaultConfigPath(): string {
-  return dshHomePath('motion-pet', 'config.json')
+  return dshHomePath('petween', 'config.json')
 }
 
 /** Migration entry (spec §18.3): validate + defaults + version handling. */
-export function loadConfig(raw: unknown, options: ConfigValidationOptions = {}): MotionPetConfig {
+export function loadConfig(raw: unknown, options: ConfigValidationOptions = {}): PetweenConfig {
   return repairConfig(raw, options)
 }
 
 export interface ConfigStoreOptions {
-  /** Defaults to `$DSH_HOME/motion-pet/config.json` (spec §18.1). */
+  /** Defaults to `$DSH_HOME/petween/config.json` (spec §18.1). */
   configPath?: string
   /** Custom-animation kind lookup for animation mounts (V1.1). */
   animationLookup?: (id: string) => AnimationKind | undefined
@@ -31,13 +31,13 @@ export interface ConfigStoreOptions {
    * update, after the atomic config write. A failure is warned and swallowed
    * — the config is authoritative, the mirror is secondary.
    */
-  onSaved?: (config: MotionPetConfig) => Promise<void>
+  onSaved?: (config: PetweenConfig) => Promise<void>
 }
 
 export class ConfigStore {
   readonly configPath: string
   private readonly animationLookup?: (id: string) => AnimationKind | undefined
-  private readonly onSaved?: (config: MotionPetConfig) => Promise<void>
+  private readonly onSaved?: (config: PetweenConfig) => Promise<void>
   /** Serializes update() so concurrent writes never lose each other's fields. */
   private writeChain: Promise<unknown> = Promise.resolve()
 
@@ -48,12 +48,12 @@ export class ConfigStore {
   }
 
   /** Load + repair; defaults when the file is missing or corrupt. */
-  async load(): Promise<MotionPetConfig> {
+  async load(): Promise<PetweenConfig> {
     return loadConfig(await readJsonFile(this.configPath), { animationLookup: this.animationLookup })
   }
 
   /** Atomic save (temp + fsync + rename, see host/storage.ts). */
-  async save(config: MotionPetConfig): Promise<void> {
+  async save(config: PetweenConfig): Promise<void> {
     await writeJsonAtomic(this.configPath, config)
   }
 
@@ -63,7 +63,7 @@ export class ConfigStore {
    * caller. Concurrent PUTs queue behind each other, so two writers patching
    * different fields both land instead of the later one clobbering the first.
    */
-  update(patch: unknown): Promise<MotionPetConfig> {
+  update(patch: unknown): Promise<PetweenConfig> {
     const run = this.writeChain.then(async () => {
       const config = validateConfigPatch(patch, await this.load(), { animationLookup: this.animationLookup })
       await this.save(config)
@@ -71,7 +71,7 @@ export class ConfigStore {
         try {
           await this.onSaved(config)
         } catch (error) {
-          console.warn('motion-pet: pet preset mirror failed', error)
+          console.warn('petween: pet preset mirror failed', error)
         }
       }
       return config

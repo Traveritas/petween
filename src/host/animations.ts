@@ -1,7 +1,7 @@
 /**
  * host/animations.ts — custom AnimationDefinition persistence (V1.1, plan §3).
  *
- * Layout: `$DSH_HOME/motion-pet/animations/user_<name>.json` — one file per
+ * Layout: `$DSH_HOME/petween/animations/user_<name>.json` — one file per
  * custom animation, holding the AnimationDefinition verbatim, written
  * atomically (host/storage.ts). Only `user:<safe>` ids are storable: the
  * charset after the prefix is filename-safe, so the disk name is derived from
@@ -36,7 +36,7 @@ export class AnimationError extends Error {
 }
 
 export function defaultAnimationsDir(): string {
-  return dshHomePath('motion-pet', 'animations')
+  return dshHomePath('petween', 'animations')
 }
 
 /**

@@ -2,7 +2,7 @@
  * core/defaults.ts — default configuration (spec §26) and the six default
  * StateAppearances (ambient defaults per spec §11).
  */
-import type { AmbientConfig, MotionPetConfig, PoseConfig, PoseKey, StateAppearance } from './types'
+import type { AmbientConfig, PetweenConfig, PoseConfig, PoseKey, StateAppearance } from './types'
 import { DEFAULT_POSE_ANCHOR, POSE_KEYS } from './types'
 
 export function createDefaultPoseConfigs(): Record<PoseKey, PoseConfig> {
@@ -91,7 +91,7 @@ export function createDefaultStateAppearances(): Record<PoseKey, StateAppearance
 }
 
 /** Fresh deep-copied default config (spec §26). Callers mutate their own copy. */
-export function createDefaultMotionPetConfig(): MotionPetConfig {
+export function createDefaultPetweenConfig(): PetweenConfig {
   return {
     version: 1,
     enabled: true,

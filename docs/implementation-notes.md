@@ -597,3 +597,31 @@ cordis-free 单例 + 模块级「活跃会话桥」（PetOverlay 创建/销毁 O
 - **删除 `.hintFull`**：grep 确认全仓仅 settings.module.css 定义自身一处引用（迁移后失引用），删除该类块。
 
 **验证**：timeline-editor / animation-library 测试断言同步（关键帧标题、pose-swap 事件标签、heal 按钮精确匹配、`^="pose-swap"` 前缀查询改为不空洞的形式），新增一处下拉展示名断言（option 文本 = `transition.rotation（旋转）`，value 不变）。45 文件 / **742 用例**全绿（数量与基线一致），双工程 typecheck 零错误，四产物 build 通过。
+
+## Petween 全局改名（2026-08-26）
+
+motion-pet 体系整体更名 **Petween**（v1.1.0 → **v1.2.0**），同步仓 `dsh-motion-pet-physics` 更名 `petween-physics`（v0.1.0 → v0.2.0）。目录名不动（迁移由主线负责），本仓代码/配置/文档全量改名，历史小节与规格存档（development-spec.md、handoff/v1.1 计划文档）按惯例不追改。
+
+**契约摘要**（新旧对照，全部落地）：
+
+| 项 | 旧 | 新 |
+| --- | --- | --- |
+| 包名 | dsh-motion-pet | petween |
+| cordis 插件 name / 服务名（host provide + 附属 inject） | motion-pet | petween |
+| client 服务名（provide + 附属 inject） | motion-pet/client | petween/client |
+| 主 HTTP 路由前缀 | /api/motion-pet/ | /api/petween/ |
+| 静态资产路由 | /motion-pet-assets | /petween-assets |
+| 编辑器页 | /motion-pet-editor | /petween-editor |
+| 数据目录 | $DSH_HOME/motion-pet | $DSH_HOME/petween |
+| mount-once Symbol | Symbol.for('dsh-motion-pet/host') | Symbol.for('petween/host') |
+| client bundle id（tsdown banner） | "dsh-motion-pet" | "petween" |
+| CSS 类前缀 / cssModulesInline pluginId | dsh-motion-pet-* | petween-* |
+| UI 显示名 | Motion Pet | Petween |
+
+TypeScript 标识符随体系同步（MotionPetConfig → PetweenConfig、createDefaultMotionPetConfig → createDefaultPetweenConfig、MotionPetCard/MotionPetSettings 组件及其文件名、petweenClientService 等）；`data-motion-pet-renderer` 钩子属性 → `data-petween-renderer`；package.json repository/homepage 改指 https://github.com/Traveritas/petween；SSE 心跳注释行 `: petween`。
+
+**数据迁移（用户有真实数据，最关键项）**：新增 `src/host/migrate.ts` 的 `migrateLegacyHome(legacyDir, targetDir)`——目标目录已存在 → 跳过（幂等）；仅旧目录存在 → `fs.renameSync` 原子改名（同盘一次成功，无双维护窗口）；rename 失败（EXDEV 跨盘 / EBUSY·EPERM 占用）→ `cpSync(recursive, force:false, errorOnExist, preserveTimestamps)` 复制并**保留旧目录**作保底；复制也失败 → console.warn + 清掉半成品目标目录（下次启动可重试），不删旧数据、不阻断启动。`src/index.ts` 在构造任何 store 之前调用（store 先建会以默认值落地新目录并和迁移竞态）。测试：tests/host/migrate.test.ts 五例（改名后内容逐字节一致且旧目录消失、目标已存在两树皆不动、新旧皆不存在零副作用、rename 失败走复制双树并存、双失败 warn+清理+旧树完好）+ plugin-entry 一例（真实 apply() 在隔离的 $DSH_HOME tmpdir 下完成迁移）。
+
+**测试隔离**：apply() 现在会真实触碰 $DSH_HOME，tests/host/plugin-entry.test.ts 顶层把 `process.env.DSH_HOME` 指向一次性 tmpdir（afterAll 还原），确保测试永不迁动真实用户数据。
+
+**验证**：46 文件 / **748 用例**全绿（742 基线 + 6 迁移用例），双工程 typecheck 零错误，四产物 build 通过（lib/client.js 首行 `id: "petween"`、CSS 前缀 `petween-*`、banner/cssModulesInline pluginId 均为新名；产物中残留的 `dsh-motion-pet` 字样仅为构建机仓库绝对路径，属目录名范畴）。

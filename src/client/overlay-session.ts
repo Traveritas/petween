@@ -10,12 +10,12 @@
  * visibility policy (director.pause/resume — ambient phase preserved), drag
  * position persistence (§27: debounced PUT + hub broadcast), the §28 click
  * interaction, and window-resize re-clamping. Since the extension service,
- * it additionally exposes the motion-pet/client windows: stage snapshots,
+ * it additionally exposes the petween/client windows: stage snapshots,
  * the exclusive position-driver lease, and by-id animation playback.
  */
 import { createPoseResolver } from '../core/pose-resolver'
 import { BUILTIN_INTERACTION_DEFINITIONS } from '../core/transition-presets'
-import type { AssetMeta, MotionPetConfig, PoseKey, ResolvedPose } from '../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey, ResolvedPose } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import { DshStateSource, getCurrentSessionSource } from '../integration/dsh/dsh-state-source'
 import type { TimelineInstance } from '../motion/animation-handle'
@@ -49,7 +49,7 @@ export interface OverlaySessionOptions {
    * Position persistence seam; production hits the real HTTP API. Sends a
    * partial patch (the host merges + serializes), resolves the full config.
    */
-  patchConfig?: (patch: ConfigPatch) => Promise<MotionPetConfig>
+  patchConfig?: (patch: ConfigPatch) => Promise<PetweenConfig>
   registry?: AnimationRegistry
   positionSaveDebounceMs?: number
   /**
@@ -58,12 +58,12 @@ export interface OverlaySessionOptions {
    * without an EventSource (non-browser test envs) it returns null and the
    * pet simply keeps its idle face (the M3 behavior).
    */
-  createStateSource?: (director: MotionDirector, config: MotionPetConfig) => OverlayStateSourceHandle | null
+  createStateSource?: (director: MotionDirector, config: PetweenConfig) => OverlayStateSourceHandle | null
 }
 
 const defaultCreateStateSource = (
   director: MotionDirector,
-  config: MotionPetConfig,
+  config: PetweenConfig,
 ): OverlayStateSourceHandle | null => {
   if (typeof EventSource !== 'function') return null
   return new DshStateSource({ config, director, sessionSource: getCurrentSessionSource() ?? undefined })
@@ -80,7 +80,7 @@ interface ActivePositionDriver {
 }
 
 /** config.overlay → px position; null means the §27 default corner. */
-function readOverlayPosition(config: MotionPetConfig): { x: number; y: number } | null {
+function readOverlayPosition(config: PetweenConfig): { x: number; y: number } | null {
   const { x, y } = config.overlay
   return x === null || y === null ? null : { x, y }
 }
@@ -92,11 +92,11 @@ export class OverlaySession {
 
   private readonly stage: PetStage
   private readonly hub: ConfigHub
-  private readonly patchConfig: (patch: ConfigPatch) => Promise<MotionPetConfig>
+  private readonly patchConfig: (patch: ConfigPatch) => Promise<PetweenConfig>
   private readonly positionSaveDebounceMs: number
-  private readonly createStateSource: (director: MotionDirector, config: MotionPetConfig) => OverlayStateSourceHandle | null
+  private readonly createStateSource: (director: MotionDirector, config: PetweenConfig) => OverlayStateSourceHandle | null
   private readonly unsubscribeHub: () => void
-  private readonly config: MotionPetConfig
+  private readonly config: PetweenConfig
   private assets: Record<string, AssetMeta>
   private resolvePose: (poseKey: PoseKey) => ResolvedPose | null
   private mediaQuery: MediaQueryList | null = null
@@ -348,7 +348,7 @@ export class OverlaySession {
   private syncCustoms(customs: ConfigSnapshot['customs']): boolean {
     const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     for (const warning of syncCustomAnimations(this.registry, customs)) {
-      console.warn(`motion-pet: ${warning}`)
+      console.warn(`petween: ${warning}`)
     }
     const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
     return before !== after
@@ -655,7 +655,7 @@ export class OverlaySession {
     if (this.disposed || this.hidden) return
     this.stateSource?.dismissTerminal?.()
     void this.director.playInteraction().catch((error: unknown) => {
-      console.error('motion-pet: click interaction failed', error)
+      console.error('petween: click interaction failed', error)
     })
   }
 
@@ -710,7 +710,7 @@ export class OverlaySession {
         this.hub.publish({ config: saved, assets: current.assets, customs: current.customs })
       }
     } catch (error) {
-      if (!this.disposed) console.error('motion-pet: failed to save the pet position', error)
+      if (!this.disposed) console.error('petween: failed to save the pet position', error)
     } finally {
       this.saveInFlight = false
     }

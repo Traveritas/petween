@@ -54,19 +54,19 @@ describe('PetStage — layered DOM (§3.4)', () => {
       current = current.firstElementChild
     }
     expect(classChain).toEqual([
-      'dsh-motion-pet-position',
-      'dsh-motion-pet-user-scale',
-      'dsh-motion-pet-sway',
-      'dsh-motion-pet-bounce',
-      'dsh-motion-pet-breathe',
-      'dsh-motion-pet-transition',
-      'dsh-motion-pet-stage',
-      'dsh-motion-pet-pose', // the img is the stage layer's first (leaf) child
+      'petween-position',
+      'petween-user-scale',
+      'petween-sway',
+      'petween-bounce',
+      'petween-breathe',
+      'petween-transition',
+      'petween-stage',
+      'petween-pose', // the img is the stage layer's first (leaf) child
     ])
-    expect(stage.layers.sway.className).toBe('dsh-motion-pet-sway')
-    expect(stage.layers.bounce.className).toBe('dsh-motion-pet-bounce')
-    expect(stage.layers.breathe.className).toBe('dsh-motion-pet-breathe')
-    expect(stage.layers.transition.className).toBe('dsh-motion-pet-transition')
+    expect(stage.layers.sway.className).toBe('petween-sway')
+    expect(stage.layers.bounce.className).toBe('petween-bounce')
+    expect(stage.layers.breathe.className).toBe('petween-breathe')
+    expect(stage.layers.transition.className).toBe('petween-transition')
     // every motion layer's box is the stage square, origin at the world anchor
     for (const layer of [stage.layers.sway, stage.layers.bounce, stage.layers.breathe, stage.layers.transition]) {
       expect(layer.style.transformOrigin).toBe('50% 90%')
@@ -80,7 +80,7 @@ describe('PetStage — layered DOM (§3.4)', () => {
     const stage = new PetStage()
     expect(stage.element.style.pointerEvents).toBe('none')
     const stageLayer = stage.layers.transition.firstElementChild as HTMLElement
-    expect(stageLayer.className).toBe('dsh-motion-pet-stage')
+    expect(stageLayer.className).toBe('petween-stage')
     // UX-4: the stage square is inert; the pose img box is the only hit target
     expect(stageLayer.style.pointerEvents).toBe('none')
     expect(stage.interactiveElement).toBe(imageOf(stage))
@@ -145,16 +145,16 @@ describe('PetStage — hit region a11y (UX-4)', () => {
 
   it('injects the :focus-visible ring stylesheet once per document', () => {
     const first = new PetStage()
-    const style = document.getElementById('dsh-motion-pet-stage-styles')
+    const style = document.getElementById('petween-stage-styles')
     expect(style).not.toBeNull()
     expect(style?.tagName).toBe('STYLE')
-    expect(style?.textContent).toContain('.dsh-motion-pet-pose:focus-visible')
-    expect(style?.textContent).toContain('dsh-motion-pet-image-error')
+    expect(style?.textContent).toContain('.petween-pose:focus-visible')
+    expect(style?.textContent).toContain('petween-image-error')
     expect(style?.parentElement).toBe(document.head)
 
-    const before = document.getElementById('dsh-motion-pet-stage-styles')
+    const before = document.getElementById('petween-stage-styles')
     const second = new PetStage() // a second stage (settings preview + overlay)
-    expect(document.getElementById('dsh-motion-pet-stage-styles')).toBe(before) // injected once
+    expect(document.getElementById('petween-stage-styles')).toBe(before) // injected once
     first.dispose()
     second.dispose()
   })
@@ -168,9 +168,9 @@ describe('PetStage — image load failure fallback (UX robustness)', () => {
       const pose = makePose({ url: 'https://example.test/broken.webp' })
       stage.swapPose(pose)
       const stageLayer = stage.layers.transition.firstElementChild as HTMLElement
-      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(false)
+      expect(stageLayer.classList.contains('petween-image-error')).toBe(false)
       imageOf(stage).dispatchEvent(new Event('error'))
-      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(true)
+      expect(stageLayer.classList.contains('petween-image-error')).toBe(true)
       expect(warn).toHaveBeenCalledTimes(1)
       expect(warn.mock.calls[0][0]).toContain('https://example.test/broken.webp')
       stage.dispose()
@@ -193,7 +193,7 @@ describe('PetStage — image load failure fallback (UX robustness)', () => {
       expect(imageOf(stage).getAttribute('src')).toBe(next.asset.url)
       // …and its successful load clears the placeholder state
       imageOf(stage).dispatchEvent(new Event('load'))
-      expect(stageLayer.classList.contains('dsh-motion-pet-image-error')).toBe(false)
+      expect(stageLayer.classList.contains('petween-image-error')).toBe(false)
       stage.dispose()
     } finally {
       warn.mockRestore()
@@ -428,7 +428,7 @@ describe('PetStage — scale, position (§27), reduced motion, marker, dispose',
 
   it('toggles the anchor marker at the world anchor position', () => {
     const stage = new PetStage()
-    const marker = stage.element.querySelector('.dsh-motion-pet-anchor-marker') as HTMLElement
+    const marker = stage.element.querySelector('.petween-anchor-marker') as HTMLElement
     expect(marker.style.display).toBe('none')
     stage.setAnchorMarkerVisible(true)
     expect(marker.style.display).toBe('block')
@@ -452,7 +452,7 @@ describe('PetStage — scale, position (§27), reduced motion, marker, dispose',
     const stage = new PetStage()
     document.body.appendChild(stage.element)
     stage.dispose()
-    expect(document.body.querySelector('.dsh-motion-pet-position')).toBeNull()
+    expect(document.body.querySelector('.petween-position')).toBeNull()
     stage.swapPose(makePose({}))
     expect(imageOf(stage).getAttribute('src')).toBeNull() // detached element untouched
   })
@@ -461,10 +461,10 @@ describe('PetStage — scale, position (§27), reduced motion, marker, dispose',
 describe('PetStage — particle layer (§8.5)', () => {
   it('mounts an inert particle layer above the pose image', () => {
     const stage = new PetStage()
-    const layer = stage.element.querySelector('.dsh-motion-pet-particles') as HTMLElement
+    const layer = stage.element.querySelector('.petween-particles') as HTMLElement
     expect(layer).not.toBeNull()
-    expect(layer.parentElement?.className).toBe('dsh-motion-pet-stage')
-    expect(layer.previousElementSibling?.className).toBe('dsh-motion-pet-pose') // above the img
+    expect(layer.parentElement?.className).toBe('petween-stage')
+    expect(layer.previousElementSibling?.className).toBe('petween-pose') // above the img
     expect(layer.style.position).toBe('absolute')
     expect(layer.style.left).toBe('0px')
     expect(layer.style.right).toBe('0px')
@@ -477,7 +477,7 @@ describe('PetStage — particle layer (§8.5)', () => {
     const harness = installFakeAnimate()
     try {
       const stage = new PetStage()
-      const layer = stage.element.querySelector('.dsh-motion-pet-particles') as HTMLElement
+      const layer = stage.element.querySelector('.petween-particles') as HTMLElement
       stage.emitParticle('confetti')
       expect(layer.children.length).toBeGreaterThan(0)
       expect(harness.animations.length).toBe(layer.children.length)

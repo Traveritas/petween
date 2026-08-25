@@ -15,7 +15,7 @@
  * Pure TS, no React/DSH. The default singleton {@link configHub} is what the
  * production slots share; tests construct their own with an injected fetch.
  */
-import type { AssetMeta, MotionPetConfig } from '../core/types'
+import type { AssetMeta, PetweenConfig } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import {
   getAnimations as httpGetAnimations,
@@ -25,7 +25,7 @@ import {
 } from './api'
 
 export interface ConfigSnapshot {
-  config: MotionPetConfig
+  config: PetweenConfig
   assets: Record<string, AssetMeta>
   /** V1.1 custom animations served by the host (plan §3); sessions register them. */
   customs: AnimationDefinition[]

@@ -1,6 +1,6 @@
 /**
  * integration/dsh/state-adapter.ts — the browser end of the M4 state channel
- * (spec §13.1 → §14). Connects an EventSource to `/api/motion-pet/events`,
+ * (spec §13.1 → §14). Connects an EventSource to `/api/petween/events`,
  * decodes snapshot/event frames, maps NormalizedAgentEvent to the resolver's
  * PetSemanticEvent, and emits deduped semantic events downstream.
  *

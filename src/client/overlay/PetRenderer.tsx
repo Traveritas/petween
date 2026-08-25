@@ -74,5 +74,5 @@ export function PetRenderer(props: PetRendererProps): JSX.Element | null {
   }, [reducedMotion, size, showAnchorMarker, visible])
 
   if (!visible) return null
-  return <div ref={containerRef} data-motion-pet-renderer="" />
+  return <div ref={containerRef} data-petween-renderer="" />
 }

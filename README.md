@@ -1,6 +1,6 @@
-# dsh-motion-pet
+# Petween
 
-DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware for Agent Pets**。
+DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware for Agent Pets**（前身为 `dsh-motion-pet`，1.2.0 起更名）。
 
 你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与循环动画（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
 
@@ -30,10 +30,10 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware fo
 
 ```bash
 # 从 npm 安装（发布后）
-dsh plugin --profile web add dsh-motion-pet
+dsh plugin --profile web add petween
 
 # 或从本地目录安装（开发）
-dsh plugin --profile web add link:/path/to/dsh-motion-pet
+dsh plugin --profile web add link:/path/to/petween
 ```
 
 重启 `dsh web` 生效。
@@ -41,15 +41,17 @@ dsh plugin --profile web add link:/path/to/dsh-motion-pet
 ## 升级与卸载
 
 ```bash
-dsh plugin --profile web update dsh-motion-pet     # 升级
-dsh plugin --profile web remove dsh-motion-pet     # 卸载
+dsh plugin --profile web update petween     # 升级
+dsh plugin --profile web remove petween     # 卸载
 ```
 
-卸载只移除插件本身；你的配置与图片保留在 `$DSH_HOME/motion-pet/`（默认为 `~/.dsh/motion-pet/`），需要彻底删除时手动移除该目录即可。
+卸载只移除插件本身；你的配置与图片保留在 `$DSH_HOME/petween/`（默认为 `~/.dsh/petween/`），需要彻底删除时手动移除该目录即可。
+
+**从 dsh-motion-pet ≤ 1.1.0 升级**：首次启动会自动把 `$DSH_HOME/motion-pet/` 迁移为 `$DSH_HOME/petween/`（目录重命名；跨盘/被占用导致重命名失败时改为复制，并保留旧目录作备份）。
 
 ## 使用
 
-打开 DSH Web UI → 设置 → **Motion Pet** 卡片：可快速启用/停用宠物、调整整体缩放，并查看图片导入进度。点击卡片上的「**打开完整编辑器 →**」（或浏览器直接访问 `/motion-pet-editor/`）会在新标签页打开独立编辑器页面：
+打开 DSH Web UI → 设置 → **Petween** 卡片：可快速启用/停用宠物、调整整体缩放，并查看图片导入进度。点击卡片上的「**打开完整编辑器 →**」（或浏览器直接访问 `/petween-editor/`）会在新标签页打开独立编辑器页面：
 
 1. **管理宠物**：顶部「宠物」区可把当前配置保存为副本，或新建空白宠物；切换后，下面所有面板都编辑当前宠物。姿势、状态动画与整体缩放会自动镜像进当前预设。
 2. **导入图片**：在左侧选择状态（如「待机」），点击「更换图片」。支持 PNG / WebP / JPEG（JPEG 无透明背景，会提示）。推荐透明背景、近似正方形画布、角色完整的图片；不同姿势尽量保持角色视觉尺寸一致。
@@ -57,7 +59,7 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 4. **调动画**：每个状态可选进入过渡（Preset / 强度 / 时长）与循环动画（自定义循环动画 + Bounce / Sway / Breathing）；「全局」区设置默认过渡、整体缩放（0.3~4.0）、减少动态（跟随系统 / 总是 / 从不）、成功/失败停留时长。底部动画库可创建和编辑自定义时间轴动画。
 5. **实时预览**：右侧预览区点击状态按钮即可模拟状态切换（走与正式 Overlay 相同的渲染与状态机），改动会即时进入预览；点击“保存修改”后写入当前宠物预设，主界面的宠物会在数秒内跟进。
 
-也可以直接访问 `http://127.0.0.1:3080/motion-pet-editor/`（端口以你的 DSH web 配置为准）。
+也可以直接访问 `http://127.0.0.1:3080/petween-editor/`（端口以你的 DSH web 配置为准）。
 
 想快速试手感而不碰真实配置：构建后直接双击 `preview/index.html` 打开独立预览页（无需 DSH），还支持贴入自定义 `AnimationDefinition` JSON 即注册即播。
 
@@ -84,7 +86,7 @@ dsh plugin --profile web remove dsh-motion-pet     # 卸载
 ```bash
 pnpm install
 pnpm run build       # tsc -b && tsdown → lib/index.js（host）、lib/client.js、lib/editor.js（独立编辑器页）、preview/preview.js
-pnpm vitest run      # 测试（tests/，741 用例）
+pnpm vitest run      # 测试（tests/，748 用例）
 pnpm run typecheck   # 双工程类型检查
 ```
 

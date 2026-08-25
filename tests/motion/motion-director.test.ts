@@ -6,10 +6,10 @@
  * definition executed through director.play() with zero dedicated branches.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { createPoseResolver } from '../../src/core/pose-resolver'
 import { BUILTIN_ACTIVITY_SWAP, BUILTIN_INTERACTION_DEFINITIONS } from '../../src/core/transition-presets'
-import type { AssetMeta, MotionPetConfig, MotionTarget, ResolvedPose } from '../../src/core/types'
+import type { AssetMeta, PetweenConfig, MotionTarget, ResolvedPose } from '../../src/core/types'
 import { AmbientEngine } from '../../src/motion/ambient-engine'
 import { createBuiltinRegistry, type AnimationRegistry } from '../../src/motion/animation-registry'
 import { MotionDirector } from '../../src/motion/motion-director'
@@ -40,14 +40,14 @@ const asset = (id: string): AssetMeta => ({
   height: 240,
   sizeBytes: 1024,
   sha256: `sha-${id}`,
-  url: `/motion-pet-assets/${id}.webp`,
+  url: `/petween-assets/${id}.webp`,
 })
 
 interface Setup {
   harness: FakeAnimateHarness
   stage: FakeStage
   registry: AnimationRegistry
-  config: MotionPetConfig
+  config: PetweenConfig
   director: MotionDirector
 }
 
@@ -56,7 +56,7 @@ const setup = (reducedMotion = false): Setup => {
   const registry = createBuiltinRegistry()
   // Interactions are session-registered in production (overlay-session).
   for (const definition of BUILTIN_INTERACTION_DEFINITIONS) registry.registerBuiltin(definition)
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
     assets[key] = asset(key)
@@ -508,7 +508,7 @@ describe('MotionDirector — external pose ledger (flash holds)', () => {
     const stage = createFakeStage()
     const registry = createBuiltinRegistry()
     for (const definition of BUILTIN_INTERACTION_DEFINITIONS) registry.registerBuiltin(definition)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     const assets: Record<string, AssetMeta> = {}
     for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
       assets[key] = asset(key)
@@ -544,7 +544,7 @@ describe('MotionDirector — external pose ledger (flash holds)', () => {
     const stage = createFakeStage()
     const registry = createBuiltinRegistry()
     for (const definition of BUILTIN_INTERACTION_DEFINITIONS) registry.registerBuiltin(definition)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     const assets: Record<string, AssetMeta> = {}
     for (const key of ['idle', 'thinking', 'working', 'waiting', 'success', 'error'] as const) {
       assets[key] = asset(key)
@@ -894,7 +894,7 @@ describe('MotionDirector — particle timeline events (§8.5)', () => {
 
   const pose = (key: string): ResolvedPose => ({
     poseKey: key as ResolvedPose['poseKey'],
-    asset: { id: key, url: `/motion-pet-assets/${key}.webp`, width: 240, height: 240 },
+    asset: { id: key, url: `/petween-assets/${key}.webp`, width: 240, height: 240 },
     anchor: { x: 0.5, y: 0.96 },
     zoom: 1,
   })
@@ -1134,7 +1134,7 @@ describe('MotionDirector — custom ambient animation per state', () => {
     ],
   })
 
-  const disableBuiltinAmbient = (config: MotionPetConfig): void => {
+  const disableBuiltinAmbient = (config: PetweenConfig): void => {
     const ambient = config.states.idle.ambient
     ambient.bounce.enabled = false
     ambient.sway.enabled = false

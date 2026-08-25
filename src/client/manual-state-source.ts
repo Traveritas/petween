@@ -10,11 +10,11 @@
  * cancels the resolver's pending timers.
  */
 import { PetStateResolver } from '../core/pet-state-resolver'
-import type { ActivityMode, MotionPetConfig, PetSemanticEvent, VisualState } from '../core/types'
+import type { ActivityMode, PetweenConfig, PetSemanticEvent, VisualState } from '../core/types'
 import type { MotionDirector } from '../motion/motion-director'
 
 export interface ManualStateSourceOptions {
-  config: Pick<MotionPetConfig, 'states' | 'global' | 'advanced'>
+  config: Pick<PetweenConfig, 'states' | 'global' | 'advanced'>
   director: MotionDirector
   /** §15.3 coalescing window; defaults to the resolver's 60ms. */
   coalesceMs?: number
@@ -33,7 +33,7 @@ export class ManualStateSource {
         // Transition lifecycle is tracked by the director itself
         // (transitionInFlight/whenSettled) — no source-side bookkeeping.
         this.director.setTarget({ ...target, reason: 'manual-preview' }).catch((error: unknown) => {
-          console.error('motion-pet: manual preview setTarget failed', error)
+          console.error('petween: manual preview setTarget failed', error)
         })
       },
     })

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * MotionPetSettings render tests (spec §2.1, §17): the settings page gates on
+ * PetweenSettings render tests (spec §2.1, §17): the settings page gates on
  * "at least one imported image" — without one it shows the empty state with an
  * import button and renders NO stage; with one it renders the full editor
  * (state list with ●/○ fallback indicators, pose/transition/ambient panels,
@@ -9,11 +9,11 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MotionPetSettings } from '../../src/client/settings/MotionPetSettings'
+import { PetweenSettings } from '../../src/client/settings/PetweenSettings'
 import type { ConfigPatch, UploadedAsset } from '../../src/client/api'
 import { PreviewSession } from '../../src/client/preview-session'
 import type { EditorApi } from '../../src/client/stores/editor-store'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AssetMeta, PetPreset } from '../../src/core/types'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
@@ -59,11 +59,11 @@ const idleAsset: AssetMeta = {
   height: 240,
   sizeBytes: 10,
   sha256: 'x',
-  url: '/motion-pet-assets/aaaa1111bbbb2222',
+  url: '/petween-assets/aaaa1111bbbb2222',
 }
 
 const makeApi = (withImage: boolean): EditorApi => {
-  const config = createDefaultMotionPetConfig()
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   if (withImage) {
     config.poses.idle.assetId = idleAsset.id
@@ -99,7 +99,7 @@ const makeApi = (withImage: boolean): EditorApi => {
 
 const render = async (api: EditorApi, wide = false): Promise<void> => {
   await act(async () => {
-    root.render(<MotionPetSettings api={api} wide={wide} />)
+    root.render(<PetweenSettings api={api} wide={wide} />)
   })
 }
 
@@ -171,13 +171,13 @@ const flushActions = async (): Promise<void> => {
   })
 }
 
-describe('MotionPetSettings', () => {
+describe('PetweenSettings', () => {
   it('without any image it shows the §2.1 empty state and no stage', async () => {
     await render(makeApi(false))
     expect(container.textContent).toContain('请先导入至少一张图片')
     expect(container.textContent).toContain('导入图片')
     // the editor columns and the pet stage must not render at all
-    expect(container.querySelector('.dsh-motion-pet-position')).toBeNull()
+    expect(container.querySelector('.petween-position')).toBeNull()
     expect(container.textContent).not.toContain('循环动画')
   })
 
@@ -200,10 +200,10 @@ describe('MotionPetSettings', () => {
     expect(container.textContent).toContain('重播进入动画')
     expect(container.textContent).toContain('锚点十字')
     // the current pose thumbnail
-    const thumb = container.querySelector('img[src="/motion-pet-assets/aaaa1111bbbb2222"]')
+    const thumb = container.querySelector('img[src="/petween-assets/aaaa1111bbbb2222"]')
     expect(thumb).not.toBeNull()
     // the real PetStage is mounted inside the preview
-    expect(container.querySelector('.dsh-motion-pet-position')).not.toBeNull()
+    expect(container.querySelector('.petween-position')).not.toBeNull()
   })
 
   it('the terminal-hold select saves advanced.terminalHold and disables the hold duration inputs', async () => {
@@ -317,7 +317,7 @@ describe('MotionPetSettings', () => {
       return structuredClone(config)
     })
     const createPet = vi.fn(async ({ name, from }: { name: string; from: 'current' | 'blank' }) => {
-      const blank = createDefaultMotionPetConfig()
+      const blank = createDefaultPetweenConfig()
       const source = from === 'blank' ? blank : config
       const pet = makePet('pet_c', name, source.global.scale)
       pet.poses = structuredClone(source.poses)
@@ -517,7 +517,7 @@ describe('MotionPetSettings', () => {
     expect(button.textContent).toBe('上传中…')
     expect(button.disabled).toBe(true)
 
-    resolveUpload({ id: 'bbbb3333cccc4444', url: '/motion-pet-assets/bbbb3333cccc4444', width: 240, height: 240 })
+    resolveUpload({ id: 'bbbb3333cccc4444', url: '/petween-assets/bbbb3333cccc4444', width: 240, height: 240 })
     await flushActions()
     // the first image exits the §2.1 empty state; the button is no longer busy
     expect(container.querySelector('section[aria-label="姿势图片"]')).not.toBeNull()
@@ -540,7 +540,7 @@ describe('MotionPetSettings', () => {
     // accepted JPEG → info notice, polite
     api.uploadAsset = vi.fn(async () => ({
       id: 'bbbb3333cccc4444',
-      url: '/motion-pet-assets/bbbb3333cccc4444',
+      url: '/petween-assets/bbbb3333cccc4444',
       width: 240,
       height: 240,
     }))

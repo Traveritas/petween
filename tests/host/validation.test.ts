@@ -3,13 +3,13 @@
  * paths, base-fill semantics, and the asset-id whitelist regex.
  */
 import { describe, expect, it } from 'vitest'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AnimationKind } from '../../src/motion/animation-definition'
 import { ConfigValidationError, repairConfig, validateAssetId, validateConfigPatch } from '../../src/host/validation'
 
 describe('validateConfigPatch (§19.2)', () => {
   it('accepts a full valid config unchanged', () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.enabled = false
     config.states.working.enter = { preset: 'jump', strength: 1.4, durationMs: 380 }
     config.poses.thinking.assetId = '0123456789abcdef'
@@ -17,7 +17,7 @@ describe('validateConfigPatch (§19.2)', () => {
   })
 
   it('fills missing fields from the base config (patch semantics)', () => {
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.global.scale = 1.6
     base.poses.idle.assetId = 'aaaaaaaaaaaaaaaa'
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
@@ -79,7 +79,7 @@ describe('validateConfigPatch (§19.2)', () => {
       particles: true,
     })
 
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.advanced.changePoseWithinActive = true
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
     expect(patched.advanced.changePoseWithinActive).toBe(true)
@@ -89,7 +89,7 @@ describe('validateConfigPatch (§19.2)', () => {
     const turned = validateConfigPatch({ version: 1, advanced: { particles: false } })
     expect(turned.advanced.particles).toBe(false)
 
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.advanced.particles = false
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
     expect(patched.advanced.particles).toBe(false)
@@ -108,7 +108,7 @@ describe('validateConfigPatch (§19.2)', () => {
     const turned = validateConfigPatch({ version: 1, advanced: { terminalHold: 'until-interaction' } })
     expect(turned.advanced.terminalHold).toBe('until-interaction')
 
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.advanced.terminalHold = 'until-interaction'
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
     expect(patched.advanced.terminalHold).toBe('until-interaction')
@@ -140,7 +140,7 @@ describe('validateConfigPatch (§19.2)', () => {
     const turned = validateConfigPatch({ version: 1, advanced: { activityTransition: 'state' } })
     expect(turned.advanced.activityTransition).toBe('state')
 
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.advanced.activityTransition = 'none'
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
     expect(patched.advanced.activityTransition).toBe('none')
@@ -164,7 +164,7 @@ describe('validateConfigPatch (§19.2)', () => {
     const withNull = validateConfigPatch({ version: 1, interactions: { click: { animation: 'builtin:click-pop', pose: null } } })
     expect(withNull.interactions.click.pose).toBeNull()
 
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.interactions.click = { animation: 'builtin:click-wiggle', pose: 'thinking' }
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
     expect(patched.interactions.click).toEqual({ animation: 'builtin:click-wiggle', pose: 'thinking' })
@@ -184,7 +184,7 @@ describe('validateConfigPatch (§19.2)', () => {
   })
 
   it('accepts the widened bounds (user-signed-off spec deviation)', () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.global.scale = 4
     config.global.transition = { preset: 'jelly', strength: 3, durationMs: 2000 }
     config.global.successHoldMs = 120_000
@@ -304,7 +304,7 @@ describe('states.*.enter.animationId (§8.14, V1.1)', () => {
   })
 
   it('keeps the base animationId when the patch omits it; explicit null clears it', () => {
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.states.idle.enter.animationId = 'user:pop'
     // enter absent entirely, and enter present without animationId: both keep the base
     expect(validateConfigPatch({ version: 1 }, base).states.idle.enter.animationId).toBe('user:pop')
@@ -354,7 +354,7 @@ describe('states.*.ambient.customAnimationId (V1.1 custom ambient)', () => {
   })
 
   it('explicit null clears the reference', () => {
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.states.idle.ambient.customAnimationId = 'user:float'
     expect(validateConfigPatch(withAmbientId(null), base).states.idle.ambient.customAnimationId).toBeUndefined()
   })
@@ -395,16 +395,16 @@ describe('states.*.ambient.customAnimationId (V1.1 custom ambient)', () => {
 describe('activePetId (V1.1 pet presets)', () => {
   it('defaults to null when the field is missing (old config files need no migration)', () => {
     expect(repairConfig({ version: 1 }).activePetId).toBeNull()
-    expect(createDefaultMotionPetConfig().activePetId).toBeNull()
+    expect(createDefaultPetweenConfig().activePetId).toBeNull()
     // patch semantics: an absent field keeps the base value
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.activePetId = 'pet_abc123'
     expect(validateConfigPatch({ enabled: false }, base).activePetId).toBe('pet_abc123')
   })
 
   it('accepts a pet id or an explicit null in strict mode', () => {
     expect(validateConfigPatch({ activePetId: 'pet_lx3ab9f2' }).activePetId).toBe('pet_lx3ab9f2')
-    const base = createDefaultMotionPetConfig()
+    const base = createDefaultPetweenConfig()
     base.activePetId = 'pet_abc123'
     expect(validateConfigPatch({ activePetId: null }, base).activePetId).toBeNull()
   })

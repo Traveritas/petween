@@ -15,8 +15,8 @@ import {
   hasAnyUsableImage,
   type EditorApi,
 } from '../../src/client/stores/editor-store'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig, PetPreset } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig, PetPreset } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
 interface ApiMocks {
@@ -35,7 +35,7 @@ interface ApiMocks {
 }
 
 /** Merge a patch onto a base config the way the host does (§19.2). */
-const mergePatch = (base: MotionPetConfig, patch: ConfigPatch): MotionPetConfig => ({
+const mergePatch = (base: PetweenConfig, patch: ConfigPatch): PetweenConfig => ({
   ...structuredClone(base),
   enabled: patch.enabled ?? base.enabled,
   global: { ...structuredClone(base.global), ...patch.global },
@@ -49,7 +49,7 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
   // A truthful host stand-in: patches merge onto a server-side config and the
   // merged full config comes back (that response is what the store must
   // broadcast — never the local payload).
-  let serverConfig = createDefaultMotionPetConfig()
+  let serverConfig = createDefaultPetweenConfig()
   let serverCustoms: AnimationDefinition[] = []
   let serverPets: PetPreset[] = []
   let petSequence = 0
@@ -62,7 +62,7 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
       warnings: [] as string[],
     })),
     createPet: vi.fn(async ({ name, from }: { name: string; from: 'current' | 'blank' }) => {
-      const source = from === 'current' ? serverConfig : createDefaultMotionPetConfig()
+      const source = from === 'current' ? serverConfig : createDefaultPetweenConfig()
       const pet: PetPreset = {
         id: `pet_${++petSequence}`,
         name,
@@ -112,7 +112,7 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
     deleteAnimation: vi.fn(async (id: string) => {
       serverCustoms = serverCustoms.filter((custom) => custom.id !== id)
     }),
-    uploadAsset: vi.fn(async () => ({ id: 'aaaa1111bbbb2222', url: '/motion-pet-assets/aaaa1111bbbb2222', width: 240, height: 240 })),
+    uploadAsset: vi.fn(async () => ({ id: 'aaaa1111bbbb2222', url: '/petween-assets/aaaa1111bbbb2222', width: 240, height: 240 })),
     deleteAsset: vi.fn(async () => {}),
     ...overrides,
   } as ApiMocks
@@ -180,10 +180,10 @@ describe('EditorStore — explicit config saving', () => {
   })
 
   it('latest-wins while a PUT is in flight: edits queue and flush right after', async () => {
-    const resolvers: Array<(config: MotionPetConfig) => void> = []
+    const resolvers: Array<(config: PetweenConfig) => void> = []
     const patchConfig = vi.fn(
       (patch: ConfigPatch) =>
-        new Promise<MotionPetConfig>((resolve) => {
+        new Promise<PetweenConfig>((resolve) => {
           resolvers.push(resolve)
         }),
     )
@@ -202,12 +202,12 @@ describe('EditorStore — explicit config saving', () => {
     })
     expect(patchConfig).toHaveBeenCalledTimes(1) // queued behind the in-flight PUT
 
-    resolvers[0](createDefaultMotionPetConfig())
+    resolvers[0](createDefaultPetweenConfig())
     await flushMicrotasks()
     expect(patchConfig).toHaveBeenCalledTimes(2)
     expect((patchConfig.mock.calls[1][0] as ConfigPatch).global?.scale).toBe(1.7)
 
-    resolvers[1](createDefaultMotionPetConfig())
+    resolvers[1](createDefaultPetweenConfig())
     await saving
     expect(store.getSnapshot().saveState).toBe('saved')
   })
@@ -216,7 +216,7 @@ describe('EditorStore — explicit config saving', () => {
     const patchConfig = vi
       .fn()
       .mockImplementationOnce(() => Promise.reject(new Error('disk full')))
-      .mockImplementation(async () => createDefaultMotionPetConfig())
+      .mockImplementation(async () => createDefaultPetweenConfig())
     const { api } = makeApi({ patchConfig: patchConfig as EditorApi['patchConfig'] })
     await loadStore(api)
 
@@ -280,7 +280,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     // local maps follow: new asset added, old one dropped
     const snapshot = store.getSnapshot()
     expect(snapshot.config?.poses.idle.assetId).toBe('aaaa1111bbbb2222')
-    expect(snapshot.assets['aaaa1111bbbb2222']?.url).toBe('/motion-pet-assets/aaaa1111bbbb2222')
+    expect(snapshot.assets['aaaa1111bbbb2222']?.url).toBe('/petween-assets/aaaa1111bbbb2222')
     expect(snapshot.assets['old0000000000000']).toBeUndefined()
     expect(snapshot.saveState).toBe('saved')
   })
@@ -318,7 +318,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     await flushMicrotasks()
     expect(store.getSnapshot().importing).toBe('idle')
 
-    resolveUpload({ id: 'aaaa1111bbbb2222', url: '/motion-pet-assets/aaaa1111bbbb2222', width: 240, height: 240 })
+    resolveUpload({ id: 'aaaa1111bbbb2222', url: '/petween-assets/aaaa1111bbbb2222', width: 240, height: 240 })
     await pending
     await flushMicrotasks()
     expect(store.getSnapshot().importing).toBeNull()
@@ -344,7 +344,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     // The superseded upload resolves FIRST: its draft mutation already
     // happened, so its asset/revision patch must still land — otherwise the
     // snapshot falls behind the draft with no bump to heal it.
-    deferred[0]({ id: 'asset000000000001', url: '/motion-pet-assets/asset000000000001', width: 100, height: 100 })
+    deferred[0]({ id: 'asset000000000001', url: '/petween-assets/asset000000000001', width: 100, height: 100 })
     await flushMicrotasks()
     const mid = store.getSnapshot()
     expect(mid.importing).toBe('thinking') // the newest import still owns the flag
@@ -353,7 +353,7 @@ describe('EditorStore — §19.4 asset flows', () => {
     expect(mid.configRevision).toBeGreaterThan(0)
     expect(mid.saveState).toBe('dirty')
 
-    deferred[1]({ id: 'asset000000000002', url: '/motion-pet-assets/asset000000000002', width: 100, height: 100 })
+    deferred[1]({ id: 'asset000000000002', url: '/petween-assets/asset000000000002', width: 100, height: 100 })
     await Promise.all([first, second])
     await flushMicrotasks()
     const snapshot = store.getSnapshot()
@@ -395,10 +395,10 @@ describe('EditorStore — §19.4 asset flows', () => {
   })
 
   it('removeImage during an in-flight save reports saving and is swept into the same save', async () => {
-    const resolvers: Array<(config: MotionPetConfig) => void> = []
+    const resolvers: Array<(config: PetweenConfig) => void> = []
     const patchConfig = vi.fn(
       () =>
-        new Promise<MotionPetConfig>((resolve) => {
+        new Promise<PetweenConfig>((resolve) => {
           resolvers.push(resolve)
         }),
     )
@@ -411,10 +411,10 @@ describe('EditorStore — §19.4 asset flows', () => {
     await flushMicrotasks() // hanging in the first PUT
     store.removeImage('idle')
     expect(store.getSnapshot().saveState).toBe('saving') // not downgraded to 'dirty'
-    resolvers[0](structuredClone(store.getSnapshot().config) as MotionPetConfig)
+    resolvers[0](structuredClone(store.getSnapshot().config) as PetweenConfig)
     await flushMicrotasks()
     expect(mocks.patchConfig).toHaveBeenCalledTimes(2) // latest-wins sweeps the removal
-    resolvers[1](structuredClone(store.getSnapshot().config) as MotionPetConfig)
+    resolvers[1](structuredClone(store.getSnapshot().config) as PetweenConfig)
     await saving
     await flushMicrotasks()
     expect(store.getSnapshot().saveState).toBe('saved')
@@ -485,7 +485,7 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
   it('a dirty save sends only the owned sections and broadcasts the host response', async () => {
     // Host stand-in: the drag save lands mid-edit, so the server-side config
     // already carries overlay (500,300) when the editor's explicit save runs.
-    const serverConfig = createDefaultMotionPetConfig()
+    const serverConfig = createDefaultPetweenConfig()
     serverConfig.overlay = { x: 0, y: 0 }
     const patchConfig = vi.fn(async (patch: ConfigPatch) => {
       const merged = mergePatch(serverConfig, patch)
@@ -604,10 +604,10 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
   })
 
   it('awaits an in-flight save, then reverts to the server state', async () => {
-    const resolvers: Array<(config: MotionPetConfig) => void> = []
+    const resolvers: Array<(config: PetweenConfig) => void> = []
     const patchConfig = vi.fn(
       (patch: ConfigPatch) =>
-        new Promise<MotionPetConfig>((resolve) => {
+        new Promise<PetweenConfig>((resolve) => {
           resolvers.push(resolve)
         }),
     )
@@ -624,7 +624,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     await flushMicrotasks()
     expect(mocks.getConfig).toHaveBeenCalledTimes(1) // only the initial load — revert waits
 
-    resolvers[0](mergePatch(createDefaultMotionPetConfig(), { global: { scale: 1.7 } }))
+    resolvers[0](mergePatch(createDefaultPetweenConfig(), { global: { scale: 1.7 } }))
     await reverting
     await saving
     await flushMicrotasks()
@@ -637,7 +637,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     let calls = 0
     const getConfig = vi.fn(async () => {
       calls += 1
-      if (calls === 1) return { config: createDefaultMotionPetConfig(), assets: {} }
+      if (calls === 1) return { config: createDefaultPetweenConfig(), assets: {} }
       throw new Error('network down')
     })
     const { api } = makeApi({ getConfig })
@@ -653,12 +653,12 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
   })
 
   it('a save queued during the revert fetch aborts the revert', async () => {
-    let releaseGet!: (value: { config: MotionPetConfig; assets: Record<string, AssetMeta> }) => void
+    let releaseGet!: (value: { config: PetweenConfig; assets: Record<string, AssetMeta> }) => void
     let calls = 0
     const getConfig = vi.fn(async () => {
       calls += 1
-      if (calls === 1) return { config: createDefaultMotionPetConfig(), assets: {} as Record<string, AssetMeta> }
-      return new Promise<{ config: MotionPetConfig; assets: Record<string, AssetMeta> }>((resolve) => {
+      if (calls === 1) return { config: createDefaultPetweenConfig(), assets: {} as Record<string, AssetMeta> }
+      return new Promise<{ config: PetweenConfig; assets: Record<string, AssetMeta> }>((resolve) => {
         releaseGet = resolve
       })
     })
@@ -671,7 +671,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     await flushMicrotasks()
     // the user hits Save while the revert's GET is still in flight
     void store.saveConfig()
-    releaseGet({ config: createDefaultMotionPetConfig(), assets: {} })
+    releaseGet({ config: createDefaultPetweenConfig(), assets: {} })
     await reverting
     await flushMicrotasks()
     expect(store.getSnapshot().config?.global.scale).toBe(1.9) // draft untouched
@@ -724,7 +724,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   it('saveAnimation PUTs, upserts the list and broadcasts through the hub (no debounce)', async () => {
     const { api, mocks } = makeApi()
     const hub = new ConfigHub({
-      fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
+      fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
     store = new EditorStore({ api, hub })
@@ -762,7 +762,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   })
 
   it('deleteAnimation refuses while referenced — naming the state, without an API call', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.states.thinking.enter.animationId = 'user:a'
     const { api, mocks } = makeApi({
       getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
@@ -779,7 +779,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   })
 
   it('deleteAnimation refuses while the click interaction references it', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.interactions.click.animation = 'user:a'
     const { api, mocks } = makeApi({
       getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
@@ -794,7 +794,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   })
 
   it('deleteAnimation refuses while a state custom ambient references it', async () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.states.waiting.ambient.customAnimationId = 'user:a'
     const ambient: AnimationDefinition = {
       ...makeCustom('user:a'),
@@ -825,7 +825,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   it('deleteAnimation removes the entry and broadcasts on success', async () => {
     const { api, mocks } = makeApi()
     const hub = new ConfigHub({
-      fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
+      fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
     store = new EditorStore({ api, hub })
@@ -856,7 +856,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
   it('a hub publish updates customs even while the config draft is dirty', async () => {
     const { api } = makeApi()
     const hub = new ConfigHub({
-      fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
+      fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
     store = new EditorStore({ api, hub })
@@ -876,7 +876,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
 
 describe('EditorStore — pet presets (V1.1)', () => {
   const preset = (id: string, name: string, scale: number): PetPreset => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     return {
       id,
       name,
@@ -920,7 +920,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
 
   it('apply replaces the draft with the host config and publishes it through the hub', async () => {
     const targetPet = preset('pet_target', '目标', 2.25)
-    const targetConfig = createDefaultMotionPetConfig()
+    const targetConfig = createDefaultPetweenConfig()
     targetConfig.activePetId = targetPet.id
     targetConfig.global.scale = targetPet.scale
     const { api, mocks } = makeApi({
@@ -928,7 +928,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
       applyPet: vi.fn(async () => structuredClone(targetConfig)),
     })
     const hub = new ConfigHub({
-      fetchConfig: vi.fn(async () => ({ config: createDefaultMotionPetConfig(), assets: {} })),
+      fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
       fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     })
     store = new EditorStore({ api, hub })
@@ -948,7 +948,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
 
   it('deleting the active preset keeps the current character and shows it as unsaved', async () => {
     const active = preset('pet_active', '当前', 1.8)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.activePetId = active.id
     config.global.scale = active.scale
     let deleted = false
@@ -974,7 +974,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
 
   it('blocks pet switching while config changes are unsaved', async () => {
     const target = preset('pet_target', '目标', 1)
-    const switched = createDefaultMotionPetConfig()
+    const switched = createDefaultPetweenConfig()
     switched.activePetId = target.id
     const { api, mocks } = makeApi({
       getPets: vi.fn(async () => ({ pets: [target], activePetId: target.id, warnings: [] })),
@@ -997,7 +997,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
   it('rename/delete of a NON-active preset works while the draft is dirty (UX relaxation)', async () => {
     const active = preset('pet_active', '当前', 1)
     const other = preset('pet_other', '备用', 1.2)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.activePetId = active.id
     const { api, mocks } = makeApi({
       getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
@@ -1026,7 +1026,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
   it('a failed save blocks pet actions with an explicit notice instead of silence', async () => {
     const active = preset('pet_active', '当前', 1)
     const other = preset('pet_other', '备用', 1.2)
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     config.activePetId = active.id
     const { api, mocks } = makeApi({
       getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
@@ -1055,7 +1055,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
 
 
 describe('hasAnyUsableImage (§2.1)', () => {  it('is false for a fresh config and true once a pose references a known asset', () => {
-    const config = createDefaultMotionPetConfig()
+    const config = createDefaultPetweenConfig()
     expect(hasAnyUsableImage(config, {})).toBe(false)
     config.poses.idle.assetId = 'aaaa1111bbbb2222'
     expect(hasAnyUsableImage(config, {})).toBe(false) // dangling reference
@@ -1069,7 +1069,7 @@ describe('hasAnyUsableImage (§2.1)', () => {  it('is false for a fresh config a
           height: 240,
           sizeBytes: 10,
           sha256: 'x',
-          url: '/motion-pet-assets/aaaa1111bbbb2222',
+          url: '/petween-assets/aaaa1111bbbb2222',
         },
       }),
     ).toBe(true)

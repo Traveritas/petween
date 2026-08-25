@@ -11,8 +11,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigHub } from '../../src/client/config-hub'
 import { PetOverlay } from '../../src/client/overlay/PetOverlay'
-import { createDefaultMotionPetConfig } from '../../src/core/defaults'
-import type { AssetMeta, MotionPetConfig } from '../../src/core/types'
+import { createDefaultPetweenConfig } from '../../src/core/defaults'
+import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -22,7 +22,7 @@ let root: Root
 let mounted: boolean
 let harness: FakeAnimateHarness
 
-const STAGE_SELECTOR = '.dsh-motion-pet-position'
+const STAGE_SELECTOR = '.petween-position'
 
 const makeAsset = (id: string): AssetMeta => ({
   id,
@@ -35,8 +35,8 @@ const makeAsset = (id: string): AssetMeta => ({
   url: `https://example.test/${id}.webp`,
 })
 
-const makeHub = (mutate?: (config: MotionPetConfig, assets: Record<string, AssetMeta>) => void): ConfigHub => {
-  const config = createDefaultMotionPetConfig()
+const makeHub = (mutate?: (config: PetweenConfig, assets: Record<string, AssetMeta>) => void): ConfigHub => {
+  const config = createDefaultPetweenConfig()
   const assets: Record<string, AssetMeta> = {}
   config.poses.idle.assetId = 'asset-idle'
   assets['asset-idle'] = makeAsset('asset-idle')
@@ -80,14 +80,14 @@ const render = async (hub: ConfigHub): Promise<void> => {
 
 describe('PetOverlay', () => {
   it('renders nothing until the hub loads, then mounts the pet stage', async () => {
-    let resolveLoad!: (value: { config: MotionPetConfig; assets: Record<string, AssetMeta> }) => void
-    const config = createDefaultMotionPetConfig()
+    let resolveLoad!: (value: { config: PetweenConfig; assets: Record<string, AssetMeta> }) => void
+    const config = createDefaultPetweenConfig()
     config.poses.idle.assetId = 'asset-idle'
     const assets = { 'asset-idle': makeAsset('asset-idle') }
     const hub = new ConfigHub({
       fetchConfig: vi.fn(
         () =>
-          new Promise<{ config: MotionPetConfig; assets: Record<string, AssetMeta> }>((resolve) => {
+          new Promise<{ config: PetweenConfig; assets: Record<string, AssetMeta> }>((resolve) => {
             resolveLoad = resolve
           }),
       ),

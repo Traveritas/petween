@@ -110,6 +110,16 @@ describe('createMotionPetHostService', () => {
     expect(customs).toHaveLength(1)
     expect(customs[0]!.durationMs).toBe(320)
   })
+
+  it('hasAnimation reports library membership (first-install guard)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'motion-pet-service-'))
+    const service = createMotionPetHostService(makeStore())
+
+    await expect(service.hasAnimation('user:motion-run-wall-bounce')).resolves.toBe(false)
+    await service.registerAnimation(makeTransition('user:motion-run-wall-bounce'))
+    await expect(service.hasAnimation('user:motion-run-wall-bounce')).resolves.toBe(true)
+    await expect(service.hasAnimation('user:other')).resolves.toBe(false)
+  })
 })
 
 describe('host entry provides the service', () => {

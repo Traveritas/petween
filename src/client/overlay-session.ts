@@ -110,12 +110,16 @@ export class OverlaySession {
   private poseRefreshSeq = 0
   /** Extension service: synchronous snapshot subscribers. */
   private readonly snapshotListeners = new Set<(snapshot: StageSnapshot) => void>()
+  /** Extension service: service-level drag-gesture subscribers. */
+  private readonly userDragListeners = new Set<(phase: 'start' | 'end') => void>()
   /** Extension service: instances played through playExternal, for interrupts. */
   private readonly externalInstances = new Set<TimelineInstance>()
   /** Extension service: the current position-driver lease, if any. */
   private activeDriver: ActivePositionDriver | null = null
   /** Unsubscribes the director's target stream (snapshot notifications). */
   private unsubscribeTarget: (() => void) | null = null
+  /** Extension service: pending flashPose restore timer, if any. */
+  private flashTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: OverlaySessionOptions) {
     const snapshot = options.hub.getCurrent()
@@ -172,7 +176,10 @@ export class OverlaySession {
         this.notifySnapshot()
       },
       onDragStart: () => this.handleUserDragStart(),
-      onDragEnd: () => this.schedulePositionSave(),
+      onDragEnd: () => {
+        this.notifyUserDrag('end')
+        this.schedulePositionSave()
+      },
       onClick: () => this.clickPop(),
     })
 
@@ -337,6 +344,11 @@ export class OverlaySession {
       this.activeDriver = null
     }
     this.snapshotListeners.clear()
+    this.userDragListeners.clear()
+    if (this.flashTimer !== null) {
+      clearTimeout(this.flashTimer)
+      this.flashTimer = null
+    }
     this.unsubscribeTarget?.()
     this.unsubscribeTarget = null
     for (const instance of this.externalInstances) instance.dispose()
@@ -374,6 +386,7 @@ export class OverlaySession {
       x: position.x,
       y: position.y,
       scale: this.config.global.scale,
+      stageSize: this.stage.stageSize,
       visualState: target === null ? null : target.visualState,
       activityMode: target?.activityMode ?? null,
       started: this.started,
@@ -399,6 +412,56 @@ export class OverlaySession {
     const snapshot = this.getStageSnapshot()
     if (snapshot === null) return
     for (const listener of [...this.snapshotListeners]) listener(snapshot)
+  }
+
+  /**
+   * Extension service: service-level drag-gesture stream (no lease needed).
+   * 'start' pairs with the driver's onUserDrag notification; 'end' fires for
+   * real-travel gestures only (release or cancel) — a click fires neither.
+   */
+  subscribeUserDrag(listener: (phase: 'start' | 'end') => void): () => void {
+    this.userDragListeners.add(listener)
+    return () => {
+      this.userDragListeners.delete(listener)
+    }
+  }
+
+  /** Fan a drag phase out; copied so a listener may unsubscribe mid-push. */
+  private notifyUserDrag(phase: 'start' | 'end'): void {
+    if (this.disposed) return
+    for (const listener of [...this.userDragListeners]) listener(phase)
+  }
+
+  /**
+   * Extension service: flash a pose — swap the image now, restore the state
+   * machine's pose for the CURRENT target after holdMs. Direct stage swap
+   * follows the refreshCurrentPose precedent (every pose is boot-preloaded,
+   * §16.3); swapPose is idempotent by src, so a restore racing a real
+   * transition's own swap is a no-op, and a transition firing during the
+   * hold simply plays from the flashed pose. A second flash replaces the
+   * pending restore; dispose cancels it (the stage is going away anyway).
+   */
+  flashPose(poseKey: PoseKey, holdMs: number): boolean {
+    if (this.disposed) return false
+    const pose = this.resolvePose(poseKey)
+    if (pose === null) return false
+    this.stage.swapPose(pose)
+    if (this.flashTimer !== null) {
+      clearTimeout(this.flashTimer)
+      this.flashTimer = null
+    }
+    if (!(holdMs > 0)) return true // hold until the next state change
+    this.flashTimer = setTimeout(() => {
+      this.flashTimer = null
+      if (this.disposed) return
+      const target = this.director.currentTarget
+      if (target === null) return
+      const restore = this.resolvePose(target.poseKey)
+      if (restore === null) return
+      if (restore.asset.url === this.stage.currentPose?.asset.url) return
+      this.stage.swapPose(restore)
+    }, holdMs)
+    return true
   }
 
   /**
@@ -449,8 +512,9 @@ export class OverlaySession {
     return driver
   }
 
-  /** DragController threshold crossing: suspend the external driver's applies. */
+  /** DragController threshold crossing: notify both drag audiences. */
   private handleUserDragStart(): void {
+    this.notifyUserDrag('start')
     const state = this.activeDriver
     if (state === null) return
     for (const listener of [...state.dragListeners]) listener()

@@ -14,7 +14,7 @@
  * (§2.1), so "no active session" is a normal window every API must degrade
  * through: null returns, or a null snapshot push to stage subscribers.
  */
-import type { ActivityMode, VisualState } from '../core/types'
+import type { ActivityMode, PoseKey, VisualState } from '../core/types'
 import type { TimelineInstance } from '../motion/animation-handle'
 import type { OverlaySession } from './overlay-session'
 
@@ -24,6 +24,11 @@ export interface StageSnapshot {
   y: number
   /** The configured user scale (global.scale). */
   scale: number
+  /**
+   * Base stage square in px. The pet's on-screen bounding box is
+   * `stageSize * scale` — companions doing wall/edge math need both.
+   */
+  stageSize: number
   /** Null until the session booted (the director has no target yet). */
   visualState: VisualState | null
   activityMode: ActivityMode | null
@@ -74,6 +79,14 @@ export interface MotionPetClientService {
    * session lifecycle transition pushes a new value.
    */
   subscribeStage(listener: (snapshot: StageSnapshot | null) => void): () => void
+  /**
+   * User drag gestures on the pet itself, service-level (no lease needed —
+   * a throw-style companion samples subscribeStage during the gesture and
+   * only requests the driver at 'end'). 'start' fires once when the gesture
+   * crosses the drag threshold; 'end' fires once when it ends with real
+   * travel (release or cancel). A click fires neither.
+   */
+  subscribeUserDrag(listener: (phase: 'start' | 'end') => void): () => void
   /** Null without an active session or while another driver holds the lease. */
   requestPositionControl(): PositionDriver | null
   /**
@@ -82,14 +95,26 @@ export interface MotionPetClientService {
    * Null without a session or for an unknown id.
    */
   playAnimation(id: string, options?: PlayAnimationOptions): TimelineInstance | null
+  /**
+   * Flash a pose: swap the image now, restore the state machine's pose for
+   * the current target after holdMs (a pose-swap event inside a played
+   * animation cannot express "then revert"). holdMs <= 0 keeps the pose
+   * until the next state change. False without a session or when the pose
+   * key resolves to nothing (resolver fallback still applies).
+   */
+  flashPose(poseKey: PoseKey, holdMs: number): boolean
 }
 
 /** The session PetOverlay last registered (null = no live pet surface). */
 let activeSession: OverlaySession | null = null
 /** Its snapshot subscription, kept so a replacement can detach it. */
 let detachSession: (() => void) | null = null
+/** Its user-drag subscription, detached alongside the snapshot one. */
+let detachDrag: (() => void) | null = null
 /** Service-level stage subscribers; fed by the active session's notifications. */
 const stageListeners = new Set<(snapshot: StageSnapshot | null) => void>()
+/** Service-level drag-gesture subscribers; fanned out from the active session. */
+const userDragListeners = new Set<(phase: 'start' | 'end') => void>()
 
 const snapshotOf = (): StageSnapshot | null => activeSession?.getStageSnapshot() ?? null
 
@@ -99,16 +124,24 @@ const emitSnapshot = (): void => {
   for (const listener of [...stageListeners]) listener(snapshot)
 }
 
+/** Fan a drag phase out to every service-level subscriber. */
+const emitUserDrag = (phase: 'start' | 'end'): void => {
+  for (const listener of [...userDragListeners]) listener(phase)
+}
+
 /**
  * PetOverlay: a fresh OverlaySession went live. Last one wins (mounts are
  * serialized by React, so at most one live session registers); replacing
- * detaches the previous session's subscription first.
+ * detaches the previous session's subscriptions first.
  */
 export function setActivePetSession(session: OverlaySession): void {
   detachSession?.()
+  detachDrag?.()
   detachSession = null
+  detachDrag = null
   activeSession = session
   detachSession = session.subscribeSnapshot(() => emitSnapshot())
+  detachDrag = session.subscribeUserDrag(emitUserDrag)
   emitSnapshot()
 }
 
@@ -121,7 +154,9 @@ export function setActivePetSession(session: OverlaySession): void {
 export function clearActivePetSession(session: OverlaySession): void {
   if (activeSession !== session) return
   detachSession?.()
+  detachDrag?.()
   detachSession = null
+  detachDrag = null
   activeSession = null
   emitSnapshot()
 }
@@ -137,6 +172,13 @@ export const motionPetClientService: MotionPetClientService = {
       stageListeners.delete(listener)
     }
   },
+  subscribeUserDrag: (listener) => {
+    userDragListeners.add(listener)
+    return () => {
+      userDragListeners.delete(listener)
+    }
+  },
   requestPositionControl: () => activeSession?.createPositionDriver() ?? null,
   playAnimation: (id, options) => activeSession?.playExternal(id, options) ?? null,
+  flashPose: (poseKey, holdMs) => activeSession?.flashPose(poseKey, holdMs) ?? false,
 }

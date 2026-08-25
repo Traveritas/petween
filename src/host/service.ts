@@ -34,12 +34,19 @@ export interface MotionPetHostService {
    * completed.
    */
   registerAnimation(definition: AnimationDefinition): Promise<void>
+  /**
+   * Whether the library already holds `id` — companions register their
+   * factory defaults only when missing, so a user's edits to a companion's
+   * animation survive companion reloads/upgrades.
+   */
+  hasAnimation(id: string): Promise<boolean>
 }
 
 /** Build the service over a store; src/index.ts provides the result on ctx. */
-export function createMotionPetHostService(store: Pick<AnimationsStore, 'save'>): MotionPetHostService {
+export function createMotionPetHostService(store: Pick<AnimationsStore, 'save' | 'exists'>): MotionPetHostService {
   return {
     version: 1,
     registerAnimation: (definition) => store.save(definition),
+    hasAnimation: (id) => Promise.resolve(store.exists(id)),
   }
 }

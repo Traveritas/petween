@@ -461,6 +461,114 @@ describe('extension service — playAnimation', () => {
   })
 })
 
+describe('extension service — stageSize', () => {
+  it('the snapshot carries the base stage square (bounds = stageSize × scale)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const snapshot = motionPetClientService.getStageSnapshot()
+    expect(snapshot?.stageSize).toBe(context.stage.stageSize)
+    expect(snapshot?.stageSize).toBe(160)
+  })
+})
+
+describe('extension service — subscribeUserDrag (service level)', () => {
+  it('fires start at the threshold and end at release; a click fires neither', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const phases: string[] = []
+    serviceUnsubscribers.push(motionPetClientService.subscribeUserDrag((phase) => phases.push(phase)))
+
+    // a click (sub-threshold travel) is no drag
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 902, 602))
+    window.dispatchEvent(pointer('pointerup', 902, 602))
+    expect(phases).toEqual([])
+
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 920, 620)) // ≥4px: threshold crossed
+    expect(phases).toEqual(['start'])
+    window.dispatchEvent(pointer('pointermove', 930, 630)) // further moves never re-fire
+    expect(phases).toEqual(['start'])
+    window.dispatchEvent(pointer('pointerup', 930, 630))
+    expect(phases).toEqual(['start', 'end'])
+  })
+
+  it('works without holding the position lease', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const phases: string[] = []
+    serviceUnsubscribers.push(motionPetClientService.subscribeUserDrag((phase) => phases.push(phase)))
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 920, 620))
+    window.dispatchEvent(pointer('pointerup', 920, 620))
+    expect(phases).toEqual(['start', 'end'])
+    expect(motionPetClientService.getStageSnapshot()).toMatchObject({ x: 860, y: 604 }) // drag moved it
+  })
+})
+
+describe('extension service — flashPose', () => {
+  const srcOf = (context: Setup): string | null => context.stage.interactiveElement.getAttribute('src')
+
+  it('swaps the pose image and restores the target pose after the hold', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle'))
+
+    expect(motionPetClientService.flashPose('success', 800)).toBe(true)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    await vi.advanceTimersByTimeAsync(799)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+    await vi.advanceTimersByTimeAsync(1)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // restored to the idle target's pose
+  })
+
+  it('a second flash replaces the pending restore (the new hold wins)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    expect(motionPetClientService.flashPose('success', 10_000)).toBe(true)
+    expect(motionPetClientService.flashPose('error', 200)).toBe(true)
+    expect(srcOf(context)).toBe(assetUrl('asset-error'))
+
+    await vi.advanceTimersByTimeAsync(200)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // the 200ms hold ruled, not the 10s one
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // no late swap from the replaced timer
+  })
+
+  it('holdMs <= 0 keeps the pose until the next state change', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    expect(motionPetClientService.flashPose('success', 0)).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(srcOf(context)).toBe(assetUrl('asset-success'))
+
+    // a real state change still re-owns the pose (flash is not sticky)
+    await settleTransitions()
+    const pending = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await settleTransitions()
+    await pending
+    expect(srcOf(context)).toBe(assetUrl('asset-thinking'))
+  })
+
+  it('returns false without a session', () => {
+    expect(motionPetClientService.flashPose('success', 500)).toBe(false)
+  })
+})
+
 describe('extension service — active session bridge', () => {
   it('a stale clear never detaches the current session', async () => {
     const first = setup()

@@ -62,6 +62,27 @@ const lastCall = (): { url: string; init: RequestInit } => {
   return { url: call[0], init: call[1] ?? {} }
 }
 
+describe('client api — request timeout', () => {
+  it('a hung fetch rejects as NETWORK after the timeout instead of wedging load() forever', async () => {
+    vi.useFakeTimers()
+    // A request sent on a connection that died with a host restart never
+    // settles: the browser has no default fetch timeout, and ConfigHub's
+    // memoized load() would sit at "正在加载" for good (incident 2026-08-25).
+    fetchMock.mockReturnValue(new Promise<Response>(() => {}))
+
+    const pending = getConfig()
+    const assertion = expect(pending).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 0,
+      code: 'NETWORK',
+      message: expect.stringContaining('timed out'),
+    })
+    await vi.advanceTimersByTimeAsync(15_000)
+    await assertion
+    vi.useRealTimers()
+  })
+})
+
 describe('client api', () => {
   it('getConfig GETs /api/motion-pet/config and returns { config, assets }', async () => {
     const config = createDefaultMotionPetConfig()

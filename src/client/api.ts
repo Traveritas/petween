@@ -82,10 +82,26 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message, details)
 }
 
+/**
+ * Per-request timeout. fetch has none by default: a request sent on a
+ * connection that died with a host restart can hang for the browser's TCP
+ * timeout (minutes), which wedged ConfigHub's memoized load() at
+ * "正在加载" forever — a hung load neither rejects (retryable) nor resolves.
+ * The timeout turns hangs into NETWORK errors the existing retry paths
+ * already handle. Generous enough for a slow first paint; SSE streams are
+ * NOT routed through request() and stay unaffected.
+ */
+const REQUEST_TIMEOUT_MS = 15_000
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(url, init)
+    response = await Promise.race([
+      fetch(url, init),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`request timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS),
+      ),
+    ])
   } catch (error) {
     throw new ApiError(0, 'NETWORK', error instanceof Error ? error.message : 'network error')
   }

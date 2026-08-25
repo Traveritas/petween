@@ -625,3 +625,7 @@ TypeScript 标识符随体系同步（MotionPetConfig → PetweenConfig、create
 **测试隔离**：apply() 现在会真实触碰 $DSH_HOME，tests/host/plugin-entry.test.ts 顶层把 `process.env.DSH_HOME` 指向一次性 tmpdir（afterAll 还原），确保测试永不迁动真实用户数据。
 
 **验证**：46 文件 / **748 用例**全绿（742 基线 + 6 迁移用例），双工程 typecheck 零错误，四产物 build 通过（lib/client.js 首行 `id: "petween"`、CSS 前缀 `petween-*`、banner/cssModulesInline pluginId 均为新名；产物中残留的 `dsh-motion-pet` 字样仅为构建机仓库绝对路径，属目录名范畴）。
+
+### 改名落地备注(Windows 环境坑)
+
+目录改名(`dsh-motion-pet/` → `petween/`)后,dsh web 首次启动报 `ERR_MODULE_NOT_FOUND: @deepseek-ai/dsh-home-paths`:pnpm 在 Windows 上用**绝对路径 junction** 布置 node_modules,父目录改名后所有 junction 目标仍指向旧路径,全部断裂。修复:在改名后的目录里 `CI=true pnpm install` 清空重装(junction 重建;lockfile 未变,产物无需重构建)。**任何移动/改名含 pnpm node_modules 的目录后,必须重新 `pnpm install`。**

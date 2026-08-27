@@ -409,6 +409,76 @@ describe('extension service — drag arbitration', () => {
 })
 
 describe('extension service — playAnimation', () => {
+  it('reduced-motion constrains external playback at compile time — constant keyframes, ≤120ms, events kept (§22)', async () => {
+    const customs = [makeCustom('user:spin', 320), makePoseSwapCustom('user:doze', 'user:doze-doze')]
+    const context = setup(
+      (config) => {
+        config.global.reducedMotion = 'always'
+      },
+      customs,
+    )
+    setActivePetSession(context.session)
+    expect(petweenClientService.registerPoses([{ id: 'user:doze-doze', url: DOZE_URL }])).toBe(true)
+    await boot(context)
+    expect(context.stage.reducedMotion).toBe(true)
+
+    // The §22 gate is structural, not per-call-site: playAnimation rides the
+    // same TimelineEngine compile as every other playback (engine passes
+    // stage.reducedMotion into compileTimeline), so under reduce the tracks
+    // collapse to their final value — constant keyframes, zero visible motion
+    // — and the duration caps at 120ms. Locks the 2026-08-27 verification
+    // that closed backlog F1 ("external playback ignores reduced-motion")
+    // as inaccurate for this codebase.
+    const before = harness.animations.length
+    const instance = petweenClientService.playAnimation('user:spin')
+    expect(instance).not.toBeNull()
+    const played = harness.animations
+      .slice(before)
+      .filter((animation) => animation.target === context.stage.layers.transition)
+    expect(played.length).toBeGreaterThan(0)
+    for (const animation of played) {
+      expect(animation.options.duration).toBeLessThanOrEqual(120)
+      const frames = animation.keyframes as Array<{ rotate?: string }>
+      expect(frames[0]?.rotate).toBe('12deg')
+      expect(frames[frames.length - 1]?.rotate).toBe('12deg')
+    }
+    await settleTransitions()
+    expect(instance?.status).toBe('finished')
+
+    // Events survive the collapse: the pose-swap still lands mid-run (a pose
+    // change is an image swap, not motion) and the settle still realigns to
+    // the state pose — companions like physics keep their semantics.
+    const seen: Array<string | null> = []
+    serviceUnsubscribers.push(
+      petweenClientService.subscribePose((pose) => seen.push(pose === null ? null : pose.poseKey)),
+    )
+    const swapInstance = petweenClientService.playAnimation('user:doze')
+    await settleTransitions()
+    expect(seen).toContain('user:doze-doze')
+    const src = context.stage.element.querySelector('img')?.getAttribute('src') ?? null
+    expect(src).toBe(assetUrl('asset-idle'))
+    expect(swapInstance?.status).toBe('finished')
+
+    // Flipping the preference off restores full-fidelity external playback:
+    // the compile reads the stage flag at play time, not at construction.
+    const next = structuredClone(context.hub.getCurrent()?.config ?? context.config)
+    next.global.reducedMotion = 'never'
+    publish(context.hub, next, context.assets, structuredClone(customs))
+    expect(context.stage.reducedMotion).toBe(false)
+    const fullBefore = harness.animations.length
+    const fullInstance = petweenClientService.playAnimation('user:spin')
+    expect(fullInstance).not.toBeNull()
+    const fullPlayed = harness.animations
+      .slice(fullBefore)
+      .filter((animation) => animation.target === context.stage.layers.transition)
+    expect(fullPlayed[fullPlayed.length - 1]?.options.duration).toBe(320)
+    const fullFrames = fullPlayed[fullPlayed.length - 1]?.keyframes as Array<{ rotate?: string }>
+    expect(fullFrames[0]?.rotate).toBe('0deg')
+    expect(fullFrames[fullFrames.length - 1]?.rotate).toBe('12deg')
+    await settleTransitions()
+    expect(fullInstance?.status).toBe('finished')
+  })
+
   it('unknown id → null; a hub custom becomes playable once synced', async () => {
     const context = setup()
     setActivePetSession(context.session)

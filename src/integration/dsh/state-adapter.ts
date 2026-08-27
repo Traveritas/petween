@@ -292,6 +292,22 @@ export class StateAdapter {
         winnerRank = rank
       }
     }
+    // A live error NEWER than a held waiting briefly outranks it (2026-08-27
+    // 拍板 (a)): waiting entries never expire, so without this a session left
+    // at an unanswered approval masks every later failure in another session
+    // forever. The error's own TTL expiry recompute restores the waiting face
+    // ~1.8s later (scheduleTerminalExpiry arms it for every live terminal,
+    // winner or not), and the strict-newer guard keeps §14.5 steady state
+    // untouched — a waiting that arrives after an error still displaces it
+    // immediately, exactly as before.
+    if (winner !== null && winner.type === 'waiting') {
+      let error: NormalizedAgentEvent | null = null
+      for (const { event } of this.sessions.values()) {
+        if (event.type !== 'error' || this.terminalExpired(event, this.errorTtlMs, now)) continue
+        if (error === null || event.ts >= error.ts) error = event
+      }
+      if (error !== null && error.ts > winner.ts) winner = error
+    }
     this.scheduleTerminalExpiry(now)
     if (winner === null) {
       // Nothing known (fresh/empty snapshot): the pet belongs in idle.

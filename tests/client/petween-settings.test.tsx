@@ -14,7 +14,7 @@ import type { ConfigPatch, UploadedAsset } from '../../src/client/api'
 import { PreviewSession } from '../../src/client/preview-session'
 import type { EditorApi } from '../../src/client/stores/editor-store'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import type { AssetMeta, PetPreset } from '../../src/core/types'
+import type { AssetMeta, PetPreset, PetSlice } from '../../src/core/types'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -74,6 +74,9 @@ const makeApi = (withImage: boolean): EditorApi => {
     getAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
     getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
     createPet: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    createPetFromDraft: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
     renamePet: vi.fn(async () => {}),
@@ -376,6 +379,50 @@ describe('PetweenSettings', () => {
     expect(deletePet).toHaveBeenCalledWith('pet_c')
     expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('')
     expect(container.textContent).toContain('未保存的当前配置')
+  })
+
+  it('另存草稿为新宠物 forks the unsaved draft without switching pets or saving (A2)', async () => {
+    const api = makeApi(true)
+    const response = await api.getConfig()
+    const config = response.config
+    config.activePetId = 'pet_a'
+    const makePet = (id: string, name: string, scale: number): PetPreset => ({
+      id,
+      name,
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      scale,
+      poses: structuredClone(config.poses),
+      states: structuredClone(config.states),
+    })
+    let pets = [makePet('pet_a', '蓝猫', 1)]
+    api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: config.activePetId, warnings: [] }))
+    const createPetFromDraft = vi.fn(async (name: string, pet: PetSlice) => {
+      const created = makePet('pet_fork', name, pet.scale)
+      pets = [...pets, created]
+      return { pet: created }
+    })
+    api.createPetFromDraft = createPetFromDraft
+    const patchConfig = vi.spyOn(api, 'patchConfig')
+    vi.stubGlobal('prompt', vi.fn().mockReturnValueOnce('变体猫'))
+    await render(api, true)
+
+    // An unsaved edit on the draft (toggle → updateConfig → dirty) — the
+    // exact state the old clean-draft gate refused to fork from.
+    const toggle = findControlRow('活跃状态内切换姿势').querySelector('input')
+    if (toggle === null) throw new Error('change-pose toggle missing')
+    act(() => toggle.click())
+
+    act(() => clickButton('另存草稿为新宠物'))
+    await flushActions()
+    expect(createPetFromDraft).toHaveBeenCalledTimes(1)
+    expect(createPetFromDraft.mock.calls[0]![0]).toBe('变体猫')
+    // The request body is a pet slice (poses/states/scale), never a full config.
+    expect(Object.keys(createPetFromDraft.mock.calls[0]![1]).sort()).toEqual(['poses', 'scale', 'states'])
+    // No pet switch, no implicit save — the fork is purely additive.
+    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_a')
+    expect(patchConfig).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('变体猫') // the refreshed list shows the fork
   })
 
   it('registers beforeunload only while there is unsaved work (UX-1a)', async () => {

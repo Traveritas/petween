@@ -656,6 +656,57 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Blank', 'First'])
   })
 
+  it('POST from=draft stores the supplied slice WITHOUT touching the active pet (A2)', async () => {
+    await seedConfig(1.5, '0123456789abcdef')
+    const { pet: active } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as {
+      pet: PetPreset
+    }
+    // The variant fork: a client-side draft (unsaved edits included) — bigger
+    // scale, a state field the saved config never got.
+    const res = await postPets({
+      name: 'Kitty 变体',
+      from: 'draft',
+      pet: {
+        scale: 2.5,
+        poses: { idle: { assetId: '0123456789abcdef' } },
+        states: { idle: { enter: { preset: 'jelly', strength: 1.4, durationMs: 300 } } },
+      },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { pet: PetPreset; config?: unknown }
+    expect(body.pet.name).toBe('Kitty 变体')
+    expect(body.pet.scale).toBe(2.5)
+    expect(body.pet.poses.idle.assetId).toBe('0123456789abcdef')
+    expect(body.pet.states.idle.enter).toMatchObject({ preset: 'jelly', strength: 1.4 })
+    expect(body.config).toBeUndefined() // a draft creation never adopts/returns a config
+    // The active pointer, the active preset and the live config are untouched.
+    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
+    expect(listed.activePetId).toBe(active.id)
+    expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Kitty', 'Kitty 变体'])
+    const { config } = await (await fetch(`${base}/api/petween/config`)).json()
+    expect(config.global.scale).toBe(1.5)
+    expect(config.activePetId).toBe(active.id)
+    expect(config.states.idle.enter.preset).toBe('soft')
+  })
+
+  it('POST from=draft rejects a slice referencing an unknown animation (400 INVALID_CONFIG)', async () => {
+    await seedConfig()
+    const res = await postPets({
+      name: 'Bad',
+      from: 'draft',
+      pet: { scale: 1, poses: {}, states: { idle: { enter: { animationId: 'user:missing' } } } },
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVALID_CONFIG')
+    expect(await (await fetch(`${base}/api/petween/pets`)).json()).toMatchObject({ pets: [] })
+  })
+
+  it('POST from=draft requires a pet slice object (400 INVALID_REQUEST)', async () => {
+    const res = await postPets({ name: 'X', from: 'draft' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVALID_REQUEST')
+  })
+
   it('PUT renames a preset; 404 unknown ids, 400 empty names', async () => {
     const { pet } = (await (await postPets({ name: 'Old', from: 'current' })).json()) as { pet: PetPreset }
     const res = await fetch(`${base}/api/petween/pets/${pet.id}`, {

@@ -16,7 +16,7 @@ import {
   type EditorApi,
 } from '../../src/client/stores/editor-store'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import type { AssetMeta, PetweenConfig, PetPreset } from '../../src/core/types'
+import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
 interface ApiMocks {
@@ -24,6 +24,7 @@ interface ApiMocks {
   getAnimations: ReturnType<typeof vi.fn>
   getPets: ReturnType<typeof vi.fn>
   createPet: ReturnType<typeof vi.fn>
+  createPetFromDraft: ReturnType<typeof vi.fn>
   renamePet: ReturnType<typeof vi.fn>
   deletePet: ReturnType<typeof vi.fn>
   applyPet: ReturnType<typeof vi.fn>
@@ -80,6 +81,21 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
         serverConfig.states = structuredClone(pet.states)
       }
       return { pet: structuredClone(pet), config: structuredClone(serverConfig) }
+    }),
+    createPetFromDraft: vi.fn(async (name: string, pet: PetSlice) => {
+      // Truthful A2 stand-in: the supplied slice becomes a new preset and the
+      // active config (and its activePetId) is NOT touched.
+      const created: PetPreset = {
+        id: `pet_${++petSequence}`,
+        name,
+        createdAt: '2026-08-21T00:00:00.000Z',
+        updatedAt: '2026-08-21T00:00:00.000Z',
+        scale: pet.scale,
+        poses: structuredClone(pet.poses),
+        states: structuredClone(pet.states),
+      }
+      serverPets.push(created)
+      return { pet: structuredClone(created) }
     }),
     renamePet: vi.fn(async (id: string, name: string) => {
       serverPets = serverPets.map((pet) => (pet.id === id ? { ...pet, name } : pet))
@@ -936,6 +952,48 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(mocks.createPet).toHaveBeenLastCalledWith({ name: '空白', from: 'blank' })
     expect(store.getSnapshot().config?.activePetId).toBe('pet_2')
     expect(store.getSnapshot().pets.map((candidate) => candidate.name)).toEqual(['改名', '空白'])
+  })
+
+  it('saveDraftAsNewPet forks the CURRENT DRAFT (unsaved edits included) without touching it (A2)', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+
+    // An unsaved experiment on the draft: a scale no save ever persisted.
+    store.updateConfig((draft) => {
+      draft.global.scale = 2.75
+    })
+    expect(store.getSnapshot().saveState).toBe('dirty')
+
+    expect(await store.saveDraftAsNewPet('变体')).toBe(true)
+    // The fork carries the DRAFT values, not the server-saved ones.
+    expect(mocks.createPetFromDraft).toHaveBeenCalledTimes(1)
+    expect(mocks.createPetFromDraft.mock.calls[0]![0]).toBe('变体')
+    expect(mocks.createPetFromDraft.mock.calls[0]![1].scale).toBe(2.75)
+    // The active pointer, the local draft and its dirty state are untouched;
+    // the pets list refresh is the only visible effect.
+    expect(store.getSnapshot().config?.global.scale).toBe(2.75)
+    expect(store.getSnapshot().config?.activePetId).toBeNull()
+    expect(store.getSnapshot().saveState).toBe('dirty')
+    expect(store.getSnapshot().pets.map((candidate) => candidate.name)).toEqual(['变体'])
+    // The fork must not implicitly save anything.
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+  })
+
+  it('saveDraftAsNewPet surfaces a host rejection as a notice and keeps the draft (A2)', async () => {
+    const { api, mocks } = makeApi({
+      createPetFromDraft: vi.fn(async () => {
+        throw new Error('unknown custom animation: user:missing')
+      }),
+    })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 2.75
+    })
+    expect(await store.saveDraftAsNewPet('变体')).toBe(false)
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'error' })
+    expect(store.getSnapshot().saveState).toBe('dirty')
+    expect(store.getSnapshot().config?.global.scale).toBe(2.75)
+    expect(mocks.getPets).toHaveBeenCalledTimes(1) // no refresh after a failure
   })
 
   it('apply replaces the draft with the host config and publishes it through the hub', async () => {

@@ -266,6 +266,9 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
         createPet: vi.fn(async () => {
           throw new Error('not used')
         }),
+        createPetFromDraft: vi.fn(async () => {
+          throw new Error('not used')
+        }),
         renamePet: vi.fn(),
         deletePet: vi.fn(),
         applyPet: vi.fn(async () => structuredClone(base)),

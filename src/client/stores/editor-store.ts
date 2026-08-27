@@ -14,13 +14,14 @@
  * saveAnimation/deleteAnimation hit the API immediately and broadcast the
  * customs list through the hub; they never touch the config draft.
  */
-import type { AssetMeta, PetweenConfig, PetPreset, PoseKey } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
 import {
   applyPet as httpApplyPet,
   createPet as httpCreatePet,
+  createPetFromDraft as httpCreatePetFromDraft,
   deleteAnimation as httpDeleteAnimation,
   deleteAsset as httpDeleteAsset,
   deletePet as httpDeletePet,
@@ -53,6 +54,8 @@ export interface EditorApi {
   /** V1.1: named character presets and the active config pointer. */
   getPets(): Promise<GetPetsResponse>
   createPet(input: { name: string; from: 'current' | 'blank' }): Promise<{ pet: PetPreset; config: PetweenConfig }>
+  /** A2: persist the supplied slice as a NEW preset; never touches the active pet. */
+  createPetFromDraft(name: string, pet: PetSlice): Promise<{ pet: PetPreset }>
   renamePet(id: string, name: string): Promise<void>
   deletePet(id: string): Promise<void>
   applyPet(id: string): Promise<PetweenConfig>
@@ -70,6 +73,7 @@ const httpEditorApi: EditorApi = {
   getAnimations: () => httpGetAnimations(),
   getPets: () => httpGetPets(),
   createPet: (input) => httpCreatePet(input),
+  createPetFromDraft: (name, pet) => httpCreatePetFromDraft(name, pet),
   renamePet: async (id, name) => {
     await httpRenamePet(id, name)
   },
@@ -520,6 +524,34 @@ export class EditorStore {
   /** Protect any unsaved character host-side, then create and apply a blank one. */
   createPetBlank(name: string): Promise<boolean> {
     return this.createPet(name, 'blank')
+  }
+
+  /**
+   * A2 (2026-08-27 拍板 A): snapshot the CURRENT DRAFT — unsaved edits
+   * included — into a brand-new preset, leaving the active pet and its draft
+   * untouched (no apply, no dirty change, no implicit save). The lossless
+   * branch of the variant workflow: experiment freely, fork what is on
+   * screen, keep editing the original. Awaits saveChain first so a draft
+   * referencing a just-saved config state settles before the fork reads it.
+   */
+  async saveDraftAsNewPet(name: string): Promise<boolean> {
+    const draft = this.snapshot.config
+    if (this.disposed || draft === null) return false
+    await this.saveChain
+    if (this.disposed) return false
+    try {
+      await this.api.createPetFromDraft(name, {
+        scale: draft.global.scale,
+        poses: structuredClone(draft.poses),
+        states: structuredClone(draft.states),
+      })
+      if (this.disposed) return true
+      await this.refreshPetsSafely()
+      return true
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `另存宠物失败：${describeError(error)}` } })
+      return false
+    }
   }
 
   private async createPet(name: string, from: 'current' | 'blank'): Promise<boolean> {

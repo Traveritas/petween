@@ -76,6 +76,9 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
     createPet: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
+    createPetFromDraft: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
     renamePet: vi.fn(async () => {}),
     deletePet: vi.fn(async () => {}),
     applyPet: vi.fn(async () => structuredClone(config)),

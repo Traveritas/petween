@@ -133,8 +133,10 @@ describe('aggregate mode (§14.5 priority)', () => {
     // An error anywhere does.
     source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's3' }) })
     expect(events).toEqual([{ type: 'activity', mode: 'thinking' }, { type: 'turn-end', outcome: 'error' }])
-    // And waiting outranks the error.
-    source.message({ kind: 'event', event: event({ type: 'waiting', sessionId: 's4', ts: 40 }) })
+    // And waiting outranks the error — arriving at least as new, it displaces
+    // the error flash immediately (the A5 punch-through only fires for
+    // failures NEWER than the held wait).
+    source.message({ kind: 'event', event: event({ type: 'waiting', sessionId: 's4' }) })
     expect(events[2]).toEqual({ type: 'waiting' })
   })
 
@@ -154,6 +156,37 @@ describe('aggregate mode (§14.5 priority)', () => {
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's1', ts: 10 }) })
     source.message({ kind: 'event', event: event({ type: 'thinking', sessionId: 's1', ts: 20 }) })
     expect(events).toEqual([{ type: 'activity', mode: 'thinking' }])
+  })
+})
+
+describe('aggregate waiting×error punch-through (A5, 2026-08-27 拍板 (a))', () => {
+  it("a held waiting no longer masks a NEWER error in another session — the error flashes, then waiting returns", async () => {
+    makeAdapter()
+    const source = lastSource()
+    // A session parked at an unanswered approval a minute ago (waiting never
+    // expires on its own).
+    source.message({ kind: 'event', event: event({ type: 'waiting', sessionId: 's1', ts: Date.now() - 60_000 }) })
+    expect(events).toEqual([{ type: 'waiting' }])
+    // A failure in another session one minute later must surface…
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2', ts: Date.now() - 1_000 }) })
+    expect(events).toEqual([{ type: 'waiting' }, { type: 'turn-end', outcome: 'error' }])
+    // …briefly: once the error's TTL lapses, the held waiting returns through
+    // the expiry recompute alone — no new event is delivered.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(events).toEqual([{ type: 'waiting' }, { type: 'turn-end', outcome: 'error' }, { type: 'waiting' }])
+  })
+
+  it('an error OLDER than the waiting never punches — a wait arriving after an error still displaces it immediately', async () => {
+    makeAdapter()
+    const source = lastSource()
+    source.message({ kind: 'event', event: event({ type: 'error', sessionId: 's2', ts: Date.now() - 1_000 }) })
+    expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }])
+    // Newer waiting: immediate displacement, exactly the pre-A5 behavior.
+    source.message({ kind: 'event', event: event({ type: 'waiting', sessionId: 's1', ts: Date.now() - 500 }) })
+    expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }, { type: 'waiting' }])
+    // And it STAYS waiting past the old error's TTL — no flip-flop back.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(events).toEqual([{ type: 'turn-end', outcome: 'error' }, { type: 'waiting' }])
   })
 })
 

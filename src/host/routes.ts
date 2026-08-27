@@ -8,7 +8,10 @@
  * - prefix `/api/petween/assets`     POST (base path) / DELETE `<id>` subpath
  * - exact  `/api/petween/animations` GET (V1.1)
  * - prefix `/api/petween/animations` PUT / DELETE `<id>` subpath (V1.1)
- * - exact  `/api/petween/pets`       GET / POST (V1.1)
+ * - exact  `/api/petween/pets`       GET / POST (V1.1; POST accepts from:
+ *                                    current | blank | draft — draft carries
+ *                                    the slice itself and never touches the
+ *                                    active pet, A2)
  * - prefix `/api/petween/pets`       PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
  * - prefix `/petween-assets`         GET / HEAD `<id>` subpath (static)
  *
@@ -27,7 +30,7 @@ import { ANIMATION_KINDS, type AnimationDefinition } from '../motion/animation-d
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
-import { ConfigValidationError, validateAssetId } from './validation'
+import { ConfigValidationError, validateAssetId, validateConfigPatch } from './validation'
 
 const CONFIG_PATH = '/api/petween/config'
 const ASSETS_PATH = '/api/petween/assets'
@@ -434,8 +437,36 @@ async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: 
       throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
     }
     const source = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    if (source.from === 'draft') {
+      // A2 (2026-08-27 拍板 A): create a preset from the client-supplied
+      // slice — the editor's CURRENT DRAFT, unsaved edits included — without
+      // touching the active pet: no apply, no activePetId change. The
+      // lossless fork of the variant workflow (the active pet keeps its own
+      // draft and dirty state). The slice gets the same strict field
+      // validation a config PUT would give these sections, animation
+      // references included (a ConfigValidationError maps to 400
+      // INVALID_CONFIG through mapError).
+      const pet = source.pet
+      if (typeof pet !== 'object' || pet === null || Array.isArray(pet)) {
+        throw new HttpError(400, 'INVALID_REQUEST', 'from:"draft" requires a "pet" slice object')
+      }
+      const slice = pet as Record<string, unknown>
+      const { customs } = await deps.listAnimations()
+      const kindById = new Map(customs.map((definition) => [definition.id, definition.kind]))
+      // Default base (not the live config): missing slice keys then inherit
+      // the SAME defaults normalizePetSlice repairs with, so what validation
+      // approves is exactly what the store persists.
+      validateConfigPatch(
+        { global: { scale: slice.scale }, poses: slice.poses, states: slice.states },
+        undefined,
+        { animationLookup: (id) => kindById.get(id) },
+      )
+      const created = await deps.createPet(source.name, slice)
+      sendJson(res, 200, { pet: created })
+      return
+    }
     if (source.from !== 'current' && source.from !== 'blank') {
-      throw new HttpError(400, 'INVALID_REQUEST', 'expected "from" to be "current" or "blank"')
+      throw new HttpError(400, 'INVALID_REQUEST', 'expected "from" to be "current", "blank" or "draft"')
     }
     const config = await deps.loadConfig()
     if (source.from === 'current') {

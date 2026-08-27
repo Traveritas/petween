@@ -229,6 +229,17 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
             type="button"
             className={styles.button}
             onClick={() => {
+              const base = active === undefined ? '新宠物' : `${active.name} 变体`
+              const name = askName('把当前配置（含未保存修改）另存为新宠物', base)
+              if (name !== null) void store.saveDraftAsNewPet(name)
+            }}
+          >
+            另存草稿为新宠物
+          </button>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => {
               const name = askName('新建当前宠物的副本', active === undefined ? '新宠物' : `${active.name} 副本`)
               if (name !== null) void store.createPetCurrent(name)
             }}
@@ -270,7 +281,9 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           </button>
         </div>
       </div>
-      <p className={styles.hint}>点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。</p>
+      <p className={styles.hint}>
+        点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。
+      </p>
     </section>
   )
 }

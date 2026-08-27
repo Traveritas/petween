@@ -678,3 +678,59 @@ TypeScript 标识符随体系同步（MotionPetConfig → PetweenConfig、create
 ### attachStageOverlay 评估结论
 
 核心实现不难（PetStage stageLayer 提供受控插入点，挂 userScale 层内即继承位置/缩放/全部身体变换），但「正确」成本在契约：session 重建节点销毁的 重挂约定、pointer-events 禁止、z 序规则、dispose 传播。评估为**可做但不宜与本轮（13 文件）同叠**——排下一轮第二个，与中断池同轮收口。
+
+## Backlog 近期项核实收口 + 发布拍板（2026-08-27 晚）
+
+外部核实 deferred-backlog 两个【近期】项与 physics 镜像项：**两项半已在既有提交落地或前提不成立**，本轮补一枚端到端锁定用例并修正 backlog 记载。
+
+### E1（clamp 尺寸一致性）——已于 f84bc50 落地，backlog 记载滞后
+
+「driver.apply 用未缩放 `stageSize` 预夹」在当前代码不成立：f84bc50 已把 `PetStage.visibleSize`（`max(size × userScale, MIN_VISIBLE_PX)`）确立为 §27 唯一 clamp 基准，driver.apply / DragController 的 stageSize 回调 / resize 回写 / `setPosition` 四处同源；`tests/client/overlay-session.test.ts` 有专项用例（scale=0.5 拖墙，DOM left / 内存 this.position / 快照 x / 持久化 patch 四方一致 −48px）。原 A7「拖拽手势内 clamp 未按 scale 收紧」同项闭合。
+
+### C4（physics 快照镜像升级）——已于 physics 418a6e0 落地
+
+镜像补 viewport/dragging/reducedMotion/poseKey/bodyRect 五个可选字段（消费方按 optional 处理，旧 provider 不炸）；飞行边界优先消费 bodyRect insets（可见身体贴墙而非方块透明边），`deps.getViewport` 保留为旧 provider 兜底。与 E1 的跨仓对齐即 backlog 建议的「同一窗口落地」，实际已在前两个提交内先后完成。
+
+### F1（外部播放 reduced-motion）——前提不成立，测试锁定关闭
+
+「经 `playAnimation` 播的外部动画完全不看 reduced-motion」与代码不符：`TimelineEngine.createInstance` **自 v1.0.0 起**就把 `stage.reducedMotion` 传入 `compileTimeline`，而 `playExternal → director.play → engine.play` 与一切播放共用该编译路径——§22 坍缩（轨道坍缩为终值常值帧、时长封顶 `REDUCED_MOTION_MAX_DURATION_MS=120`、事件按比例落点保留）天然覆盖外部播放；粒子另有 emit 前强制不发射。`ambient-engine.ts` 的显式 gate 只是「干脆不启动实例」的额外一层，并非唯一 gate（评审主张据此误判）。
+
+backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播会连 pose-swap 换图语义一并吞掉（换图不是动效），坍缩编译恰好做到「动效消失、语义保留」，与 §22「Transition: None 或极轻 ≤120ms」的规格措辞一致；physics 碰壁动画在 reduce 下的「抑制」实际早已生效（squash 坍缩为不可见，pose 语义不受损）。
+
+锁定用例（extension-service，+1）：reduce=always 下 `playAnimation` 产常值帧（rotate '12deg'→'12deg'）、duration ≤ 120ms、pose-swap 事件照常落图且 settle 回正；发布翻转为 never 后同一动画恢复 320ms 全保真——证明 flag 是**播放时**读取（engine.createInstance 时点），非构造期快照。
+
+### 发布拍板（记入 backlog §1）
+
+**暂不 npm publish**：GitHub 仓库公开 + `dsh plugin add link:` 安装供有兴趣者体验。因零存量用户，旧客户端/旧 provider 兼容议题整体作废——B2/B3 的「发布前先行」紧迫性解除（仍保留为 Motion Pack 前置组成员）；B9、E4 维持原判。
+
+### 验证
+
+主仓 47 文件 / **826 用例**全绿（+1），双工程 typecheck 通过；physics 零改动（120 用例维持全绿）。
+
+## A2 / A5 / E3 三项拍板落地（2026-08-27 晚，第二批）
+
+三个原【待拍板】项同晚全部拍板并实现；连同上一批（F1 锁定 / E1、C4 核实归档 / 发布拍板），backlog 的速览表只剩 Motion Pack 前置组与排队项。
+
+### A2「另存为新宠物」— 拍板方案 A：草稿 → 新宠物，主版本不动
+
+- **host**（routes.ts POST /pets）：新增第三种 `from:'draft'`——请求携带 `pet` slice（`{scale, poses, states}`），经 `validateConfigPatch` 以**默认 base**（非活跃配置，保证缺省键的校验语义与 `normalizePetSlice` 的修复语义一致）严格校验，动画引用用 `listAnimations()` 现场建 kind 表做存在性/kind 检查（未知/错 kind → 400 INVALID_CONFIG，与 PUT config 同一错误面）；随后 `createPet(name, slice)` 落盘，**不 apply、不动 activePetId**，响应仅 `{pet}`。`from:'current'|'blank'` 行为原样。
+- **client**：api.ts `createPetFromDraft(name, pet)`；`EditorStore.saveDraftAsNewPet(name)`——读**当前 draft**（dirty 可用，这正是功能目的），先 `await saveChain` 再发请求，成功仅刷新 pets 列表（不改 config/saveState/dirty），失败走 error notice；不隐式保存、不切换宠物。UI：宠物卡新按钮「另存草稿为新宠物」（prompt 命名，默认 `<当前名> 变体`），提示文案说明无损分支用途。
+- **测试**：host 路由 3 例（draft 落盘且活跃宠物/配置原样、未知动画 400、缺 pet 400）；store 2 例（草稿值入请求且本地状态原样不隐式保存；失败 notice + 不刷新）；UI 1 例（按钮走通、请求体是三键 slice、不切换不保存、列表见新宠物）。
+- 方案 B（放宽 clone 的 dirty 拒绝 + 克隆旧版/草稿转正编排）经论证与 A 不冲突、可后补，未实现。
+
+### A5 waiting 无限压制 error — 拍板 (a)：error 短暂穿透 + 严格更新守卫
+
+`recompute()`（state-adapter.ts）：winner 为 waiting 时，查找 **TTL 内且 `ts` 严格大于 waiting.ts** 的最新 error，命中则以该 error 为 winner。要点：
+
+- **自恢复零新机制**：error 自身 1.8s TTL 过期触发的既有 `scheduleTerminalExpiry` recompute 自动回到 waiting——效果是「闪约 1.8s 报错脸再回到等待脸」，不新增任何定时器语义。
+- **严格更新守卫**（`error.ts > waiting.ts`）：waiting 后到（比 error 新）仍**立即**压过 error，与 §14.5 稳态 rank 及既有测试语义完全一致；穿透只发生在原死角场景——陈旧 waiting（如无人应答的 approval）+ 之后其它会话的失败。
+- 原候选 (b) waiting 30s TTL 被否：聚合以事件自身 ts 判新鲜（防 ghost 终态的既有设计），轮询重放的 waiting 带原始 ts，真实等待中的 approval 会在 30s 后错误地「掉出等待」。
+- **测试**：新增 2 例（held waiting + 1s 前的 error → 穿透 → TTL 后自动回 waiting；error 先到 + waiting 后到 → 立即压过且过期后无翻转）；1 例既有用例的 waiting ts 从 40 改为当下时刻以匹配守卫语义。
+
+### E3 physics 卡片关闭丢编辑 — unmount flush
+
+核实：卡片（PhysicsCard.tsx）**早已是每改动 300ms 防抖自动保存**，backlog 的「保存修改按钮/关闭丢弃全部未保存修改/不可拦截前提」是对旧手动保存设计的失效记载。真实缺口仅剩：unmount effect 只 `clearTimeout` 不 flush——关闭发生在最后一次改动后的 300ms 窗口内则丢该次编辑。修复：`pendingDraft` ref 记录排队草稿，unmount 时 timer 挂着则立即 `hub.update(queued)`（fire-and-forget，错误走 hub 既有面）；`resetDefaults` 同步清队。测试 +1（窗口内卸载恰好发一次携带最新值的 PUT）。
+
+### 验证
+
+主仓 47 文件 / **834 用例**全绿（较上一批 +8：A2 6 = 路由 3 / store 2 / UI 1；A5 新增 2，另有 1 例既有用例适配改写不计入），双工程 typecheck 通过；physics 8 文件 / **121 用例**全绿（+1），typecheck 通过。

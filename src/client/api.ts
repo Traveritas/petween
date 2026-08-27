@@ -13,7 +13,7 @@
  * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
  * - GET/POST /api/petween/pets and PUT/DELETE/apply subpaths (V1.1 presets)
  */
-import type { AssetMeta, PetweenConfig, PetPreset } from '../core/types'
+import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 
 const CONFIG_URL = '/api/petween/config'
@@ -231,6 +231,20 @@ export function createPet(input: { name: string; from: 'current' | 'blank' }): P
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
+  })
+}
+
+/**
+ * A2 (2026-08-27): create a preset FROM the supplied slice — the editor's
+ * current draft, unsaved edits included. Unlike current/blank the host never
+ * touches the active config, so the response carries no `config`: the active
+ * pet and its draft stay exactly as they were.
+ */
+export function createPetFromDraft(name: string, pet: PetSlice): Promise<{ pet: PetPreset }> {
+  return request(PETS_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, from: 'draft', pet }),
   })
 }
 

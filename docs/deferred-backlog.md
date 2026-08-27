@@ -16,51 +16,35 @@
 
 | 优先级 | 条目 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| 1 | F1 reduced-motion 约束 | 外部播放不看用户无障碍偏好，几行 gate | 【近期】 |
-| 2 | E1 clamp 尺寸一致性 | apply 预夹用未缩放尺寸，scale≠1 时附属几何失真 | 【近期】 |
-| 3 | npm publish / GitHub 公开 | 对外发布拍板（含 B2/B3 是否先行） | 【待拍板】 |
-| 4 | A2 另存为新宠物 | 变体工作流的覆盖风险 | 【待拍板】 |
-| 5 | A5 waiting 压制 error | 回退聚合模式无 TTL，报错脸出不来 | 【待拍板】 |
-| 6 | E3 physics 卡片未保存 | 关闭丢弃未保存修改，三候选选一 | 【待拍板】 |
-| 7 | B1+B6+B2+B3+B10 | Motion Pack / 对外发布前的 API 地基包 | 【前置】 |
-| 8 | OverlaySession 拆分 + 双会话去重 | ExtensionSurface 抽取与 session 公共层 | 【前置】 |
-| 9 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
-| 10 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
+| 1 | B1+B6+B2+B3+B10 | Motion Pack / 对外开放前的 API 地基包 | 【前置】 |
+| 2 | OverlaySession 拆分 + 双会话去重 | ExtensionSurface 抽取与 session 公共层 | 【前置】 |
+| 3 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
+| 4 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
 
-> （原第 3 位「B5(短期) strength 默认上限」已于 2026-08-27 下午落地，
-> 见 §9 存档。）
+> 2026-08-27 晚收口（两批）：原【近期】两项已离场——E1（clamp 尺寸
+> 一致性）经核实已于 f84bc50 随 visibleSize 统一落地（含专项用例）；F1
+> （外部播放 reduced-motion）经核实**前提不成立**（编译层坍缩自 v1.0.0
+> 覆盖全部引擎播放路径），本轮以端到端用例锁定后关闭；连带 physics 仓
+> C4（快照镜像升级）已在 418a6e0 落地。三个【待拍板】项同晚全部拍板并
+> 落地：A2 选方案 A（`from:'draft'` 草稿另存为新宠物，不碰活跃宠物）、
+> A5 选 (a)（TTL 内且更新的 error 短暂穿透 waiting，自恢复）、E3 unmount
+> flush（卡片已是自动保存，只补防抖窗口内关闭的 flush）。npm publish 已
+> 拍板「暂不发布、GitHub link 分发」（§1）。以上详见 §9 存档。
 
 ---
 
 ## 1. 待用户拍板（决策类，非编码）
 
-### npm publish 与对外发布
+### npm publish 与对外发布【已拍板 2026-08-27 晚】
 
-- 现状：M6 打包就绪，tarball 干净安装验收通过；用户自评未到对外可用阶段。
-- 关联：若对外发布，B2（HTTP meta）、B3（乐观并发）、B9（未知字段策略）
-  建议先行——旧客户端对新 host 的兼容面目前靠逐端点 404 试错。
-- 附属生态同理：physics 未发布则 E4（服务名旧 alias）维持已决策的 README
-  矩阵即可；出现真实旧版用户再议双 provide。
-
-### A2. 「另存为新宠物」：无法携带未保存修改建副本
-
-- 现状：宠物 create/apply 一律要求 clean draft；做角色变体必须先「保存修改」
-  覆盖当前宠物。
-- 影响：变体工作流有覆盖风险，无法无损试验。
-- 建议：先隐式落盘克隆再回切，或 draft 快照携带克隆；产品语义决策。
-
-### A5. waiting 无限压制 error（回退聚合模式）
-
-- 现状：sessions 桥不可用的回退模式下 `waiting` rank 高于 `error` 且无 TTL
-  （`state-adapter.ts` rankOf）；一个会话停在 approval 时其它会话的报错脸
-  永远出不来。
-- 建议：给 waiting 加长 TTL（如 30s）或让 error 短暂穿透；优先级策略取舍。
-
-### E3. physics 紧凑设置卡片未保存修改在关闭时丢弃
-
-- 现状：卡片 unmount 即 dispose，未保存修改丢弃且无 beforeunload；但有
-  「保存修改」按钮与未保存提示。前提「DSH 对话框关闭不可拦截」需真机复核。
-- 候选：开关即时 patchConfig / unmount 时 fire-and-forget 保存 / 维持现状。
+- 拍板：**暂不 npm publish**。分发方式 = GitHub 仓库公开，感兴趣的用户
+  `dsh plugin add link:<本地路径>`（clone 后 link）安装体验；physics 同理。
+- 因零存量用户，**旧客户端/旧 provider 兼容议题整体作废**：B2/B3 的
+  「对外发布前先行」紧迫性解除（两者仍保留在 §3 Motion Pack 前置组——
+  B3 的多 writer 冲突信号与 B2 的能力发现在 pack 场景仍有独立价值）；
+  B9 维持「开放第三方客户端前再议」；E4 维持已关闭。
+- 重开条件：出现真实的 npm 分发需求，或首批 link 用户中出现「主插件/
+  附属版本组合管理麻烦」的实际反馈。
 
 ### B9. 未知字段全量 strip 是单向兼容
 
@@ -69,26 +53,16 @@
 - 建议：面向第三方客户端二选一——`extensions`/`x-*` 保留袋，或 PUT 响应带
   `stripped` 列表。开放第三方客户端前拍板。
 
+（A2 / A5 / E3 三个原【待拍板】项已于 2026-08-27 晚拍板并落地，见 §9 存档。）
+
 ---
 
 ## 2. 建议近期修（小成本、正确性/无障碍）
 
-### F1. 外部播放不受 reduced-motion 约束【无障碍】
-
-- 现状：§22 只 gate 内置 ambient 与粒子；经 `playAnimation` 播的外部动画
-  完全不看用户的「减少动态」偏好（`ambient-engine.ts` 只约束 ambient）。
-- 建议：外部播放默认 respect（PlayOptions 一行 gate）；行为变更——physics
-  碰壁动画将被抑制（本就应当）。几行 + 测试。
-
-### E1. `apply()` 预夹与舞台 clamp 的尺寸语义不一致
-
-- 现状：`overlay-session.ts` 的 driver.apply 用**未缩放** `stage.stageSize`
-  预夹，`pet-stage.ts` setPosition 内部用 `size * userScale` 再夹；scale ≠ 1
-  时持久化坐标与显示坐标可偏离，附属（physics 用 `stageSize * scale` 当
-  bbox）的墙面数学会失真。
-- 建议：apply 入口 clamp 改用缩放后尺寸，与快照 `bodyRect`（已是缩放后真值）
-  对齐，补跨仓测试。同根小项：拖拽手势内实时 clamp 也用未缩放尺寸（原 A7
-  之一）。（resize 后的位置回写已于 2026-08-27 下午修复，与本项不同根。）
+> 2026-08-27 晚清空：原 F1（外部播放 reduced-motion）与 E1（clamp 尺寸
+> 一致性，含 A7 拖拽手势同根项）均已收口——前者前提不成立、测试锁定，
+> 后者已随 f84bc50 的 visibleSize 统一落地。详见 §9 存档。当前无欠账的
+> 【近期】项；新增正确性/无障碍小修按主题归入下述分组。
 
 ---
 
@@ -286,15 +260,7 @@
   host 侧 writeChain 已按会话串行，磁盘无损，主要污染 `hub.getConfig()`。
 - 建议：client 侧加 latest-wins 串行队列。
 
-### C4. physics 服务类型镜像升级【2026-08-27 五维评审新增】
-
-- 现状：`petween-physics/src/client/types.ts` 的 StageSnapshot 镜像停留在
-  petween@1.0.0 形状（缺 viewport/bodyRect），只能自带 getViewport 并用
-  `stageSize*scale` 近似 bbox；主侧 2026-08-27 已补齐正是为此。
-- 建议：镜像补两字段后删除自算几何，改读 snapshot.viewport 与 bodyRect；
-  与 §2 E1（apply 预夹缩放语义）同一窗口落地并补跨仓一致性测试。
-
-（E1 的跨仓对齐见 §2；E3 见 §1。）
+（E1 的跨仓对齐与 C4 镜像升级已于 2026-08-27 收口，E3 同晚落地，见 §9。）
 
 ---
 
@@ -312,6 +278,44 @@
 
 ## 9. 已解决存档（从本清单移除，详见 implementation-notes 对应日期条目）
 
+- **A2** 「另存为新宠物」无法携带未保存修改 → 2026-08-27 晚拍板方案 A 并
+  落地：`POST /api/petween/pets` 新增 `from:'draft'`（请求携带 pet slice，
+  经 `validateConfigPatch` 以默认 base 严格校验——动画引用含 kind 检查，
+  未知动画 400 INVALID_CONFIG；**不 apply、不动 activePetId**，响应仅
+  `{pet}`）；client 侧 `createPetFromDraft` + `EditorStore.saveDraftAsNewPet`
+  （dirty 状态可用、不隐式保存、不切换、失败走 notice）+ 宠物卡新按钮
+  「另存草稿为新宠物」与提示文案。host 路由 3 例 + store 2 例 + UI 1 例
+  锁定。方案 B（已保存版克隆 + 草稿转正）经论证可后补，与 A 不冲突。
+- **A5** waiting 无限压制 error → 拍板 (a) 落地：`recompute` 中 winner 为
+  waiting 时，**TTL 内且 ts 严格更新**的 error 短暂穿透（约闪 1.8s 报错
+  脸）；error 自身 TTL 过期触发的既有 recompute 自动回 waiting，自恢复、
+  零新增定时器语义。严格更新守卫（`error.ts > waiting.ts`）保证「waiting
+  后到立即压过 error」的既有行为与 §14.5 稳态 rank 完全不变——穿透只发
+  生在「陈旧 waiting + 更新的失败」这一原死角场景。集成测试 +2、适配 1。
+- **E3** physics 卡片关闭丢弃未保存修改 → 落地 unmount flush：卡片实际
+  早已是「每改动 300ms 防抖自动保存」（backlog 原三候选与「DSH 对话框
+  不可拦截」前提是对旧手动保存设计的记载，已失效）；真实缺口只剩防抖
+  窗口内关闭丢最后一次编辑——unmount 时若 timer 挂着立即发 PUT（fire-
+  and-forget，错误走 hub 既有面）。1 例锁定。
+- **F1** 外部播放不受 reduced-motion 约束 → 2026-08-27 晚核实**前提不
+  成立**：`TimelineEngine.createInstance` 自 v1.0.0 起把 `stage.reducedMotion`
+  传入 `compileTimeline`，`playExternal → director.play → engine` 与一切播放
+  共用该编译路径，§22 坍缩（轨道坍缩为终值常值帧 + 时长封顶 120ms + 事件
+  按比例保留）天然覆盖外部播放；粒子另有 emit 前强制不发射。backlog 原
+  「PlayOptions 一行 gate 拒播」建议**否决**——会连 pose-swap 换图语义一并
+  吞掉，而坍缩编译恰好做到「动效消失、语义保留」，与 §22 规格措辞一致。
+  端到端锁定用例已入 extension-service 测试（reduce 下常值帧/≤120ms/
+  pose-swap 落图/settle 回正，翻转 never 后恢复全保真——flag 是播放时读）。
+- **E1** `apply()` 预夹与舞台 clamp 尺寸语义不一致 → 实际已于 f84bc50
+  （2026-08-27 下午五维评审批次）落地：`PetStage.visibleSize`
+  （`max(size × userScale, MIN_VISIBLE_PX)`）确立为 §27 唯一 clamp 基准，
+  driver.apply / DragController stageSize 回调 / resize 回写 / setPosition
+  四处同源；专项用例锁定（scale=0.5 拖墙，DOM/内存/快照/持久化 −48px 四方
+  一致）。原 A7「拖拽手势内 clamp 未按 scale 收紧」同项随之闭合。
+- **C4** physics StageSnapshot 镜像升级 → 已于 physics 418a6e0（2026-08-27）
+  落地：镜像补 viewport/dragging/reducedMotion/poseKey/bodyRect 五个可选
+  字段；飞行边界优先消费 bodyRect insets（可见身体贴墙，不再用方块近似），
+  `deps.getViewport` 保留为旧 provider 兜底；与 E1 的跨仓对齐完成。
 - **D3** isPlaying 查询缺失 → 2026-08-27 落地 `isPlaying(): {enter, external}`。
 - **E5-1** playAnimation null 三义 → 部分缓解（isPlaying/listAnimations 可判
   因），完整 `{ok, reason}` 转为 §4 F4 随 v2。

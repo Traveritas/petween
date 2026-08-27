@@ -18,6 +18,7 @@ import { AnimationsStore } from '../../src/host/animations'
 import { AssetStore } from '../../src/host/assets'
 import { ConfigStore } from '../../src/host/config'
 import { PetsStore, petSliceFromConfig, type PetPreset } from '../../src/host/pets'
+import { planMotionPackImport } from '../../src/host/packs'
 import { createWriteLock } from '../../src/host/storage'
 import { registerRoutes, type RoutesDeps } from '../../src/host/routes'
 import { makeJpeg, makePng, makeSvg, makeWebp } from './fixtures'
@@ -64,6 +65,7 @@ beforeEach(async () => {
     listAnimations: () => animationsStore.loadAll(),
     saveAnimation: (definition) => animationsStore.save(definition),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
+    importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
     createPet: (name, slice) => petsStore.create(name, slice),
     readPet: (id) => petsStore.read(id),
@@ -378,6 +380,101 @@ describe('POST /api/petween/assets (§19.3)', () => {
     const missing = await fetch(`${base}/api/petween/assets`, { method: 'POST', body: empty })
     expect(missing.status).toBe(400)
     expect((await missing.json()).error.code).toBe('FILE_FIELD_MISSING')
+  })
+})
+
+describe('/api/petween/packs (P2 Motion Pack)', () => {
+  /** An interaction-kind definition — the simplest schema-valid shape. */
+  const packAnimation = (id: string, durationMs = 200) => ({
+    version: 1,
+    id,
+    name: `Anim ${id}`,
+    kind: 'interaction',
+    durationMs,
+    repeat: { mode: 'once' },
+    tracks: [{ property: 'transition.rotation', keyframes: [{ at: 0, value: 0 }, { at: 1, value: 12 }] }],
+  })
+  const packBody = (overrides: Record<string, unknown> = {}) => ({
+    format: 'motion-pack',
+    version: 1,
+    name: '测试包',
+    namespace: 'manga',
+    animations: [packAnimation('manga:pop')],
+    ...overrides,
+  })
+  const postImport = (body: unknown): Promise<Response> =>
+    fetch(`${base}/api/petween/packs/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const listedIds = async (): Promise<string[]> => {
+    const listed = await (await fetch(`${base}/api/petween/animations`)).json()
+    return listed.customs.map((definition: { id: string }) => definition.id)
+  }
+
+  it('imports a pack: entries land in the library and GET /animations sees them', async () => {
+    const res = await postImport(packBody())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.entries).toEqual([{ requestedId: 'manga:pop', finalId: 'manga:pop', status: 'imported' }])
+    expect(body.namespace).toBe('manga')
+    expect(await listedIds()).toEqual(['manga:pop'])
+  })
+
+  it('re-importing identical content is idempotent; changed content remaps to -2 with mounts rewritten', async () => {
+    const enter = (durationMs: number) => ({
+      ...packAnimation('manga:pop'),
+      kind: 'transition',
+      durationMs,
+      events: [{ at: 0.5, type: 'pose-swap' }],
+    })
+    const withMounts = (durationMs: number) => packBody({ animations: [enter(durationMs)], mounts: { idle: { enter: 'manga:pop' } } })
+    await postImport(withMounts(240))
+
+    const identical = await (await postImport(withMounts(240))).json()
+    expect(identical.entries[0].status).toBe('identical')
+
+    const changed = await (await postImport(withMounts(500))).json()
+    expect(changed.entries[0]).toEqual({ requestedId: 'manga:pop', finalId: 'manga:pop-2', status: 'remapped' })
+    expect(changed.mounts).toEqual({ idle: { enter: 'manga:pop-2' } }) // rewritten to the FINAL id
+    expect((await listedIds()).sort()).toEqual(['manga:pop', 'manga:pop-2'])
+  })
+
+  it('rejects malformed packs with 400 PACK_INVALID and nothing is written', async () => {
+    for (const broken of [
+      packBody({ format: 'nope' }),
+      packBody({ namespace: 'user', animations: [packAnimation('manga:pop')] }), // outside the declared ns
+      packBody({ animations: [packAnimation('manga:pop', 0)] }), // schema violation (duration floor)
+      packBody({ mounts: { idle: { enter: 'manga:pop' } } }), // interaction kind on an enter mount
+    ]) {
+      const res = await postImport(broken)
+      expect(res.status, JSON.stringify(broken)).toBe(400)
+      expect((await res.json()).error.code).toBe('PACK_INVALID')
+    }
+    expect(await listedIds()).toEqual([])
+  })
+
+  it('exports selected ids as a manifest; unknown or empty selections are 400s', async () => {
+    await postImport(packBody())
+    const res = await fetch(`${base}/api/petween/packs/export?ids=${encodeURIComponent('manga:pop')}`)
+    expect(res.status).toBe(200)
+    const pack = await res.json()
+    expect(pack).toMatchObject({ format: 'motion-pack', version: 1, namespace: 'manga' })
+    expect(pack.animations).toHaveLength(1)
+    expect(pack.mounts).toBeUndefined()
+
+    expect((await fetch(`${base}/api/petween/packs/export?ids=user:missing`)).status).toBe(400)
+    expect((await fetch(`${base}/api/petween/packs/export`)).status).toBe(400)
+    expect((await fetch(`${base}/api/petween/packs/import`, { method: 'GET' })).status).toBe(405)
+  })
+
+  it('an exported pack re-imports identically (round trip)', async () => {
+    await postImport(packBody())
+    const pack = await (await fetch(`${base}/api/petween/packs/export?ids=${encodeURIComponent('manga:pop')}`)).json()
+    const round = await postImport(pack)
+    expect(round.status).toBe(200)
+    expect((await round.json()).entries[0].status).toBe('identical')
   })
 })
 

@@ -31,6 +31,8 @@ interface ApiMocks {
   patchConfig: ReturnType<typeof vi.fn>
   putAnimation: ReturnType<typeof vi.fn>
   deleteAnimation: ReturnType<typeof vi.fn>
+  importMotionPack: ReturnType<typeof vi.fn>
+  exportMotionPack: ReturnType<typeof vi.fn>
   uploadAsset: ReturnType<typeof vi.fn>
   deleteAsset: ReturnType<typeof vi.fn>
 }
@@ -125,6 +127,20 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
       if (index === -1) serverCustoms.push(structuredClone(definition))
       else serverCustoms[index] = structuredClone(definition)
     }),
+    importMotionPack: vi.fn(async () => ({
+      name: '',
+      namespace: 'user',
+      entries: [],
+      mounts: {},
+      warnings: [] as string[],
+    })),
+    exportMotionPack: vi.fn(async (_ids: string[]) => ({
+      format: 'motion-pack' as const,
+      version: 1 as const,
+      name: 'Motion Pack',
+      namespace: 'user',
+      animations: [],
+    })),
     deleteAnimation: vi.fn(async (id: string) => {
       serverCustoms = serverCustoms.filter((custom) => custom.id !== id)
     }),
@@ -1151,5 +1167,64 @@ describe('hasAnyUsableImage (§2.1)', () => {  it('is false for a fresh config a
         },
       }),
     ).toBe(true)
+  })
+})
+
+describe('EditorStore — Motion Pack import/export (P2)', () => {
+  const packCustom = (id: string): AnimationDefinition => ({
+    version: 1,
+    id,
+    name: `Anim ${id}`,
+    kind: 'interaction',
+    durationMs: 200,
+    repeat: { mode: 'once' },
+    tracks: [
+      { property: 'transition.rotation', keyframes: [{ at: 0, value: 0 }, { at: 1, value: 12 }] },
+    ],
+  })
+
+  it('importPack sends the file text, refreshes the customs and summarizes the outcome', async () => {
+    const { api, mocks } = makeApi({
+      importMotionPack: vi.fn(async () => ({
+        name: '弹跳包',
+        namespace: 'manga',
+        entries: [
+          { requestedId: 'manga:pop', finalId: 'manga:pop', status: 'imported' as const },
+          { requestedId: 'manga:pop', finalId: 'manga:pop-2', status: 'remapped' as const },
+        ],
+        mounts: {},
+        warnings: [],
+      })),
+      getAnimations: vi.fn(async () => ({ customs: [packCustom('manga:pop'), packCustom('manga:pop-2')], warnings: [] })),
+    })
+    await loadStore(api)
+    const file = new File([JSON.stringify({ format: 'motion-pack' })], 'pack.json', { type: 'application/json' })
+    expect(await store.importPack(file)).toBe(true)
+    expect(mocks.importMotionPack).toHaveBeenCalledWith(JSON.stringify({ format: 'motion-pack' }))
+    expect(store.getSnapshot().customs.map((custom) => custom.id)).toEqual(['manga:pop', 'manga:pop-2'])
+    const notice = store.getSnapshot().notice
+    expect(notice?.kind).toBe('warn') // a remap is worth the user's attention
+    expect(notice?.text).toContain('弹跳包')
+    expect(notice?.text).toContain('manga:pop → manga:pop-2')
+  })
+
+  it('importPack failure surfaces the host error and keeps the library untouched', async () => {
+    const { api } = makeApi({
+      importMotionPack: vi.fn(async () => {
+        throw new ApiError(400, 'PACK_INVALID', 'invalid Motion Pack')
+      }),
+    })
+    await loadStore(api)
+    expect(await store.importPack(new File(['{}'], 'p.json'))).toBe(false)
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'error' })
+    expect(store.getSnapshot().customs).toEqual([])
+  })
+
+  it('exportPack without customs is a no-op warning', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+    expect(await store.exportPack()).toBe(false)
+    expect(mocks.exportMotionPack).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn' })
   })
 })

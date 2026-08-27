@@ -205,15 +205,17 @@ export function GroupedSelectRow<T extends string>(props: {
 }
 
 /**
- * Hidden file input + trigger button. Accept is limited to the formats the
- * host takes (§2.1: PNG/WebP/JPEG; SVG rejected); the host re-validates.
- * `busy` (UX-3) disables the trigger and swaps the label to 上传中… while the
- * store's upload for this slot is in flight.
+ * Hidden file input + trigger button. Accept defaults to the §2.1 image
+ * formats (PNG/WebP/JPEG; SVG rejected — the host re-validates); the Motion
+ * Pack importer passes a JSON accept. `busy` (UX-3) disables the trigger and
+ * swaps the label to 上传中… while the store's upload is in flight.
  */
 export function FileImportButton(props: {
   label: string
   disabled?: boolean
   busy?: boolean
+  /** Defaults to the §2.1 image formats. */
+  accept?: string
   onFile: (file: File) => void
 }): JSX.Element {
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -231,7 +233,7 @@ export function FileImportButton(props: {
       <input
         ref={inputRef}
         type="file"
-        accept="image/png,image/webp,image/jpeg"
+        accept={props.accept ?? 'image/png,image/webp,image/jpeg'}
         style={{ display: 'none' }}
         onChange={(event) => {
           const file = event.target.files?.[0]

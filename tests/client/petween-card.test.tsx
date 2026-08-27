@@ -84,6 +84,12 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
     applyPet: vi.fn(async () => structuredClone(config)),
     putAnimation: vi.fn(async () => {}),
     deleteAnimation: vi.fn(async () => {}),
+    importMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    exportMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
     uploadAsset: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),

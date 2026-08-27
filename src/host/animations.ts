@@ -212,26 +212,52 @@ export class AnimationsStore {
 
   /** Validate and persist a definition atomically; invalid input throws with details. */
   save(definition: AnimationDefinition): Promise<void> {
+    return this.enqueue(() => this.writeValidated(definition))
+  }
+
+  /**
+   * Validation + atomic write WITHOUT entering the lock — exclusively for
+   * callers already inside an enqueue segment (importAnimations); going
+   * through save() there would wait on the segment's own lock.
+   */
+  private async writeValidated(definition: AnimationDefinition): Promise<void> {
+    const result = validateAnimationDefinition(definition)
+    if (!result.valid) {
+      throw new AnimationError('INVALID_DEFINITION', `invalid AnimationDefinition: ${result.errors.join('; ')}`, result.errors)
+    }
+    if (validateCustomAnimationId(definition.id) === null) {
+      throw new AnimationError(
+        'INVALID_DEFINITION',
+        `custom animations must use a "<namespace>:<name>" id (any lowercase namespace except builtin), got "${definition.id}"`,
+        ['"id" must match "<namespace>:<name>" (lowercase namespace, then letters, digits, "_" and "-")'],
+      )
+    }
+    if (definition.id === RESERVED_CLIENT_DRAFT_ID) {
+      throw new AnimationError(
+        'INVALID_DEFINITION',
+        '"user:0draft" is reserved for the client-side preview draft and cannot be stored',
+        ['"id" must not be the reserved client draft id "user:0draft"'],
+      )
+    }
+    await writeJsonAtomic(join(this.options.animationsDir, fileNameFor(definition.id)), definition)
+  }
+
+  /**
+   * One-lock-segment import (Motion Pack, B6/B10 discipline): the injected
+   * planner sees the FRESHEST library and its writes persist inside the same
+   * segment, so a concurrent writer cannot interleave between plan and
+   * persist. Pack-agnostic on purpose — the collision policy (identical /
+   * remap / import) lives in the planner (host/packs.ts).
+   */
+  importAnimations<T extends { writes: AnimationDefinition[] }>(
+    plan: (existing: ReadonlyMap<string, AnimationDefinition>) => T,
+  ): Promise<T> {
     return this.enqueue(async () => {
-      const result = validateAnimationDefinition(definition)
-      if (!result.valid) {
-        throw new AnimationError('INVALID_DEFINITION', `invalid AnimationDefinition: ${result.errors.join('; ')}`, result.errors)
-      }
-      if (validateCustomAnimationId(definition.id) === null) {
-        throw new AnimationError(
-          'INVALID_DEFINITION',
-          `custom animations must use a "<namespace>:<name>" id (any lowercase namespace except builtin), got "${definition.id}"`,
-          ['"id" must match "<namespace>:<name>" (lowercase namespace, then letters, digits, "_" and "-")'],
-        )
-      }
-      if (definition.id === RESERVED_CLIENT_DRAFT_ID) {
-        throw new AnimationError(
-          'INVALID_DEFINITION',
-          '"user:0draft" is reserved for the client-side preview draft and cannot be stored',
-          ['"id" must not be the reserved client draft id "user:0draft"'],
-        )
-      }
-      await writeJsonAtomic(join(this.options.animationsDir, fileNameFor(definition.id)), definition)
+      const { customs } = await this.loadAll()
+      const existing = new Map(customs.map((definition) => [definition.id, definition]))
+      const result = plan(existing)
+      for (const definition of result.writes) await this.writeValidated(definition)
+      return result
     })
   }
 

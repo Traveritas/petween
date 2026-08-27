@@ -290,3 +290,43 @@ pose-swap 且不得声明 `pose`（particle 事件 0..n 允许）；`interaction
 声明 `pose` 目标（particle 允许），ambient 不允许任何 events、也不得使用 transition 层的轨道（避免与
 进场过渡在同一 DOM 层打架）；particle 的 `effect` 必须是 `confetti` / `star-burst` / `sparkle` 之一；
 `durationMs` 1~60000；`id` 必须符合命名空间规范。
+
+## 11. Motion Pack：动画包格式（P2）
+
+一个 Motion Pack 是**单个 JSON 文件**（规格 §8.18 的 zip 是未来容器——动画包不含
+二进制内容，单文件分发最简单）。结构：
+
+```json
+{
+  "format": "motion-pack",
+  "version": 1,
+  "name": "漫画弹跳包",
+  "namespace": "manga-pop",
+  "animations": [ { "……第 1 节的 AnimationDefinition……" } ],
+  "mounts": { "idle": { "enter": "manga-pop:bounce", "ambient": "manga-pop:sway" } }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `format` / `version` | 固定 `motion-pack` / `1`。更高版本由更新的 petween 写出——导入会**明确拒绝**并提示升级插件，绝不静默误读。 |
+| `name` | 展示名（≤120 字符）。 |
+| `namespace` | 包声明的命名空间（小写字母/数字/`-`）。包内所有 `animations` 的 id 必须落在该命名空间——包不能夹带他人命名空间的动画。特殊值 `mixed` 表示各动画保留自己的命名空间（跨命名空间导出时自动产生）。 |
+| `animations` | 1~200 个合法 `AnimationDefinition`；包内 id 不得重复；未知字段原样保留。 |
+| `mounts` | 可选。键为六个状态槽（`idle`/`thinking`/…），`enter` 引用包内 **transition** 类动画、`ambient` 引用包内 **ambient** 类动画。导入时会解析为**最终 id** 随结果返回——是否应用到配置由用户决定（v1 不自动应用）。 |
+
+### 导入语义（撞车策略）
+
+对每个动画，按库里现状三选一，**绝不静默覆盖、不整包拒绝**：
+
+- 目标 id 空闲 → 原样导入；
+- 目标 id 已有**完全相同**内容 → 跳过（重复导入同一包是幂等的）；
+- 目标 id 已有**不同**内容 → 改用第一个空闲后缀导入（`-2`、`-3`…），`mounts`
+  引用同步改写到最终 id，导入结果里逐条回报 `requestedId → finalId`。
+
+### 导出
+
+`GET /api/petween/packs/export?ids=…` 按选中动画生成清单：同命名空间时
+`namespace` 为该命名空间，跨命名空间时为 `mixed`；导出**不携带 mounts**
+（挂载是包作者的意图，不是用户当前的配置状态）。导出的包再导入应当全部
+`identical`（幂等往返）。

@@ -275,6 +275,12 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
         patchConfig: patchConfig as EditorApi['patchConfig'],
         putAnimation: vi.fn(),
         deleteAnimation: vi.fn(),
+    importMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    exportMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
         uploadAsset: vi.fn(),
         deleteAsset: vi.fn(),
       },

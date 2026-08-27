@@ -4,6 +4,8 @@
  * and error mapping are all hand-rolled (M0 finding §6).
  *
  * Registered routes:
+ * - exact  `/api/petween/packs/import`  POST (P2 Motion Pack import)
+ * - exact  `/api/petween/packs/export`  GET ?ids= (P2 Motion Pack export)
  * - exact  `/api/petween/meta`     GET (B2: apiVersion / configVersion /
  *                                  revision / additive-only features)
  * - exact  `/api/petween/config`   GET / PUT (PUT accepts the optional
@@ -34,6 +36,12 @@ import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
 import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
+import {
+  buildMotionPackExport,
+  validateMotionPack,
+  type PackImportPlan,
+  type ValidatedMotionPack,
+} from './packs'
 import { ConfigValidationError, validateAssetId, validateConfigPatch } from './validation'
 
 const CONFIG_PATH = '/api/petween/config'
@@ -41,9 +49,13 @@ const ASSETS_PATH = '/api/petween/assets'
 const ANIMATIONS_PATH = '/api/petween/animations'
 const PETS_PATH = '/api/petween/pets'
 const META_PATH = '/api/petween/meta'
+const PACK_IMPORT_PATH = '/api/petween/packs/import'
+const PACK_EXPORT_PATH = '/api/petween/packs/export'
 const STATIC_PATH = '/petween-assets'
 
 const JSON_BODY_LIMIT = 64 * 1024 // M0 §2: dsh-pet's readJsonBody precedent
+/** A pack may carry up to 200 inline definitions (~3KB each) — JSON only. */
+const PACK_BODY_LIMIT = 2 * 1024 * 1024
 /** multipart framing (boundary lines, headers) on top of the file bytes. */
 const MULTIPART_FORM_OVERHEAD = 256 * 1024
 
@@ -60,6 +72,7 @@ const API_FEATURES: readonly string[] = [
   'config.revision', // B3: revision in config responses + x-petween-expected-revision
   'assets', // POST/DELETE /api/petween/assets (§19.3/§19.4)
   'animations', // GET/PUT/DELETE /api/petween/animations (V1.1)
+  'packs', // P2 Motion Pack: POST /packs/import + GET /packs/export
   'pets', // V1.1 pet presets incl. GET /pets/<id> (B10)
   'pets.draft', // A2: POST /pets from:'draft' forks a client slice
   'events.sse', // /api/petween/events state stream (M4)
@@ -96,6 +109,13 @@ export interface RoutesDeps {
   saveAnimation(definition: AnimationDefinition): Promise<void>
   /** Same async in-lock reference contract as deleteAsset. */
   deleteAnimation(id: string, referencedBy: (animationId: string) => Promise<boolean>): Promise<void>
+  /**
+   * P2 Motion Pack import: plan (collision remap against the freshest
+   * library) and persist inside ONE serialized segment — the injected
+   * implementation owns the store transaction; the route only validates the
+   * manifest shape.
+   */
+  importPack(pack: ValidatedMotionPack): Promise<PackImportPlan>
   /** Pet presets (V1.1): live directory scan plus identity/slice mutations. */
   listPets(): Promise<{ pets: PetPreset[]; warnings: string[] }>
   createPet(name: unknown, slice: unknown): Promise<PetPreset>
@@ -293,6 +313,65 @@ function extractFilePart(body: Buffer, boundary: string): { data: Buffer; conten
 }
 
 // --- handlers --
+
+/**
+ * P2 Motion Pack import: POST /api/petween/packs/import with the pack JSON.
+ * Manifest shape errors are 400 PACK_INVALID (field-level details); the
+ * collision policy (identical skip / `-N` remap / import) runs inside the
+ * store transaction and is reported per entry. Mounts are RESOLVED to final
+ * ids and returned — applying them to config stays the caller's choice.
+ */
+async function handlePackImport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
+  if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected POST')
+  const body = await readBody(req, PACK_BODY_LIMIT)
+  let raw: unknown
+  try {
+    raw = JSON.parse(body.toString('utf8'))
+  } catch {
+    throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
+  }
+  const validation = validateMotionPack(raw)
+  if (!validation.ok) {
+    throw new HttpError(400, 'PACK_INVALID', 'invalid Motion Pack', validation.errors)
+  }
+  const plan = await deps.importPack(validation.pack)
+  sendJson(res, 200, {
+    name: validation.pack.name,
+    namespace: validation.pack.namespace,
+    entries: plan.entries,
+    mounts: plan.mounts,
+    warnings: plan.warnings,
+  })
+}
+
+/**
+ * P2 Motion Pack export: GET /api/petween/packs/export?ids=a,b,c → the pack
+ * manifest (single-file JSON, animations inline). Unknown ids are a 400
+ * listing them; exports never carry mounts (they are author intent, not the
+ * user's live config state).
+ */
+async function handlePackExport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
+  if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
+  const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+  const ids = (query.get('ids') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0)
+  if (ids.length === 0) {
+    throw new HttpError(400, 'PACK_EXPORT_EMPTY', 'expected a non-empty ?ids= list')
+  }
+  const { customs } = await deps.listAnimations()
+  const byId = new Map(customs.map((definition) => [definition.id, definition]))
+  const missing = ids.filter((id) => !byId.has(id))
+  if (missing.length > 0) {
+    throw new HttpError(400, 'PACK_EXPORT_UNKNOWN', 'unknown animation ids', missing)
+  }
+  const pack = buildMotionPackExport(
+    'Motion Pack',
+    ids.map((id) => byId.get(id) as AnimationDefinition),
+  )
+  sendJson(res, 200, pack)
+}
 
 /** B2: capability discovery — one GET instead of per-endpoint 404 probing. */
 async function handleMeta(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
@@ -682,6 +761,8 @@ export function registerRoutes(host: RoutesHost, deps: RoutesDeps): () => void {
       }
     }
   const disposers = [
+    host.webServer.register({ kind: 'exact', path: PACK_IMPORT_PATH, handler: wrap((req, res) => handlePackImport(req, res, deps)) }),
+    host.webServer.register({ kind: 'exact', path: PACK_EXPORT_PATH, handler: wrap((req, res) => handlePackExport(req, res, deps)) }),
     host.webServer.register({ kind: 'exact', path: META_PATH, handler: wrap((req, res) => handleMeta(req, res, deps)) }),
     host.webServer.register({ kind: 'exact', path: CONFIG_PATH, handler: wrap((req, res) => handleConfig(req, res, deps)) }),
     host.webServer.register({

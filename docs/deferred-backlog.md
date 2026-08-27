@@ -65,12 +65,15 @@
 
 ---
 
-## 3. Motion Pack 本体（进行中）
+## 3. Motion Pack 后续（v1 导入导出已落地）
 
-> 地基全部就位：格式版本 seam（B1）、命名空间（B6）、meta/revision（B2/
-> B3）、单读端点与共享锁（B10）、会话拆分（C1 全段落定）。本体开工时的
-> 拍板点：导入撞车的默认策略（改写 id vs 拒绝）、编辑器入口形态、要不要
-> 「一键应用到所有状态」。
+> **v1 已落（2026-08-28 第四批，§9 存档）**：单文件 JSON 包格式（manifest +
+> 内联定义 + 可选 mounts）、`POST /packs/import`（单锁段事务：同内容幂等
+> 跳过 / 异内容 `-N` 改号 + mounts 改写回报 / 包内命名空间纪律）、
+> `GET /packs/export?ids=`、动画库「导入/导出动画包」入口。**待拍板**：
+> mounts「一键应用到状态」的形态（导入结果已带最终 id 的 mounts，应用=
+> 一次 config PUT，产品语义待用户定）；zip 容器（需要时再做，格式向前
+> 兼容）；编辑器内多选导出（v1 为整库导出）。
 
 ---
 
@@ -230,6 +233,26 @@
 
 ## 9. 已解决存档（从本清单移除，详见 implementation-notes 对应日期条目）
 
+- **Motion Pack v1** 导入导出 → 2026-08-28 第四批落地。**格式**：单文件
+  JSON（`{format:'motion-pack', version, name, namespace, animations[],
+  mounts?}`；规格 §8.18 的 zip 为未来容器——动画包无二进制内容，JSON
+  分发零新依赖、零二进制解析面；motion-format.md §11 定稿）。**校验**
+  （host/packs.ts `validateMotionPack`）：B1 版本 seam 贯通（更高版本明确
+  拒绝）、包内 id 必须落在本包命名空间（或 `mixed` 保留各自 ns）、包内
+  无重复、≤200 条、mounts 键限六状态槽且 enter→transition/ambient→ambient
+  的 kind 纪律与包内引用检查。**撞车策略**：同内容幂等跳过 / 异内容
+  `-N` 改号（`AnimationsStore.importAnimations` 单锁段事务——规划见最新
+  库、写入同段原子落盘，writeValidated 抽出为段内无锁写路径防自等）；
+  mounts 改写到最终 id 随结果回报。**路由**：`POST /packs/import`（2MB
+  上限，400 PACK_INVALID 带逐字段错误）+ `GET /packs/export?ids=`（未知
+  id/空清单 400；导出不带 mounts）；meta features 增 `packs`。**client**：
+  api `importMotionPack/exportMotionPack`；`EditorStore.importPack(file)`
+  （file.text → host → 刷新 customs → notice 汇总：新增/相同/改号映射）与
+  `exportPack()`（整库导出 + Blob 下载 + 文件名 `motion-pack-<ns>.json`）；
+  动画库工具行「导入动画包」（FileImportButton 增 accept 参数复用）/
+  「导出动画包」。测试 +19（packs 单元 9 / 路由 5 / store 3 / UI 2），
+  全仓 863 绿；coverage 90.31% statements 持平。**留待**：mounts 一键应用
+  （拍板点）、zip 容器、编辑器内多选导出。
 - **C1** OverlaySession 拆分与双会话去重 → 2026-08-28 全段落定。**A 段**
   （评审前）：`session-surface.ts` 类型搬家破静态环 + `fanOutSafely` 单一
   实现 + coverage/lint 工具链（基线 90.5%/85.4%）。**B 段**：扩展面整体

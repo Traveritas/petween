@@ -13,6 +13,7 @@ import { ConfigStore } from './host/config'
 import { createWriteLock } from './host/storage'
 import { registerEditorPage } from './host/editor-page'
 import { PetsStore, petSliceFromConfig } from './host/pets'
+import { planMotionPackImport } from './host/packs'
 import { registerRoutes, type RoutesDeps } from './host/routes'
 import { createPetweenHostService } from './host/service'
 import { attachStateChannel } from './host/state-channel'
@@ -77,6 +78,9 @@ export function apply(ctx: Context) {
     listAnimations: () => animationsStore.loadAll(),
     saveAnimation: (definition) => animationsStore.save(definition),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
+    // P2 Motion Pack: the collision planner runs inside the store's one-lock
+    // segment (freshest library, atomic persist — host/packs.ts policy).
+    importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
     createPet: (name, slice) => petsStore.create(name, slice),
     readPet: (id) => petsStore.read(id),

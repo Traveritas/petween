@@ -811,3 +811,29 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 ### 验证
 
 844 用例零改动全绿；typecheck 干净；lint 维持基线 10 警告（拆分自身零新增）；coverage 90.61% statements / 85.41% branches（不低于 90.47/85.39 基线）。
+
+## Motion Pack v1：导入导出本体（2026-08-28 第四批）
+
+C1 收口（36276d8）后动工；子智能体先行侦察动画库 UI 接入点（按钮区/notice/FileImportButton/测试骨架事实清单），主线程并行实现 host 侧。
+
+### 格式与决策记录
+
+- **v1 包 = 单文件 JSON**：`{format:'motion-pack', version:1, name, namespace, animations[≤200], mounts?}`。规格 §8.18 的 zip 仅是「未来」草图；动画包不含二进制内容（§8.18：Pet 图片与 Motion Pack 独立），JSON 分发零新依赖、零二进制解析面，GitHub 场景下单文件比 zip 更好分享。zip 为未来容器、格式向前兼容。motion-format.md 新增 §11 作者文档。
+- **撞车策略（拍板）**：同内容幂等跳过 / 异内容 `-N` 改号回报映射 / 绝不静默覆盖、不整包拒绝。这是 B6「导入 = id 重映射 + 引用改写」的落地——「引用改写」作用于包自身的 mounts（改写到最终 id 随结果返回）；用户 config/preset 的既有引用不属于包，不动。
+- **mounts v1 只携带与解析，不自动应用**（「一键应用」形态留拍板）——导入结果带最终 id 的 mounts，应用本身就是一次 config PUT。
+
+### Host 侧
+
+- `host/packs.ts`：`validateMotionPack`（结构 + B1 版本 seam + 命名空间纪律 + mounts kind/引用检查）、`planMotionPackImport`（纯函数规划：imported/identical/remapped + mounts 改写 + 防御性 warning）、`buildMotionPackExport`（同域取共享 ns / 跨域 mixed；不带 mounts——挂载是作者意图不是用户配置状态）。
+- `AnimationsStore.importAnimations(planner)`：单锁段事务——规划器见最新库、写入同段原子落盘（B10 纪律）；`writeValidated` 抽出为段内无锁写路径（save = enqueue(writeValidated)），避免「段内再 enqueue 等自己」的镜像式死锁。
+- 路由：`POST /api/petween/packs/import`（2MB 上限；400 PACK_INVALID 逐字段错误）、`GET /api/petween/packs/export?ids=`（未知 id 400 PACK_EXPORT_UNKNOWN / 空清单 400）；meta features 增 `packs`；index.ts 以 `animationsStore.importAnimations` + `planMotionPackImport` 闭包接线。
+
+### Client 侧
+
+- api：`importMotionPack(packJson)` / `exportMotionPack(ids)` + `MotionPack`/`PackImportResponse` 类型；端点清单注释同步。
+- `EditorStore.importPack(file)`：file.text() → host → `refreshCustomsSafely()`（getAnimations 重取 + hub 广播）→ notice 汇总（新增 N/相同 N/改号映射，改号或 warning 用 warn 级）。`exportPack()`：整库导出（v1 无多选 UI）→ Blob + a[download]（`motion-pack-<ns>.json`）→ info notice；无自定义时 warn 提前返回。
+- 动画库工具行（animationNewRow 改 flex-wrap）：「导入动画包」（controls 的 `FileImportButton` 增可选 `accept` 参数复用，`application/json,.json`）+「导出动画包」。
+
+### 测试与验证
+
++19（packs 单元 9：校验四组/规划四组/导出一组；路由 5：导入落地/幂等+改号+mounts 改写/四类 400/导出与守卫/往返幂等；store 3：导入汇总含映射、失败 notice、空库 warn；UI 2：真实 file input 走通导入、导出经 anchor 下载断言文件名）。全仓 48 文件 / **863 用例**全绿；typecheck 干净；lint 基线 10 警告；coverage 90.31% statements（packs.ts 88.6%，未覆盖行为均防御性回退分支）。

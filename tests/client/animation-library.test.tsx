@@ -167,6 +167,12 @@ const makeApi = (
     deleteAnimation: vi.fn(async (id: string) => {
       serverCustoms = serverCustoms.filter((custom) => custom.id !== id)
     }),
+    importMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    exportMotionPack: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
   }
   const api: EditorApi = {
     ...mocks,
@@ -900,5 +906,64 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
     expect(confirm.mock.calls[1][0]).toContain('未保存的修改')
     expect(confirm.mock.calls[2][0]).toContain('不可恢复')
     expect(mocks.deleteAnimation).toHaveBeenCalledWith('user:t1')
+  })
+})
+
+describe('AnimationLibrary — Motion Pack buttons (P2)', () => {
+  it('导入动画包 reads the chosen JSON file and hands it to store.importPack', async () => {
+    const { api } = makeApi()
+    await render(api, true)
+    const section = librarySection()
+    const input = section.querySelector<HTMLInputElement>('input[type="file"][accept="application/json,.json"]')
+    if (input === null) throw new Error('pack import file input missing')
+    const file = new File([JSON.stringify({ format: 'motion-pack' })], 'pack.json', { type: 'application/json' })
+    Object.defineProperty(input, 'files', { value: [file] })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    // The import ran through the REAL store: the api mock rejected it (these
+    // tests stub it unused), which surfaces as the error notice — proof the
+    // file reached importPack.
+    expect(container.textContent).toContain('导入动画包失败')
+  })
+
+  it('导出动画包 downloads a manifest for every custom animation', async () => {
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+    const downloads: string[] = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download)
+    })
+    const mangaPop: AnimationDefinition = {
+      version: 1,
+      id: 'manga:pop',
+      name: 'Pop',
+      kind: 'interaction' as const,
+      durationMs: 200,
+      repeat: { mode: 'once' as const },
+      tracks: [{ property: 'transition.rotation' as const, keyframes: [{ at: 0, value: 0 }, { at: 1, value: 12 }] }],
+    }
+    const { api } = makeApi({ customs: [mangaPop] })
+    const exportMock = vi.fn(async (_ids: string[]) => ({
+      format: 'motion-pack' as const,
+      version: 1 as const,
+      name: 'Motion Pack',
+      namespace: 'manga',
+      animations: [],
+    }))
+    api.exportMotionPack = exportMock
+    try {
+      await render(api, true)
+      await act(async () => {
+        libraryButton('导出动画包').click()
+      })
+      expect(exportMock).toHaveBeenCalledWith(['manga:pop'])
+      expect(downloads).toEqual(['motion-pack-manga.json'])
+      expect(container.textContent).toContain('已导出动画包')
+    } finally {
+      clickSpy.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -35,7 +35,7 @@ import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
 import { PreviewSession } from '../preview-session'
 import type { EditorStore } from '../stores/editor-store'
-import { NumberField, SelectRow, Slider, Toggle } from './controls'
+import { FileImportButton, NumberField, SelectRow, Slider, Toggle } from './controls'
 import styles from './settings.module.css'
 
 /** Every built-in definition, mirroring what the sessions register. */
@@ -307,6 +307,26 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     }
   }
 
+  /** P2 Motion Pack: the file's raw JSON goes to the host (it validates). */
+  const handleImportPack = async (file: File): Promise<void> => {
+    setBusy(true)
+    try {
+      await store.importPack(file)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** P2 Motion Pack: every custom animation bundled into one downloadable manifest. */
+  const handleExportPack = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await store.exportPack()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleClone = async (): Promise<void> => {
     // Clone what you see: the current draft (must be valid) becomes the copy,
     // so timeline tweaks on a built-in survive into the custom.
@@ -453,6 +473,15 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
           <div className={styles.animationNewRow}>
             <button type="button" className={styles.button} disabled={busy} onClick={() => void handleNew()}>
               ＋ 新建空白
+            </button>
+            <FileImportButton
+              label="导入动画包"
+              disabled={busy}
+              accept="application/json,.json"
+              onFile={(file) => void handleImportPack(file)}
+            />
+            <button type="button" className={styles.button} disabled={busy} onClick={() => void handleExportPack()}>
+              导出动画包
             </button>
           </div>
           <div className={styles.animationList}>

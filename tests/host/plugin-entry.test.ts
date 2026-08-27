@@ -29,6 +29,8 @@ afterAll(() => {
 const MOUNT_FLAG = Symbol.for('petween/host')
 
 const ALL_ROUTES = [
+  '/api/petween/packs/import', // P2 Motion Pack import (exact POST)
+  '/api/petween/packs/export', // P2 Motion Pack export (exact GET)
   '/api/petween/meta', // B2 capability discovery (exact GET)
   '/api/petween/config',
   '/api/petween/assets',

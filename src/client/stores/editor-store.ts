@@ -25,9 +25,11 @@ import {
   deleteAnimation as httpDeleteAnimation,
   deleteAsset as httpDeleteAsset,
   deletePet as httpDeletePet,
+  exportMotionPack as httpExportMotionPack,
   getAnimations as httpGetAnimations,
   getConfig as httpGetConfig,
   getPets as httpGetPets,
+  importMotionPack as httpImportMotionPack,
   patchConfig as httpPatchConfig,
   putAnimation as httpPutAnimation,
   renamePet as httpRenamePet,
@@ -37,6 +39,8 @@ import {
   type GetAnimationsResponse,
   type GetConfigResponse,
   type GetPetsResponse,
+  type MotionPack,
+  type PackImportResponse,
   type UploadedAsset,
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
@@ -64,6 +68,10 @@ export interface EditorApi {
   /** Explicit-save custom animation write (no debounce — plan §3/P0). */
   putAnimation(definition: AnimationDefinition): Promise<void>
   deleteAnimation(id: string): Promise<void>
+  /** P2 Motion Pack: raw pack JSON text in, per-entry import outcomes out. */
+  importMotionPack(packJson: string): Promise<PackImportResponse>
+  /** P2 Motion Pack: the ids to export, the manifest back. */
+  exportMotionPack(ids: string[]): Promise<MotionPack>
   uploadAsset(file: File): Promise<UploadedAsset>
   deleteAsset(id: string): Promise<void>
 }
@@ -88,6 +96,8 @@ const httpEditorApi: EditorApi = {
   deleteAnimation: async (id) => {
     await httpDeleteAnimation(id)
   },
+  importMotionPack: (packJson) => httpImportMotionPack(packJson),
+  exportMotionPack: (ids) => httpExportMotionPack(ids),
   uploadAsset: async (file) => (await httpUploadAsset(file)).asset,
   deleteAsset: async (id) => {
     await httpDeleteAsset(id)
@@ -514,6 +524,98 @@ export class EditorStore {
     this.emit({ customs, notice: { kind: 'info', text: '动画已删除。' } })
     this.publishCustoms(customs)
     return true
+  }
+
+  /**
+   * P2 Motion Pack import: read the chosen pack file, hand the raw JSON to
+   * the host (it owns validation + the collision policy), then refresh the
+   * customs list from the library — an import may add and rewrite many ids
+   * at once. The notice summarizes the per-entry outcome; remapped ids are
+   * spelled out so the user knows what landed where.
+   */
+  async importPack(file: File): Promise<boolean> {
+    if (this.disposed || this.snapshot.status !== 'ready') return false
+    let packJson: string
+    try {
+      packJson = await file.text()
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `读取动画包文件失败：${describeError(error)}` } })
+      return false
+    }
+    let result: PackImportResponse
+    try {
+      result = await this.api.importMotionPack(packJson)
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导入动画包失败：${describeError(error)}` } })
+      return false
+    }
+    if (this.disposed) return true
+    await this.refreshCustomsSafely()
+    const imported = result.entries.filter((entry) => entry.status === 'imported').length
+    const identical = result.entries.filter((entry) => entry.status === 'identical').length
+    const remapped = result.entries.filter((entry) => entry.status === 'remapped')
+    const parts = [`已导入动画包「${result.name}」：${imported} 新增`]
+    if (identical > 0) parts.push(`${identical} 相同跳过`)
+    if (remapped.length > 0) {
+      parts.push(`${remapped.length} 因重名改号（${remapped.map((entry) => `${entry.requestedId} → ${entry.finalId}`).join('，')}）`)
+    }
+    this.emit({
+      notice: {
+        kind: remapped.length > 0 || result.warnings.length > 0 ? 'warn' : 'info',
+        text: [...parts, ...result.warnings].join('；'),
+      },
+    })
+    return true
+  }
+
+  /**
+   * P2 Motion Pack export: bundle every custom animation in the library into
+   * one manifest and trigger a browser download. Exports carry no mounts —
+   * they are author intent, not the user's live config state.
+   */
+  async exportPack(): Promise<boolean> {
+    if (this.disposed || this.snapshot.status !== 'ready') return false
+    const ids = this.snapshot.customs.map((custom) => custom.id)
+    if (ids.length === 0) {
+      this.emit({ notice: { kind: 'warn', text: '当前没有可导出的自定义动画。' } })
+      return false
+    }
+    let pack: MotionPack
+    try {
+      pack = await this.api.exportMotionPack(ids)
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导出动画包失败：${describeError(error)}` } })
+      return false
+    }
+    if (this.disposed) return true
+    if (typeof URL?.createObjectURL !== 'function' || typeof document === 'undefined') {
+      this.emit({ notice: { kind: 'warn', text: '当前环境不支持自动下载，动画包已生成但未能保存。' } })
+      return false
+    }
+    const blob = new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    try {
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `motion-pack-${pack.namespace}.json`
+      anchor.click()
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    this.emit({ notice: { kind: 'info', text: `已导出动画包「${pack.name}」（${ids.length} 个动画）。` } })
+    return true
+  }
+
+  /** Refresh the customs snapshot from the library (import path) + broadcast. */
+  private async refreshCustomsSafely(): Promise<void> {
+    try {
+      const { customs } = await this.api.getAnimations()
+      if (this.disposed) return
+      this.emit({ customs: structuredClone(customs) })
+      this.publishCustoms(this.snapshot.customs)
+    } catch (error) {
+      if (!this.disposed) console.error('petween: failed to refresh the animation library', error)
+    }
   }
 
   /** Create a named copy of the current character and make it active. */

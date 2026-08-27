@@ -11,7 +11,10 @@
  * - GET    /api/petween/animations     → { customs, warnings } (V1.1)
  * - PUT    /api/petween/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
  * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
- * - GET/POST /api/petween/pets and PUT/DELETE/apply subpaths (V1.1 presets)
+ * - GET/POST /api/petween/pets and GET/PUT/DELETE/apply subpaths (V1.1 presets)
+ * - GET    /api/petween/meta           → capability discovery (B2)
+ * - POST   /api/petween/packs/import   → { entries, mounts, warnings } | 400 PACK_INVALID (P2)
+ * - GET    /api/petween/packs/export?ids= → pack manifest (P2)
  */
 import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
@@ -21,6 +24,8 @@ const ASSETS_URL = '/api/petween/assets'
 const ANIMATIONS_URL = '/api/petween/animations'
 const PETS_URL = '/api/petween/pets'
 const META_URL = '/api/petween/meta'
+const PACK_IMPORT_URL = '/api/petween/packs/import'
+const PACK_EXPORT_URL = '/api/petween/packs/export'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
 export const EDITOR_PAGE_URL = '/petween-editor/'
@@ -230,6 +235,48 @@ export function putAnimation(definition: AnimationDefinition): Promise<PutAnimat
 
 export function deleteAnimation(id: string): Promise<{ deleted: string }> {
   return request(`${ANIMATIONS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// --- Motion Pack (P2) -------------------------------------------------------
+
+/** One animation's import outcome; remapped ids never overwrite silently. */
+export interface PackImportEntry {
+  requestedId: string
+  finalId: string
+  status: 'imported' | 'identical' | 'remapped'
+}
+
+export interface PackImportResponse {
+  name: string
+  namespace: string
+  entries: PackImportEntry[]
+  /** Mounts resolved to FINAL ids — applying them stays the caller's choice. */
+  mounts: Record<string, { enter?: string; ambient?: string }>
+  warnings: string[]
+}
+
+/** The export/import manifest (v1: single-file JSON, definitions inline). */
+export interface MotionPack {
+  format: 'motion-pack'
+  version: 1
+  name: string
+  namespace: string
+  animations: AnimationDefinition[]
+}
+
+/** Import a pack: body is the raw pack JSON text (the host validates it). */
+export function importMotionPack(packJson: string): Promise<PackImportResponse> {
+  return request(PACK_IMPORT_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: packJson,
+  })
+}
+
+/** Export the given animation ids as a pack manifest (mounts never included). */
+export function exportMotionPack(ids: string[]): Promise<MotionPack> {
+  const query = ids.map((id) => encodeURIComponent(id)).join(',')
+  return request(`${PACK_EXPORT_URL}?ids=${query}`)
 }
 
 /** V1.1 pet presets: stored character slices plus the active config pointer. */

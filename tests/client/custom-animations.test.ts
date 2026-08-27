@@ -39,6 +39,18 @@ describe('syncCustomAnimations', () => {
     expect(registry.list()).toHaveLength(builtinCount + 2)
   })
 
+  it('B6: pack-namespace customs sync like user: ones (every non-builtin id is custom territory)', () => {
+    const registry = createBuiltinRegistry()
+    const warnings = syncCustomAnimations(registry, [makeCustom('motion:wall-bounce')])
+    expect(warnings).toEqual([])
+    expect(registry.get('motion:wall-bounce')).toBeDefined()
+    // …and vanish on the next sync, while builtin:* stays registry-owned.
+    const builtinCount = registry.list().length
+    expect(syncCustomAnimations(registry, [])).toEqual([])
+    expect(registry.get('motion:wall-bounce')).toBeUndefined()
+    expect(registry.list()).toHaveLength(builtinCount - 1)
+  })
+
   it('re-registers a changed custom and unregisters a vanished one', () => {
     const registry = createBuiltinRegistry()
     syncCustomAnimations(registry, [makeCustom('user:a', 300), makeCustom('user:b')])

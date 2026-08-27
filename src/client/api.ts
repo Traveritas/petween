@@ -20,6 +20,7 @@ const CONFIG_URL = '/api/petween/config'
 const ASSETS_URL = '/api/petween/assets'
 const ANIMATIONS_URL = '/api/petween/animations'
 const PETS_URL = '/api/petween/pets'
+const META_URL = '/api/petween/meta'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
 export const EDITOR_PAGE_URL = '/petween-editor/'
@@ -39,10 +40,14 @@ export class ApiError extends Error {
 export interface GetConfigResponse {
   config: PetweenConfig
   assets: Record<string, AssetMeta>
+  /** B3: the config revision at GET time (absent on pre-B3 hosts). */
+  revision?: number
 }
 
 export interface PutConfigResponse {
   config: PetweenConfig
+  /** B3: the revision AFTER this write (absent on pre-B3 hosts). */
+  revision?: number
 }
 
 /** The POST response carries only these fields (host/routes.ts §19.3). */
@@ -129,6 +134,19 @@ export function getConfig(): Promise<GetConfigResponse> {
   return request(CONFIG_URL)
 }
 
+/** B2: host capability discovery (apiVersion / configVersion / revision / features). */
+export interface MetaResponse {
+  apiVersion: number
+  configVersion: number
+  revision: number
+  /** Additive-only list; probe with includes() instead of guessing endpoints. */
+  features: string[]
+}
+
+export function getMeta(): Promise<MetaResponse> {
+  return request(META_URL)
+}
+
 /**
  * §19.2: the endpoint also accepts partial configs (missing fields are filled
  * from the current config server-side). Full-document writes go through this
@@ -164,13 +182,17 @@ export interface ConfigPatch {
  * PATCH-style PUT: sends only the changed sections so a concurrent writer
  * (e.g. the settings editor) does not get its fields clobbered. The host
  * serializes the read-merge-write; the response carries the full new config.
+ * `options.expectedRevision` (B3) opts the caller into optimistic
+ * concurrency: a stale expectation rejects with 409 REVISION_MISMATCH
+ * (error.details.currentRevision carries the fresh value for a rebase).
+ * Existing callers omit it and keep last-writer-wins.
  */
-export function patchConfig(patch: ConfigPatch): Promise<PutConfigResponse> {
-  return request(CONFIG_URL, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(patch),
-  })
+export function patchConfig(patch: ConfigPatch, options: { expectedRevision?: number } = {}): Promise<PutConfigResponse> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (options.expectedRevision !== undefined) {
+    headers['x-petween-expected-revision'] = String(options.expectedRevision)
+  }
+  return request(CONFIG_URL, { method: 'PUT', headers, body: JSON.stringify(patch) })
 }
 
 export function uploadAsset(file: File): Promise<UploadAssetResponse> {

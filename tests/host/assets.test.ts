@@ -122,20 +122,20 @@ describe('AssetStore.save (§20)', () => {
 describe('AssetStore.delete (§19.4)', () => {
   it('deletes an unreferenced asset from disk and manifest', async () => {
     const meta = await store.save(makePng(2, 3), 'image/png')
-    await store.delete(meta.id, () => false)
+    await store.delete(meta.id, async () => false)
     expect(await store.list()).toEqual({})
     expect(await readdir(assetsDir)).toEqual([])
   })
 
   it('refuses to delete a referenced asset (409 semantics)', async () => {
     const meta = await store.save(makePng(2, 3), 'image/png')
-    await expectAssetError(store.delete(meta.id, (id) => id === meta.id), 'IN_USE')
+    await expectAssetError(store.delete(meta.id, async (id) => id === meta.id), 'IN_USE')
     expect(await store.list()).toHaveProperty(meta.id)
   })
 
   it('reports unknown or malformed ids as NOT_FOUND', async () => {
-    await expectAssetError(store.delete('0123456789abcdef', () => false), 'NOT_FOUND')
-    await expectAssetError(store.delete('..', () => false), 'NOT_FOUND')
+    await expectAssetError(store.delete('0123456789abcdef', async () => false), 'NOT_FOUND')
+    await expectAssetError(store.delete('..', async () => false), 'NOT_FOUND')
   })
 })
 

@@ -4,16 +4,19 @@
  * and error mapping are all hand-rolled (M0 finding §6).
  *
  * Registered routes:
- * - exact  `/api/petween/config`     GET / PUT
- * - prefix `/api/petween/assets`     POST (base path) / DELETE `<id>` subpath
+ * - exact  `/api/petween/meta`     GET (B2: apiVersion / configVersion /
+ *                                  revision / additive-only features)
+ * - exact  `/api/petween/config`   GET / PUT (PUT accepts the optional
+ *                                  `x-petween-expected-revision` header, B3)
+ * - prefix `/api/petween/assets`   POST (base path) / DELETE `<id>` subpath
  * - exact  `/api/petween/animations` GET (V1.1)
  * - prefix `/api/petween/animations` PUT / DELETE `<id>` subpath (V1.1)
- * - exact  `/api/petween/pets`       GET / POST (V1.1; POST accepts from:
- *                                    current | blank | draft — draft carries
- *                                    the slice itself and never touches the
- *                                    active pet, A2)
- * - prefix `/api/petween/pets`       PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
- * - prefix `/petween-assets`         GET / HEAD `<id>` subpath (static)
+ * - exact  `/api/petween/pets`     GET / POST (V1.1; POST accepts from:
+ *                                  current | blank | draft — draft carries
+ *                                  the slice itself and never touches the
+ *                                  active pet, A2)
+ * - prefix `/api/petween/pets`     GET / PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
+ * - prefix `/petween-assets`       GET / HEAD `<id>` subpath (static)
  *
  * The `/api` prefix belongs to the connection gateway, but exact routes win
  * over prefixes, so the exact config route is safe (M0 finding §8); the
@@ -29,6 +32,7 @@ import { POSE_KEYS } from '../core/types'
 import { ANIMATION_KINDS, type AnimationDefinition } from '../motion/animation-definition'
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
+import { RevisionMismatchError } from './config'
 import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
 import { ConfigValidationError, validateAssetId, validateConfigPatch } from './validation'
 
@@ -36,11 +40,31 @@ const CONFIG_PATH = '/api/petween/config'
 const ASSETS_PATH = '/api/petween/assets'
 const ANIMATIONS_PATH = '/api/petween/animations'
 const PETS_PATH = '/api/petween/pets'
+const META_PATH = '/api/petween/meta'
 const STATIC_PATH = '/petween-assets'
 
 const JSON_BODY_LIMIT = 64 * 1024 // M0 §2: dsh-pet's readJsonBody precedent
 /** multipart framing (boundary lines, headers) on top of the file bytes. */
 const MULTIPART_FORM_OVERHEAD = 256 * 1024
+
+/**
+ * B2 capability discovery. `apiVersion` bumps ONLY on a breaking change
+ * (fields are added, never renamed or removed — same rule as the cordis
+ * service); `configVersion` mirrors the persisted config's schema version;
+ * `features` is an additive-only list a client can probe instead of guessing
+ * endpoint by endpoint. Append at will; never reorder-with-rename or delete.
+ */
+const API_VERSION = 1
+const API_FEATURES: readonly string[] = [
+  'config', // GET/PUT /api/petween/config (§19.1/§19.2)
+  'config.revision', // B3: revision in config responses + x-petween-expected-revision
+  'assets', // POST/DELETE /api/petween/assets (§19.3/§19.4)
+  'animations', // GET/PUT/DELETE /api/petween/animations (V1.1)
+  'pets', // V1.1 pet presets incl. GET /pets/<id> (B10)
+  'pets.draft', // A2: POST /pets from:'draft' forks a client slice
+  'events.sse', // /api/petween/events state stream (M4)
+  'meta', // this endpoint
+]
 
 /** Everything the routes need from config/asset persistence, injected for tests. */
 export interface RoutesDeps {
@@ -49,19 +73,29 @@ export interface RoutesDeps {
    * PUT path: strictly validate the patch against the current config and
    * atomically save it, resolving the merged config. Implementations must
    * serialize concurrent calls (ConfigStore.update) — a bare read-modify-write
-   * loses fields when two writers overlap.
+   * loses fields when two writers overlap. `options.expectedRevision` (B3)
+   * opts the caller into conflict detection: a stale expectation rejects
+   * (RevisionMismatchError → 409 REVISION_MISMATCH) before anything is written.
    */
-  updateConfig(patch: unknown): Promise<PetweenConfig>
+  updateConfig(patch: unknown, options?: { expectedRevision?: number }): Promise<PetweenConfig>
+  /** B3: the current monotonic config revision (bumped once per update). */
+  configRevision(): Promise<number>
   listAssets(): Promise<Record<string, AssetMeta>>
   saveAsset(buffer: Buffer, declaredMime: string | undefined): Promise<AssetMeta>
-  deleteAsset(id: string, referencedBy: (assetId: string) => boolean): Promise<void>
+  /**
+   * The reference probe is async and runs inside the store's serialized
+   * delete: implementations load the FRESHEST config/preset state at check
+   * time (B10 — no stale-snapshot TOCTOU while a referencing save is in flight).
+   */
+  deleteAsset(id: string, referencedBy: (assetId: string) => Promise<boolean>): Promise<void>
   resolveAssetPath(id: string): Promise<{ path: string; mimeType: string } | null>
   /** Single-file upload cap; the multipart body limit adds form overhead. */
   maxAssetBytes: number
   /** Live directory scan: every stored custom animation plus load warnings. */
   listAnimations(): Promise<{ customs: AnimationDefinition[]; warnings: string[] }>
   saveAnimation(definition: AnimationDefinition): Promise<void>
-  deleteAnimation(id: string, referencedBy: (animationId: string) => boolean): Promise<void>
+  /** Same async in-lock reference contract as deleteAsset. */
+  deleteAnimation(id: string, referencedBy: (animationId: string) => Promise<boolean>): Promise<void>
   /** Pet presets (V1.1): live directory scan plus identity/slice mutations. */
   listPets(): Promise<{ pets: PetPreset[]; warnings: string[] }>
   createPet(name: unknown, slice: unknown): Promise<PetPreset>
@@ -113,6 +147,11 @@ function mapError(res: ServerResponse, error: unknown): void {
   }
   if (error instanceof ConfigValidationError) {
     sendError(res, 400, 'INVALID_CONFIG', error.message, error.issues)
+    return
+  }
+  if (error instanceof RevisionMismatchError) {
+    // B3 optimistic concurrency: the caller's expected revision is stale.
+    sendError(res, 409, 'REVISION_MISMATCH', error.message, { currentRevision: error.currentRevision })
     return
   }
   if (error instanceof AssetError) {
@@ -253,12 +292,19 @@ function extractFilePart(body: Buffer, boundary: string): { data: Buffer; conten
   return null
 }
 
-// --- handlers ---
+// --- handlers --
+
+/** B2: capability discovery — one GET instead of per-endpoint 404 probing. */
+async function handleMeta(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
+  if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
+  const [config, revision] = await Promise.all([deps.loadConfig(), deps.configRevision()])
+  sendJson(res, 200, { apiVersion: API_VERSION, configVersion: config.version, revision, features: API_FEATURES })
+}
 
 async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method === 'GET') {
-    const [config, assets] = await Promise.all([deps.loadConfig(), deps.listAssets()])
-    sendJson(res, 200, { config, assets })
+    const [config, assets, revision] = await Promise.all([deps.loadConfig(), deps.listAssets(), deps.configRevision()])
+    sendJson(res, 200, { config, assets, revision })
     return
   }
   if (req.method === 'PUT') {
@@ -269,10 +315,26 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: Rou
     } catch {
       throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
     }
+    // B3 optional optimistic concurrency: `x-petween-expected-revision: N`.
+    // Absent (or empty) → last-writer-wins exactly as before; present and
+    // stale → 409 before any write. The revision counter itself never enters
+    // the config document (schema-pure), only this header and the responses.
+    const expectedHeader = req.headers['x-petween-expected-revision']
+    const expectedRaw = Array.isArray(expectedHeader) ? expectedHeader[0] : expectedHeader
+    let expectedRevision: number | undefined
+    if (expectedRaw !== undefined && expectedRaw !== '') {
+      const parsed = Number(expectedRaw)
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new HttpError(400, 'INVALID_REQUEST', 'x-petween-expected-revision must be a non-negative integer')
+      }
+      expectedRevision = parsed
+    }
     // Strict validation against the current config as base, then atomic save —
     // serialized inside updateConfig so overlapping PUTs cannot lose fields.
-    const config = await deps.updateConfig(raw)
-    sendJson(res, 200, { config })
+    // Sequential on purpose: the revision read must observe THIS update's bump.
+    const config = await deps.updateConfig(raw, expectedRevision === undefined ? undefined : { expectedRevision })
+    const revision = await deps.configRevision()
+    sendJson(res, 200, { config, revision })
     return
   }
   throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET or PUT')
@@ -304,14 +366,17 @@ async function handleAssets(
     const id = safeDecode(pathname.slice(ASSETS_PATH.length + 1))
     if (id === null || validateAssetId(id) === null) throw new HttpError(404, 'NOT_FOUND', 'unknown asset')
     // An asset referenced by ANY preset's poses is as protected as one
-    // referenced by the live config (V1.1 pet presets).
-    const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
-    await deps.deleteAsset(
-      id,
-      (assetId) =>
+    // referenced by the live config (V1.1 pet presets). The probe loads the
+    // FRESHEST state inside the store's serialized delete (B10) — the shared
+    // host-wide write lock means a referencing config/preset save that started
+    // earlier has already landed by the time this runs.
+    await deps.deleteAsset(id, async (assetId) => {
+      const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+      return (
         POSE_KEYS.some((key) => config.poses[key]?.assetId === assetId) ||
-        pets.some((pet) => POSE_KEYS.some((key) => pet.poses[key]?.assetId === assetId)),
-    )
+        pets.some((pet) => POSE_KEYS.some((key) => pet.poses[key]?.assetId === assetId))
+      )
+    })
     sendJson(res, 200, { deleted: id })
     return
   }
@@ -393,8 +458,12 @@ async function handleAnimations(
     return
   }
   if (req.method === 'DELETE') {
-    const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
-    await deps.deleteAnimation(id, (animationId) => animationReferencedAnywhere(config, pets, animationId))
+    // Same B10 contract as asset deletes: fresh state inside the store's
+    // serialized delete, no stale request-time snapshot.
+    await deps.deleteAnimation(id, async (animationId) => {
+      const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+      return animationReferencedAnywhere(config, pets, animationId)
+    })
     sendJson(res, 200, { deleted: id })
     return
   }
@@ -508,6 +577,13 @@ async function handlePets(
   }
   const id = validatePetId(sub)
   if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+  if (req.method === 'GET') {
+    // B10: single-preset read (pack export needs one pet without the whole
+    // list; readPet was already there, only the route was missing).
+    const pet = await deps.readPet(id)
+    sendJson(res, 200, { pet })
+    return
+  }
   if (req.method === 'PUT') {
     const body = await readBody(req, JSON_BODY_LIMIT)
     let raw: unknown
@@ -530,7 +606,7 @@ async function handlePets(
     sendJson(res, 200, { deleted: id })
     return
   }
-  throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected PUT or DELETE')
+  throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET, PUT or DELETE')
 }
 
 async function handleStatic(
@@ -606,6 +682,7 @@ export function registerRoutes(host: RoutesHost, deps: RoutesDeps): () => void {
       }
     }
   const disposers = [
+    host.webServer.register({ kind: 'exact', path: META_PATH, handler: wrap((req, res) => handleMeta(req, res, deps)) }),
     host.webServer.register({ kind: 'exact', path: CONFIG_PATH, handler: wrap((req, res) => handleConfig(req, res, deps)) }),
     host.webServer.register({
       kind: 'prefix',

@@ -9,7 +9,7 @@
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { PetweenConfig } from '../core/types'
 import type { AnimationKind } from '../motion/animation-definition'
-import { readJsonFile, writeJsonAtomic } from './storage'
+import { readJsonFile, writeJsonAtomic, createWriteLock, type WriteLock } from './storage'
 import { repairConfig, validateConfigPatch, type ConfigValidationOptions } from './validation'
 
 export function defaultConfigPath(): string {
@@ -19,6 +19,18 @@ export function defaultConfigPath(): string {
 /** Migration entry (spec §18.3): validate + defaults + version handling. */
 export function loadConfig(raw: unknown, options: ConfigValidationOptions = {}): PetweenConfig {
   return repairConfig(raw, options)
+}
+
+/**
+ * B3 optimistic concurrency: the PUT's `x-petween-expected-revision` did not
+ * match the current counter (routes maps this to 409 REVISION_MISMATCH).
+ * The current value rides along so the client can rebase and retry.
+ */
+export class RevisionMismatchError extends Error {
+  override readonly name = 'RevisionMismatchError'
+  constructor(readonly currentRevision: number) {
+    super(`config revision mismatch: the expected revision is stale, current is ${currentRevision}`)
+  }
 }
 
 export interface ConfigStoreOptions {
@@ -32,19 +44,31 @@ export interface ConfigStoreOptions {
    * — the config is authoritative, the mirror is secondary.
    */
   onSaved?: (config: PetweenConfig) => Promise<void>
+  /**
+   * Shared cross-store write serializer (B10). Default: a private chain
+   * (this store only); src/index.ts passes one lock shared with the asset/
+   * animation/pet stores so cross-store mutations cannot interleave.
+   */
+  lock?: WriteLock
+  /** Revision-counter sidecar; defaults next to the config file. */
+  revisionPath?: string
 }
 
 export class ConfigStore {
   readonly configPath: string
+  readonly revisionPath: string
   private readonly animationLookup?: (id: string) => AnimationKind | undefined
   private readonly onSaved?: (config: PetweenConfig) => Promise<void>
   /** Serializes update() so concurrent writes never lose each other's fields. */
-  private writeChain: Promise<unknown> = Promise.resolve()
+  private readonly lock: WriteLock
+  private revisionCache: number | null = null
 
   constructor(options: ConfigStoreOptions = {}) {
     this.configPath = options.configPath ?? defaultConfigPath()
+    this.revisionPath = options.revisionPath ?? `${this.configPath.replace(/\.json$/, '')}.revision.json`
     this.animationLookup = options.animationLookup
     this.onSaved = options.onSaved
+    this.lock = options.lock ?? createWriteLock()
   }
 
   /** Load + repair; defaults when the file is missing or corrupt. */
@@ -58,15 +82,48 @@ export class ConfigStore {
   }
 
   /**
+   * B3: the monotonic config revision. Persisted in a sidecar file (the
+   * config schema itself is client-visible and must not grow server-owned
+   * fields), bumped exactly once per successful update(); missing/corrupt
+   * sidecar → 0 (a fresh install). Cached after the first read.
+   */
+  async revision(): Promise<number> {
+    if (this.revisionCache !== null) return this.revisionCache
+    const raw = await readJsonFile<{ revision?: unknown }>(this.revisionPath)
+    const revision = typeof raw?.revision === 'number' && Number.isInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0
+    this.revisionCache = revision
+    return revision
+  }
+
+  /**
    * Serialized read-merge-write (§19.2): the patch is strictly validated
    * against the CURRENT on-disk config and atomically saved, as one unit per
    * caller. Concurrent PUTs queue behind each other, so two writers patching
    * different fields both land instead of the later one clobbering the first.
+   * `expectedRevision` (B3, optional) opts a writer INTO conflict detection:
+   * a mismatch rejects with RevisionMismatchError BEFORE any write happens;
+   * writers that omit it keep the last-writer-wins behavior unchanged.
    */
-  update(patch: unknown): Promise<PetweenConfig> {
-    const run = this.writeChain.then(async () => {
+  update(patch: unknown, options: { expectedRevision?: number } = {}): Promise<PetweenConfig> {
+    // The write segment holds the (possibly shared) lock; the pet-preset
+    // mirror deliberately runs AFTER the release — onSaved calls back into
+    // PetsStore, which enqueues on the SAME shared lock, so running it inside
+    // the segment would wait on itself. Each mirror still carries its own
+    // slice payload and queues on the shared lock, so concurrent mirrors
+    // converge (the mirror is best-effort by contract; the config stays
+    // authoritative).
+    const run = this.lock(async () => {
+      const currentRevision = await this.revision()
+      if (options.expectedRevision !== undefined && options.expectedRevision !== currentRevision) {
+        throw new RevisionMismatchError(currentRevision)
+      }
       const config = validateConfigPatch(patch, await this.load(), { animationLookup: this.animationLookup })
       await this.save(config)
+      const revision = currentRevision + 1
+      await writeJsonAtomic(this.revisionPath, { revision })
+      this.revisionCache = revision
+      return config
+    }).then(async (config) => {
       if (this.onSaved !== undefined) {
         try {
           await this.onSaved(config)
@@ -76,8 +133,6 @@ export class ConfigStore {
       }
       return config
     })
-    // A failed update (invalid patch, disk error) must not poison the queue.
-    this.writeChain = run.catch(() => undefined)
     return run
   }
 }

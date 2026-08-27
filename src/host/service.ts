@@ -53,6 +53,16 @@ export interface PetweenHostService {
 /** Pack ids share the user: charset after their prefix. */
 const PACK_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
+/**
+ * The service's own namespace rule: companions register under `user:` (with
+ * or without a pack prefix). The store itself accepts any non-builtin
+ * namespace since B6 — that widening serves Motion Pack imports and library
+ * entries, not companions, which stay inside the user:/user:<pack>-
+ * convention the overwrite-in-place upgrade semantics and pack isolation
+ * are built on.
+ */
+const USER_SERVICE_ID_RE = /^user:[A-Za-z0-9][A-Za-z0-9_-]*$/
+
 /** Build the service over a store; src/index.ts provides the result on ctx. */
 export function createPetweenHostService(
   store: Pick<AnimationsStore, 'save' | 'exists'>,
@@ -69,6 +79,13 @@ export function createPetweenHostService(
             new AnimationError('INVALID_DEFINITION', `id "${definition.id}" is outside the user:${meta.pack}- namespace`),
           )
         }
+      } else if (!USER_SERVICE_ID_RE.test(definition.id)) {
+        return Promise.reject(
+          new AnimationError(
+            'INVALID_DEFINITION',
+            `service registrations must use a "user:<name>" id (or a user:<pack>- prefix via meta.pack), got "${definition.id}"`,
+          ),
+        )
       }
       return store.save(definition)
     },

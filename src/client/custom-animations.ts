@@ -4,16 +4,17 @@
  *
  * Both sessions (overlay + settings preview) run the same reconciliation:
  * a custom that is new registers, one whose content changed is unregistered
- * and re-registered, one that vanished from the hub is unregistered. Only the
- * `user:*` namespace is touched — built-ins are registry-protected and the
- * preview session's scratch draft id is left alone. A single failing
+ * and re-registered, one that vanished from the hub is unregistered. Every
+ * NON-builtin namespace is custom sync territory (B6: `user:` plus whatever
+ * pack namespace the host accepts) — built-ins are registry-protected and
+ * the preview session's scratch draft id is left alone. A single failing
  * definition (invalid schema, id collision) is reported as a warning instead
  * of blocking the rest.
  */
 import type { AnimationDefinition } from '../motion/animation-definition'
 import type { AnimationRegistry } from '../motion/animation-registry'
 
-const USER_PREFIX = 'user:'
+const BUILTIN_PREFIX = 'builtin:'
 
 /**
  * In-memory scratch id for the animation library's 试播 (PreviewSession.
@@ -22,24 +23,29 @@ const USER_PREFIX = 'user:'
  */
 export const DRAFT_ANIMATION_ID = 'user:0draft'
 
+/** Custom sync territory: every id the registry does not own as builtin. */
+function isCustomSyncId(id: string): boolean {
+  return !id.startsWith(BUILTIN_PREFIX)
+}
+
 function sameDefinition(a: AnimationDefinition, b: AnimationDefinition): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-/** Reconcile registry user:* entries with the served customs; returns warnings. */
+/** Reconcile registry custom entries with the served customs; returns warnings. */
 export function syncCustomAnimations(registry: AnimationRegistry, customs: AnimationDefinition[]): string[] {
   const warnings: string[] = []
   const incoming = new Map<string, AnimationDefinition>()
   for (const definition of customs) {
-    // The host only serves user:* ids; stay defensive so a bad entry can
-    // never unregister a built-in or the scratch draft.
-    if (!definition.id.startsWith(USER_PREFIX) || definition.id === DRAFT_ANIMATION_ID) continue
+    // The host only serves custom-namespace ids; stay defensive so a bad
+    // entry can never unregister a built-in or the scratch draft.
+    if (!isCustomSyncId(definition.id) || definition.id === DRAFT_ANIMATION_ID) continue
     incoming.set(definition.id, definition)
   }
 
-  // Sweep registered user definitions that vanished or changed.
+  // Sweep registered customs that vanished or changed.
   for (const registered of registry.list()) {
-    if (!registered.id.startsWith(USER_PREFIX) || registered.id === DRAFT_ANIMATION_ID) continue
+    if (!isCustomSyncId(registered.id) || registered.id === DRAFT_ANIMATION_ID) continue
     const next = incoming.get(registered.id)
     if (next !== undefined && sameDefinition(next, registered)) continue
     try {

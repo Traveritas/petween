@@ -1,14 +1,16 @@
 /**
  * host/animations.ts — custom AnimationDefinition persistence (V1.1, plan §3).
  *
- * Layout: `$DSH_HOME/petween/animations/user_<name>.json` — one file per
+ * Layout: `$DSH_HOME/petween/animations/<ns>_<name>.json` — one file per
  * custom animation, holding the AnimationDefinition verbatim, written
- * atomically (host/storage.ts). Only `user:<safe>` ids are storable: the
- * charset after the prefix is filename-safe, so the disk name is derived from
- * the id and a request id can never traverse the filesystem.
+ * atomically (host/storage.ts). Any non-`builtin` lowercase namespace is
+ * storable (`user:` remains the editor's default; Motion Packs and companion
+ * plugins may claim their own — B6): the charset after the separator is
+ * filename-safe, so the disk name derives from the id and a request id can
+ * never traverse the filesystem.
  *
- * Loading is scan-based and fault-tolerant: unreadable, invalid or wrongly-
- * namespaced files are skipped with a warning instead of blocking startup;
+ * Loading is scan-based and fault-tolerant: unreadable, invalid or reserved-
+ * namespace files are skipped with a warning instead of blocking startup;
  * the client registers whatever customs come back through the same zero-
  * branch registry path as the built-ins.
  */
@@ -17,9 +19,9 @@ import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { AnimationDefinition, AnimationKind } from '../motion/animation-definition'
-import { RANDOM_DELAY_LIMITS, validateAnimationDefinition } from '../motion/animation-definition'
+import { isCustomAnimationId, RANDOM_DELAY_LIMITS, validateAnimationDefinition } from '../motion/animation-definition'
 import { isMotionProperty, MOTION_PROPERTIES } from '../motion/motion-properties'
-import { writeJsonAtomic } from './storage'
+import { createWriteLock, writeJsonAtomic, type WriteLock } from './storage'
 
 export type AnimationErrorCode = 'INVALID_DEFINITION' | 'NOT_FOUND' | 'IN_USE'
 
@@ -41,12 +43,6 @@ export function defaultAnimationsDir(): string {
 }
 
 /**
- * Storable custom-animation ids: the `user:` namespace with a filename-safe
- * charset (no dots, no slashes — traversal is impossible by construction).
- */
-const USER_ID_RE = /^user:[A-Za-z0-9][A-Za-z0-9_-]*$/
-
-/**
  * The client timeline editor keeps its never-persisted preview draft under
  * this id (src/client/custom-animations.ts DRAFT_ANIMATION_ID). It matches
  * the user: charset, so without this guard a Motion Pack PUT could legally
@@ -60,21 +56,26 @@ const RESERVED_CLIENT_DRAFT_ID = 'user:0draft'
 /** Route-level id guard: `<namespace>:<name>` with a filename-safe charset. */
 const SAFE_ID_RE = /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/
 
-/** Returns the id when usable as a custom-animation id, else null. */
-export function validateUserAnimationId(id: unknown): string | null {
-  return typeof id === 'string' && USER_ID_RE.test(id) ? id : null
+/**
+ * Storable custom-animation ids: any non-`builtin` namespace with a
+ * filename-safe charset (no dots, no slashes — traversal is impossible by
+ * construction). `user:` stays the editor default; packs/companions may
+ * claim their own lowercase namespace (B6).
+ */
+export function validateCustomAnimationId(id: unknown): string | null {
+  return typeof id === 'string' && isCustomAnimationId(id) ? id : null
 }
 
 /**
  * Charset/traversal guard for request path ids. Any namespace passes here —
- * the store enforces the `user:` restriction (a `builtin:*` PUT is a 400, not
- * a malformed-path 404).
+ * the store enforces the custom-namespace restriction (a `builtin:*` PUT is
+ * a 400, not a malformed-path 404).
  */
 export function validateAnimationId(id: unknown): string | null {
   return typeof id === 'string' && SAFE_ID_RE.test(id) ? id : null
 }
 
-/** `user:<name>` → `user_<name>.json` (the charset makes this bijective). */
+/** `<ns>:<name>` → `<ns>_<name>.json` (the charsets make this bijective). */
 function fileNameFor(id: string): string {
   return `${id.replace(':', '_')}.json`
 }
@@ -138,19 +139,23 @@ function normalizeLegacyDefinition(raw: unknown): AnimationDefinition | null {
 function idFromFileName(entry: string): string | null {
   if (!entry.endsWith('.json')) return null
   // The first '_' is exactly the namespace separator: 'user' contains none.
-  return validateUserAnimationId(entry.slice(0, -'.json'.length).replace('_', ':'))
+  return validateCustomAnimationId(entry.slice(0, -'.json'.length).replace('_', ':'))
 }
 
 export interface AnimationsStoreOptions {
   /** Directory holding the animation files; created lazily on first save. */
   animationsDir: string
+  /** Shared cross-store write serializer (B10); default: a private chain. */
+  lock?: WriteLock
 }
 
 export class AnimationsStore {
   /** Serializes read-modify-write cycles in this process (AssetStore pattern). */
-  private queue: Promise<unknown> = Promise.resolve()
+  private readonly lock: WriteLock
 
-  constructor(private readonly options: AnimationsStoreOptions) {}
+  constructor(private readonly options: AnimationsStoreOptions) {
+    this.lock = options.lock ?? createWriteLock()
+  }
 
   /**
    * Scan the directory and load every custom animation. Corrupt JSON, schema
@@ -191,8 +196,8 @@ export class AnimationsStore {
         warnings.push(`${entry}: legacy shape auto-normalized (${result.errors.join('; ')})`)
         definition = normalized
       }
-      if (validateUserAnimationId(definition.id) === null) {
-        warnings.push(`${entry}: id "${definition.id}" is not in the user: namespace, skipped`)
+      if (validateCustomAnimationId(definition.id) === null) {
+        warnings.push(`${entry}: id "${definition.id}" is not a custom-namespace id, skipped`)
         continue
       }
       if (seen.has(definition.id)) {
@@ -212,11 +217,11 @@ export class AnimationsStore {
       if (!result.valid) {
         throw new AnimationError('INVALID_DEFINITION', `invalid AnimationDefinition: ${result.errors.join('; ')}`, result.errors)
       }
-      if (validateUserAnimationId(definition.id) === null) {
+      if (validateCustomAnimationId(definition.id) === null) {
         throw new AnimationError(
           'INVALID_DEFINITION',
-          `custom animations must use a "user:<name>" id, got "${definition.id}"`,
-          ['"id" must match "user:<name>" (letters, digits, "_" and "-")'],
+          `custom animations must use a "<namespace>:<name>" id (any lowercase namespace except builtin), got "${definition.id}"`,
+          ['"id" must match "<namespace>:<name>" (lowercase namespace, then letters, digits, "_" and "-")'],
         )
       }
       if (definition.id === RESERVED_CLIENT_DRAFT_ID) {
@@ -233,19 +238,21 @@ export class AnimationsStore {
   /**
    * Delete an animation. 409 semantics (IN_USE) when `referencedBy` reports
    * the id as still referenced; 404 semantics (NOT_FOUND) for unknown ids.
+   * The reference probe is ASYNC and runs inside the serialized delete, so
+   * the routes layer can probe the freshest config/preset state (B10).
    */
-  delete(id: string, referencedBy: (animationId: string) => boolean): Promise<void> {
+  delete(id: string, referencedBy: (animationId: string) => Promise<boolean>): Promise<void> {
     return this.enqueue(async () => {
-      const valid = validateUserAnimationId(id)
+      const valid = validateCustomAnimationId(id)
       if (valid === null || !this.exists(valid)) throw new AnimationError('NOT_FOUND', `unknown animation: ${id}`)
-      if (referencedBy(valid)) throw new AnimationError('IN_USE', `animation is still referenced: ${valid}`)
+      if (await referencedBy(valid)) throw new AnimationError('IN_USE', `animation is still referenced: ${valid}`)
       await unlink(join(this.options.animationsDir, fileNameFor(valid)))
     })
   }
 
   /** Sync existence check for config validation (states.*.enter.animationId). */
   exists(id: string): boolean {
-    return validateUserAnimationId(id) !== null && existsSync(join(this.options.animationsDir, fileNameFor(id)))
+    return validateCustomAnimationId(id) !== null && existsSync(join(this.options.animationsDir, fileNameFor(id)))
   }
 
   /**
@@ -255,7 +262,7 @@ export class AnimationsStore {
    * that disagree with the filename report undefined (unknown).
    */
   kindOf(id: string): AnimationKind | undefined {
-    if (validateUserAnimationId(id) === null) return undefined
+    if (validateCustomAnimationId(id) === null) return undefined
     let raw: unknown
     try {
       raw = JSON.parse(readFileSync(join(this.options.animationsDir, fileNameFor(id)), 'utf8'))
@@ -283,11 +290,6 @@ export class AnimationsStore {
   }
 
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(op)
-    this.queue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
+    return this.lock(op)
   }
 }

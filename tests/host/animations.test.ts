@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
-import { AnimationError, AnimationsStore, validateAnimationId, validateUserAnimationId } from '../../src/host/animations'
+import { AnimationError, AnimationsStore, validateAnimationId, validateCustomAnimationId } from '../../src/host/animations'
 
 let dir: string
 let store: AnimationsStore
@@ -49,6 +49,16 @@ describe('AnimationsStore.loadAll', () => {
     expect(await store.loadAll()).toEqual({ customs: [], warnings: [] })
   })
 
+  it('B1: a definition from a NEWER format is skipped with the explicit reader warning', async () => {
+    await mkdir(join(dir, 'animations'), { recursive: true })
+    await writeFile(join(dir, 'animations', 'user_future.json'), JSON.stringify(makeDefinition('user:future', { version: 2 })), 'utf8')
+    const { customs, warnings } = await store.loadAll()
+    expect(customs).toEqual([])
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('user_future.json')
+    expect(warnings[0]).toContain('newer petween')
+  })
+
   it('loads every stored definition and ignores non-JSON files', async () => {
     await store.save(makeDefinition('user:wiggle'))
     await store.save(makeDefinition('user:hop'))
@@ -75,7 +85,7 @@ describe('AnimationsStore.loadAll', () => {
     expect(customs.map((definition) => definition.id)).toEqual(['user:ok'])
     expect(warnings).toHaveLength(3)
     expect(warnings[0]).toContain('builtin_soft.json')
-    expect(warnings[0]).toContain('user:')
+    expect(warnings[0]).toContain('custom-namespace')
     expect(warnings[1]).toContain('user_broken.json')
     expect(warnings[2]).toContain('user_invalid.json')
     expect(warnings[2]).toContain('durationMs')
@@ -180,13 +190,17 @@ describe('AnimationsStore.save', () => {
     expect((error as AnimationError).message).toContain('durationMs')
   })
 
-  it('rejects non-user namespaces (builtin ids included) and traversal shapes', async () => {
-    for (const id of ['builtin:soft', 'other:thing', 'user:../escape', 'user:a/b', 'user:a.b']) {
+  it('accepts any non-builtin lowercase namespace (B6) and rejects builtin/traversal shapes', async () => {
+    // B6: `user:` stays the editor default, but a pack namespace like
+    // `motion:` is storable end-to-end — Motion Packs claim their own.
+    await expect(store.save(makeDefinition('motion:wall-bounce'))).resolves.toBeUndefined()
+    expect(await store.listIds()).toEqual(['motion:wall-bounce'])
+    for (const id of ['builtin:soft', 'user:../escape', 'user:a/b', 'user:a.b', 'Motion:Cap']) {
       const error = await store.save(makeDefinition(id)).catch((e: unknown) => e)
       expect(error, id).toBeInstanceOf(AnimationError)
       expect((error as AnimationError).code).toBe('INVALID_DEFINITION')
     }
-    expect(await store.listIds()).toEqual([])
+    expect(await store.listIds()).toEqual(['motion:wall-bounce'])
   })
 
   it('rejects the reserved client preview draft id "user:0draft" (DRAFT_ANIMATION_ID)', async () => {
@@ -216,14 +230,14 @@ describe('AnimationsStore.save', () => {
 describe('AnimationsStore.delete', () => {
   it('deletes a stored animation; the file disappears', async () => {
     await store.save(makeDefinition('user:wiggle'))
-    await store.delete('user:wiggle', () => false)
+    await store.delete('user:wiggle', async () => false)
     expect(store.exists('user:wiggle')).toBe(false)
     expect(await store.listIds()).toEqual([])
   })
 
   it('throws NOT_FOUND for unknown or malformed ids', async () => {
     for (const id of ['user:missing', 'user:../escape', 'builtin:soft']) {
-      const error = await store.delete(id, () => false).catch((e: unknown) => e)
+      const error = await store.delete(id, async () => false).catch((e: unknown) => e)
       expect(error, id).toBeInstanceOf(AnimationError)
       expect((error as AnimationError).code).toBe('NOT_FOUND')
     }
@@ -231,7 +245,7 @@ describe('AnimationsStore.delete', () => {
 
   it('throws IN_USE when the id is still referenced', async () => {
     await store.save(makeDefinition('user:wiggle'))
-    const error = await store.delete('user:wiggle', () => true).catch((e: unknown) => e)
+    const error = await store.delete('user:wiggle', async () => true).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(AnimationError)
     expect((error as AnimationError).code).toBe('IN_USE')
     expect(store.exists('user:wiggle')).toBe(true) // untouched
@@ -251,10 +265,10 @@ describe('AnimationsStore.exists / listIds', () => {
 })
 
 describe('animation id guards', () => {
-  it('validateUserAnimationId accepts user:<safe> only', () => {
-    expect(validateUserAnimationId('user:wiggle-2_x')).toBe('user:wiggle-2_x')
+  it('validateCustomAnimationId accepts user:<safe> only', () => {
+    expect(validateCustomAnimationId('user:wiggle-2_x')).toBe('user:wiggle-2_x')
     for (const bad of ['builtin:soft', 'user:', 'user:../x', 'user:a/b', 'user:a b', 42, null]) {
-      expect(validateUserAnimationId(bad)).toBeNull()
+      expect(validateCustomAnimationId(bad)).toBeNull()
     }
   })
 

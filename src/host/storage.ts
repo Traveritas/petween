@@ -58,3 +58,24 @@ export async function writeJsonAtomic<T>(filePath: string, data: T): Promise<voi
     }
   })
 }
+
+/**
+ * Minimal promise-chain serializer. Each host store owns one for its
+ * read-modify-write cycles; passing the SAME lock to every store (src/index.ts)
+ * additionally serializes mutations ACROSS stores, closing the cross-store
+ * TOCTOU window (e.g. an asset delete checking references while a config
+ * write is still in flight — B10). Reads never take the lock.
+ */
+export type WriteLock = <T>(op: () => Promise<T>) => Promise<T>
+
+export function createWriteLock(): WriteLock {
+  let chain: Promise<unknown> = Promise.resolve()
+  return (op) => {
+    const run = chain.then(op)
+    chain = run.then(
+      () => undefined,
+      () => undefined, // a failed op must not poison the chain
+    )
+    return run
+  }
+}

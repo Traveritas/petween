@@ -182,12 +182,29 @@ export type AnimationValidationResult = { valid: true } | { valid: false; errors
 
 const ID_RE = /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/
 /**
+ * B6 single source of truth for storable custom ids: the shared id grammar
+ * minus the reserved `builtin:` namespace. `user:` is the editor default;
+ * Motion Packs / companion plugins may claim any other lowercase namespace.
+ */
+export function isCustomAnimationId(id: string): boolean {
+  return ID_RE.test(id) && !id.startsWith('builtin:')
+}
+/**
  * A pose-swap target: one of the six builtin slot names or an id in the
  * shared `<namespace>:<name>` charset (registered poses use `user:` ids).
  * Opaque to the engine — the play-time seam resolves it.
  */
 const POSE_TARGET_RE = /^(?:[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*|[a-z][a-z0-9_-]*)$/
 export const ANIMATION_KINDS: readonly string[] = ['transition', 'ambient', 'interaction']
+/**
+ * B1 version seam: the AnimationDefinition format version this build reads.
+ * A definition with a HIGHER version is rejected with an explicit
+ * "newer format" error (never silently skipped or mangled); upgrades chain
+ * here when a v2 ever exists. Unknown fields outside the schema are kept
+ * VERBATIM on load and re-save — never interpreted, never stripped — so a
+ * v1 reader round-trips a future pack's payload without destroying it.
+ */
+export const ANIMATION_DEFINITION_VERSION = 1
 const DURATION_LIMITS = { min: 1, max: 60_000 } as const
 /** A floor of 1ms keeps random-interval from degenerating into a full-speed replay loop. */
 export const RANDOM_DELAY_LIMITS = { min: 1, max: 600_000 } as const
@@ -291,7 +308,16 @@ export function validateAnimationDefinition(definition: unknown): AnimationValid
     return { valid: false, errors: ['definition must be an object'] }
   }
 
-  if (definition.version !== 1) errors.push('"version" must be 1')
+  if (definition.version !== ANIMATION_DEFINITION_VERSION) {
+    // B1: a NEWER format is a reader problem, not a malformed file — say so.
+    if (isFiniteNumber(definition.version) && definition.version > ANIMATION_DEFINITION_VERSION) {
+      errors.push(
+        `"version" ${definition.version} was written by a newer petween (this build reads version ${ANIMATION_DEFINITION_VERSION}); upgrade the plugin or re-export the animation at version ${ANIMATION_DEFINITION_VERSION}`,
+      )
+    } else {
+      errors.push(`"version" must be ${ANIMATION_DEFINITION_VERSION}`)
+    }
+  }
   if (typeof definition.id !== 'string' || !ID_RE.test(definition.id)) {
     errors.push('"id" must match "<namespace>:<name>", e.g. user:<uuid>')
   }

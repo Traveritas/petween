@@ -481,12 +481,15 @@ export class OverlaySession {
    * custom never breaks the pet.
    */
   private syncCustoms(customs: ConfigSnapshot['customs']): boolean {
-    const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
+    // Every NON-builtin entry (B6: user: plus any pack namespace the host
+    // accepts) is the reconcilable custom set; builtin:* is registry-owned.
+    const customIds = () =>
+      JSON.stringify(this.registry.list().filter((definition) => !definition.id.startsWith('builtin:')))
+    const before = customIds()
     for (const warning of syncCustomAnimations(this.registry, customs)) {
       console.warn(`petween: ${warning}`)
     }
-    const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
-    return before !== after
+    return customIds() !== before
   }
 
   dispose(): void {

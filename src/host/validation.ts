@@ -29,6 +29,7 @@ import type {
 import { POSE_KEYS, TRANSITION_DURATION_LIMITS, TRANSITION_STRENGTH_LIMITS } from '../core/types'
 import { createDefaultPetweenConfig } from '../core/defaults'
 import type { AnimationKind } from '../motion/animation-definition'
+import { isCustomAnimationId } from '../motion/animation-definition'
 import { BUILTIN_TRANSITION_DEFINITIONS } from '../core/transition-presets'
 
 export interface FieldIssue {
@@ -66,7 +67,9 @@ const ACTIVITY_TRANSITION_VALUES = ['subtle', 'none', 'state'] as const
 /** Known built-in enter-transition ids (§8.14): the preset definitions. */
 const BUILTIN_TRANSITION_IDS: ReadonlySet<string> = new Set(BUILTIN_TRANSITION_DEFINITIONS.map((definition) => definition.id))
 /** Shape mirror of host/animations.ts (kept local so validation stays fs-free). */
-const USER_ANIMATION_ID_RE = /^user:[A-Za-z0-9][A-Za-z0-9_-]*$/
+function isCustomAnimationMountId(value: string): boolean {
+  return isCustomAnimationId(value)
+}
 /** Shape mirror of host/pets.ts (kept local so validation stays fs-free). */
 const PET_ID_RE = /^pet_[a-z0-9]+$/
 
@@ -220,8 +223,16 @@ function poseField(value: unknown, fallback: PoseConfig, path: string, walk: Wal
     anchor: anchorField(source.anchor, fallback.anchor, `${path}.anchor`, walk),
     zoom: numberField(source.zoom, fallback.zoom, `${path}.zoom`, walk, ZOOM_RANGE),
   }
-  if (typeof source.assetId === 'string') pose.assetId = source.assetId
-  else if (source.assetId !== undefined && source.assetId !== null) fail(walk, `${path}.assetId`, 'expected string')
+  if (typeof source.assetId === 'string') {
+    // B10: asset ids are host-generated content hashes — anything off-shape is
+    // junk input, not a reference (strict rejects; repair degrades to "no
+    // asset" and the resolver's fallback chain takes over).
+    if (validateAssetId(source.assetId) === null) {
+      fail(walk, `${path}.assetId`, 'expected a 16-hex asset id (host-generated)')
+    } else {
+      pose.assetId = source.assetId
+    }
+  } else if (source.assetId !== undefined && source.assetId !== null) fail(walk, `${path}.assetId`, 'expected string')
   return pose
 }
 
@@ -244,14 +255,14 @@ function animationIdField(value: unknown, fallback: string | undefined, path: st
     fail(walk, path, `unknown built-in animation: ${value}`)
     return fallback
   }
-  if (USER_ANIMATION_ID_RE.test(value)) {
+  if (isCustomAnimationMountId(value)) {
     if (walk.animationLookup === undefined) return value
     const kind = walk.animationLookup(value)
     if (kind === 'transition') return value
     fail(walk, path, kind === undefined ? `unknown custom animation: ${value}` : `not a transition animation: ${value}`)
     return fallback
   }
-  fail(walk, path, 'expected a builtin:* or user:* animation id')
+  fail(walk, path, 'expected a builtin:* or <namespace>:* custom animation id')
   return fallback
 }
 
@@ -268,8 +279,8 @@ function ambientAnimationIdField(
 ): string | undefined {
   if (value === undefined) return fallback
   if (value === null) return undefined
-  if (typeof value !== 'string' || !USER_ANIMATION_ID_RE.test(value)) {
-    fail(walk, path, 'expected a user:* animation id or null')
+  if (typeof value !== 'string' || !isCustomAnimationMountId(value)) {
+    fail(walk, path, 'expected a custom <namespace>:* animation id or null')
     return fallback
   }
   if (walk.animationLookup === undefined) return value

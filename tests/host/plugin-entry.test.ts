@@ -29,12 +29,13 @@ afterAll(() => {
 const MOUNT_FLAG = Symbol.for('petween/host')
 
 const ALL_ROUTES = [
+  '/api/petween/meta', // B2 capability discovery (exact GET)
   '/api/petween/config',
   '/api/petween/assets',
   '/api/petween/animations', // exact GET
   '/api/petween/animations', // prefix PUT/DELETE
   '/api/petween/pets', // exact GET/POST
-  '/api/petween/pets', // prefix PUT/DELETE + apply
+  '/api/petween/pets', // prefix GET/PUT/DELETE + apply
   '/petween-assets',
   '/petween-editor',
   '/api/petween/events',

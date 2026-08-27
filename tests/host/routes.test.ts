@@ -6,7 +6,7 @@
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -18,6 +18,7 @@ import { AnimationsStore } from '../../src/host/animations'
 import { AssetStore } from '../../src/host/assets'
 import { ConfigStore } from '../../src/host/config'
 import { PetsStore, petSliceFromConfig, type PetPreset } from '../../src/host/pets'
+import { createWriteLock } from '../../src/host/storage'
 import { registerRoutes, type RoutesDeps } from '../../src/host/routes'
 import { makeJpeg, makePng, makeSvg, makeWebp } from './fixtures'
 
@@ -35,19 +36,26 @@ function uploadBody(bytes: Buffer, mime: string, fieldName = 'file'): FormData {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'petween-routes-'))
-  const petsStore = new PetsStore({ petsDir: join(dir, 'pets') })
+  const sharedWriteLock = createWriteLock()
+  const petsStore = new PetsStore({ petsDir: join(dir, 'pets'), lock: sharedWriteLock })
   const configStore = new ConfigStore({
     configPath: join(dir, 'config.json'),
+    lock: sharedWriteLock,
     // The pet-preset mirror, wired exactly as in src/index.ts.
     onSaved: async (config) => {
       if (config.activePetId !== null) await petsStore.saveSlice(config.activePetId, petSliceFromConfig(config))
     },
   })
-  const assetStore = new AssetStore({ assetsDir: join(dir, 'assets'), manifestPath: join(dir, 'assets.json') })
-  const animationsStore = new AnimationsStore({ animationsDir: join(dir, 'animations') })
+  const assetStore = new AssetStore({
+    assetsDir: join(dir, 'assets'),
+    manifestPath: join(dir, 'assets.json'),
+    lock: sharedWriteLock,
+  })
+  const animationsStore = new AnimationsStore({ animationsDir: join(dir, 'animations'), lock: sharedWriteLock })
   deps = {
     loadConfig: () => configStore.load(),
-    updateConfig: (patch) => configStore.update(patch),
+    updateConfig: (patch, options) => configStore.update(patch, options),
+    configRevision: () => configStore.revision(),
     listAssets: () => assetStore.list(),
     saveAsset: (buffer, declaredMime) => assetStore.save(buffer, declaredMime),
     deleteAsset: (id, referencedBy) => assetStore.delete(id, referencedBy),
@@ -117,6 +125,21 @@ describe('GET /api/petween/config (§19.1)', () => {
   })
 })
 
+describe('GET /api/petween/meta (B2 capability discovery)', () => {
+  it('reports apiVersion/configVersion/revision and an additive feature list', async () => {
+    const res = await fetch(`${base}/api/petween/meta`)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.apiVersion).toBe(1)
+    expect(body.configVersion).toBe(1)
+    expect(body.revision).toBe(0) // fresh install
+    for (const feature of ['config', 'config.revision', 'assets', 'animations', 'pets', 'pets.draft', 'meta']) {
+      expect(body.features).toContain(feature)
+    }
+    expect((await fetch(`${base}/api/petween/meta`, { method: 'POST' })).status).toBe(405)
+  })
+})
+
 describe('PUT /api/petween/config (§19.2)', () => {
   it('roundtrips a valid config and persists it to disk', async () => {
     const config = createDefaultPetweenConfig()
@@ -142,6 +165,70 @@ describe('PUT /api/petween/config (§19.2)', () => {
     })
     expect(res.status).toBe(200)
     expect((await res.json()).config).not.toHaveProperty('injected')
+  })
+
+  it('B3: GET/PUT carry a monotonic revision; x-petween-expected-revision guards stale writers', async () => {
+    const put = (expectedRevision?: number) =>
+      fetch(`${base}/api/petween/config`, {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          ...(expectedRevision === undefined ? {} : { 'x-petween-expected-revision': String(expectedRevision) }),
+        },
+        body: JSON.stringify({ global: { scale: 1.2 } }),
+      })
+    const putText = await put()
+    expect(putText.status).toBe(200)
+    expect((await putText.json()).revision).toBe(1) // first bump
+    expect((await (await fetch(`${base}/api/petween/config`)).json()).revision).toBe(1)
+    // A writer holding the fresh revision wins…
+    const ok = await put(1)
+    expect(ok.status).toBe(200)
+    expect((await ok.json()).revision).toBe(2)
+    // …a writer holding the stale revision 1 is rejected BEFORE any write.
+    const stale = await put(1)
+    expect(stale.status).toBe(409)
+    const staleBody = await stale.json()
+    expect(staleBody.error.code).toBe('REVISION_MISMATCH')
+    expect(staleBody.error.details).toEqual({ currentRevision: 2 })
+    expect((await (await fetch(`${base}/api/petween/config`)).json()).config.global.scale).toBe(1.2) // untouched
+    // Malformed header is a client bug, not a conflict.
+    expect((await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-petween-expected-revision': 'soon' },
+      body: JSON.stringify({ global: { scale: 1 } }),
+    })).status).toBe(400)
+  })
+
+  it('B3: the revision survives a host restart (persisted sidecar)', async () => {
+    await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ global: { scale: 1.1 } }),
+    })
+    const persisted = JSON.parse(await readFile(join(dir, 'config.revision.json'), 'utf8'))
+    expect(persisted.revision).toBeGreaterThan(0)
+    // A fresh store over the same directory reads the counter back.
+    const reborn = new ConfigStore({ configPath: join(dir, 'config.json') })
+    expect(await reborn.revision()).toBe(persisted.revision)
+  })
+
+  it('B10: pose assetIds must be 16-hex host-generated ids (strict rejects, repair drops)', async () => {
+    const config = createDefaultPetweenConfig()
+    config.poses.idle.assetId = 'definitely-not-hex'
+    const res = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVALID_CONFIG')
+    expect(body.error.details).toContainEqual({ path: 'poses.idle.assetId', message: 'expected a 16-hex asset id (host-generated)' })
+    // Repair mode (config load) degrades to "no asset" instead of failing.
+    await writeFile(join(dir, 'config.json'), JSON.stringify(config), 'utf8')
+    const loaded = await deps.loadConfig()
+    expect(loaded.poses.idle.assetId).toBeUndefined()
   })
 
   it('rejects invalid configs with 400 and field paths', async () => {
@@ -461,6 +548,29 @@ describe('/api/petween/animations (V1.1 plan §3)', () => {
     expect(listed.customs).toEqual([])
   })
 
+  it('B1: a NEWER format version is rejected with an explicit reader error (never silently stored)', async () => {
+    const fromTheFuture = { ...makeTransition('user:pop'), version: 2 }
+    const res = await putAnimation('user:pop', fromTheFuture)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVALID_ANIMATION')
+    expect(body.error.details.join(' ')).toContain('newer petween')
+    expect((await (await fetch(`${base}/api/petween/animations`)).json()).customs).toEqual([])
+  })
+
+  it('B6: a pack-namespace animation round-trips and mounts like a user: one', async () => {
+    const definition = makeTransition('motion:wall-bounce')
+    expect((await putAnimation('motion:wall-bounce', definition)).status).toBe(200)
+    const listed = await (await fetch(`${base}/api/petween/animations`)).json()
+    expect(listed.customs).toEqual([definition])
+
+    const config = createDefaultPetweenConfig()
+    config.states.idle.enter.animationId = 'motion:wall-bounce'
+    const res = await putConfig(config)
+    expect(res.status).toBe(200)
+    expect((await res.json()).config.states.idle.enter.animationId).toBe('motion:wall-bounce')
+  })
+
   it('PUT rejects a body id that does not match the path id', async () => {
     const res = await putAnimation('user:pop', makeTransition('user:other'))
     expect(res.status).toBe(400)
@@ -777,10 +887,19 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
   it('POST <id>/apply 404s unknown ids; method and path guards hold', async () => {
     expect((await fetch(`${base}/api/petween/pets/pet_missing/apply`, { method: 'POST' })).status).toBe(404)
     expect((await fetch(`${base}/api/petween/pets/pet_missing`, { method: 'DELETE' })).status).toBe(404)
+    expect((await fetch(`${base}/api/petween/pets/pet_missing`, { method: 'GET' })).status).toBe(404)
     expect((await fetch(`${base}/api/petween/pets/..%2Fescape`, { method: 'DELETE' })).status).toBe(404)
-    expect((await fetch(`${base}/api/petween/pets/pet_x`, { method: 'GET' })).status).toBe(405)
+    expect((await fetch(`${base}/api/petween/pets/pet_x`, { method: 'PATCH' })).status).toBe(405)
     expect((await fetch(`${base}/api/petween/pets/pet_x/apply`, { method: 'PUT' })).status).toBe(405)
     expect((await fetch(`${base}/api/petween/pets`, { method: 'PUT' })).status).toBe(405)
+  })
+
+  it('GET /pets/<id> returns one preset (B10 single read); 404 unknown ids', async () => {
+    const { pet } = (await (await postPets({ name: 'Solo', from: 'current' })).json()) as { pet: PetPreset }
+    const res = await fetch(`${base}/api/petween/pets/${pet.id}`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ pet })
+    expect((await fetch(`${base}/api/petween/pets/pet_missing`)).status).toBe(404)
   })
 
   it('config updates mirror into the active preset file; a null activePetId mirrors nothing', async () => {

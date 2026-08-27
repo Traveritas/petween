@@ -18,7 +18,7 @@ import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { PetweenConfig, PetPreset, PetSlice } from '../core/types'
-import { writeJsonAtomic } from './storage'
+import { createWriteLock, writeJsonAtomic, type WriteLock } from './storage'
 import { repairConfig } from './validation'
 
 export type { PetPreset, PetSlice } from '../core/types'
@@ -116,13 +116,17 @@ export interface PetsStoreOptions {
   petsDir: string
   /** Clock injection for tests; defaults to real ISO timestamps. */
   now?: () => string
+  /** Shared cross-store write serializer (B10); default: a private chain. */
+  lock?: WriteLock
 }
 
 export class PetsStore {
   /** Serializes read-modify-write cycles in this process (AssetStore pattern). */
-  private queue: Promise<unknown> = Promise.resolve()
+  private readonly lock: WriteLock
 
-  constructor(private readonly options: PetsStoreOptions) {}
+  constructor(private readonly options: PetsStoreOptions) {
+    this.lock = options.lock ?? createWriteLock()
+  }
 
   /**
    * Scan the directory and load every preset. Corrupt JSON and shape
@@ -263,11 +267,6 @@ export class PetsStore {
   }
 
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(op)
-    this.queue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
+    return this.lock(op)
   }
 }

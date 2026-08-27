@@ -16,7 +16,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { AssetMeta } from '../core/types'
-import { readJsonFile, writeJsonAtomic } from './storage'
+import { createWriteLock, readJsonFile, writeJsonAtomic, type WriteLock } from './storage'
 import { validateAssetId } from './validation'
 
 export const MAX_ASSET_BYTES = 10 * 1024 * 1024 // spec §20
@@ -146,6 +146,8 @@ export interface AssetStoreOptions {
   maxFileBytes?: number
   maxTotalBytes?: number
   maxDimension?: number
+  /** Shared cross-store write serializer (B10); default: a private chain. */
+  lock?: WriteLock
 }
 
 export function defaultAssetsDir(): string {
@@ -179,12 +181,13 @@ export class AssetStore {
   private readonly maxTotalBytes: number
   private readonly maxDimension: number
   /** Serializes manifest read-modify-write cycles in this process. */
-  private queue: Promise<unknown> = Promise.resolve()
+  private readonly lock: WriteLock
 
   constructor(private readonly options: AssetStoreOptions) {
     this.maxFileBytes = options.maxFileBytes ?? MAX_ASSET_BYTES
     this.maxTotalBytes = options.maxTotalBytes ?? MAX_TOTAL_ASSET_BYTES
     this.maxDimension = options.maxDimension ?? MAX_ASSET_DIMENSION
+    this.lock = options.lock ?? createWriteLock()
   }
 
   /** Current manifest; empty when the file is missing or corrupt. */
@@ -248,14 +251,17 @@ export class AssetStore {
 
   /**
    * Delete an asset. 409 semantics (IN_USE) when `referencedBy` reports the
-   * id as still referenced; 404 semantics (NOT_FOUND) for unknown ids.
+   * id as still referenced; 404 semantics (NOT_FOUND) for unknown ids. The
+   * reference probe is ASYNC and runs inside the serialized delete, so the
+   * routes layer can load the freshest config/preset state at check time
+   * (B10: no stale-snapshot TOCTOU when a referencing save is in flight).
    */
-  delete(id: string, referencedBy: (assetId: string) => boolean): Promise<void> {
+  delete(id: string, referencedBy: (assetId: string) => Promise<boolean>): Promise<void> {
     return this.enqueue(async () => {
       const manifest = await this.list()
       const meta = validateAssetId(id) !== null ? manifest[id] : undefined
       if (meta === undefined) throw new AssetError('NOT_FOUND', `unknown asset: ${id}`)
-      if (referencedBy(id)) throw new AssetError('IN_USE', `asset is still referenced: ${id}`)
+      if (await referencedBy(id)) throw new AssetError('IN_USE', `asset is still referenced: ${id}`)
       delete manifest[id]
       await writeJsonAtomic(this.options.manifestPath, manifest)
       await unlink(join(this.options.assetsDir, meta.fileName)).catch(() => {
@@ -277,11 +283,6 @@ export class AssetStore {
   }
 
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(op)
-    this.queue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
+    return this.lock(op)
   }
 }

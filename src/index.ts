@@ -10,6 +10,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { AnimationsStore } from './host/animations'
 import { AssetStore } from './host/assets'
 import { ConfigStore } from './host/config'
+import { createWriteLock } from './host/storage'
 import { registerEditorPage } from './host/editor-page'
 import { PetsStore, petSliceFromConfig } from './host/pets'
 import { registerRoutes, type RoutesDeps } from './host/routes'
@@ -40,10 +41,16 @@ export function apply(ctx: Context) {
   // when even its copy fallback fails (see host/migrate.ts).
   migrateLegacyHome(dshHomePath('motion-pet'), dshHomePath('petween'))
   const root = dshHomePath('petween')
-  const animationsStore = new AnimationsStore({ animationsDir: join(root, 'animations') })
-  const petsStore = new PetsStore({ petsDir: join(root, 'pets') })
+  // B10: ONE write lock shared by every store — cross-store mutations (a
+  // config save vs. an asset delete's reference probe, a pet mirror write vs.
+  // an animation delete) can no longer interleave, closing the cross-store
+  // TOCTOU window the per-store chains left open.
+  const sharedWriteLock = createWriteLock()
+  const animationsStore = new AnimationsStore({ animationsDir: join(root, 'animations'), lock: sharedWriteLock })
+  const petsStore = new PetsStore({ petsDir: join(root, 'pets'), lock: sharedWriteLock })
   const configStore = new ConfigStore({
     configPath: join(root, 'config.json'),
+    lock: sharedWriteLock,
     animationLookup: (id) => animationsStore.kindOf(id),
     // Pet-preset mirror (V1.1): every config save re-writes the active
     // preset's slice, so editor changes to the current pet automatically
@@ -55,11 +62,13 @@ export function apply(ctx: Context) {
   const assetStore = new AssetStore({
     assetsDir: join(root, 'assets'),
     manifestPath: join(root, 'assets.json'),
+    lock: sharedWriteLock,
   })
 
   const deps: RoutesDeps = {
     loadConfig: () => configStore.load(),
-    updateConfig: (patch) => configStore.update(patch),
+    updateConfig: (patch, options) => configStore.update(patch, options),
+    configRevision: () => configStore.revision(),
     listAssets: () => assetStore.list(),
     saveAsset: (buffer, declaredMime) => assetStore.save(buffer, declaredMime),
     deleteAsset: (id, referencedBy) => assetStore.delete(id, referencedBy),

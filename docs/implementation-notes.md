@@ -734,3 +734,45 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 ### 验证
 
 主仓 47 文件 / **834 用例**全绿（较上一批 +8：A2 6 = 路由 3 / store 2 / UI 1；A5 新增 2，另有 1 例既有用例适配改写不计入），双工程 typecheck 通过；physics 8 文件 / **121 用例**全绿（+1），typecheck 通过。
+
+## Motion Pack 地基包：B2/B10/B3/B1/B6 + C1-A 与工具链（2026-08-28）
+
+用户拍板「开始动工」后的第一个地基批次；两仓推送后实施，主仓三个提交（f99828b 收口批 → bfb3a05 地基包 → 64c5cba C1-A+工具链）。
+
+### 共享写锁（B10 的骨架，host/storage.ts）
+
+`createWriteLock(): WriteLock`——极简 promise 链串行器。四个 store（ConfigStore/AssetStore/AnimationsStore/PetsStore）的 enqueue 全部改走 `options.lock ?? createWriteLock()`：默认私有链（行为与旧的私有 queue 完全一致），`src/index.ts` 与 routes 测试夹具传入**同一把锁**后，跨 store 变更（config 保存 vs 资产删除的引用探测、pet 镜像回写 vs 动画删除）不再交错。**死锁教训（已修）**：pet 镜像 onSaved 原本在 ConfigStore.update 的锁段内调用 `petsStore.saveSlice`（同一把锁排队等自己）——首轮全量测试 182s 超时定位后，把镜像移到锁段释放之后执行；镜像各自携带 slice 载荷、仍排队同锁，乱序完成最终收敛（镜像契约本就是 best-effort、config 权威）。
+
+### B10：引用校验对称 + 单读端点 + 锁内新鲜探测
+
+- poseField 的 assetId 加形状校验（16 hex，与 host 生成规则一致）：strict 记 issue（400 INVALID_CONFIG），repair 降级为无图（fallback 链接管）。
+- `GET /api/petween/pets/<id>`：`readPet` 早已有、路由补上（pack 导出单读）。
+- asset/animation DELETE 的 `referencedBy` 签名从同步改为 **`Promise<boolean>`**，routes 的探测闭包在 store 串行删除段内**现场读取**最新 config+pets，不再持有请求开始时的过期快照；配合共享锁，探测时刻磁盘必然静止。
+
+### B3：config 单调 revision（乐观并发，opt-in）
+
+- 计数持久化在旁车 `config.revision.json`（紧邻 config.json；缺省/损坏 → 0），`ConfigStore.update` 每次成功写后 +1；`revision()` 惰性读缓存。
+- `GET /config` 响应加 `revision`；`PUT /config` 接受可选头 `x-petween-expected-revision`：缺省/空 = last-writer-wins 完全不变；携带且过期 → `RevisionMismatchError` → 409 REVISION_MISMATCH（details.currentRevision 供重放）；畸形头 400。PUT 响应也带写后 revision（注意顺序：先 await update 再读 revision，否则并发读到旧值）。
+- client：`GetConfigResponse/PutConfigResponse` 增可选 `revision`；`patchConfig(patch, {expectedRevision})` 通管道，现有调用方未启用（行为零变化）。
+
+### B2：`GET /api/petween/meta`
+
+`{apiVersion: 1, configVersion, revision, features}`；features 只增不减清单（config/config.revision/assets/animations/pets/pets.draft/events.sse/meta），client `getMeta()`。
+
+### B1：版本 seam + 未知字段政策
+
+`ANIMATION_DEFINITION_VERSION = 1` 出口；validator 对**更高版本**给出专门错误（"written by a newer petween (this build reads version 1); upgrade the plugin or re-export…"）——PUT 400、loadAll 跳过并带同文案警告，绝不静默误读。未知字段政策定稿：**原样保留、永不解释**（v1 读取器往返新版本动画包不破坏其中新增字段），motion-format.md 顶层结构表下新增政策段。
+
+### B6：命名空间端到端放宽
+
+可存自定义动画 id：`user:` → **任意非 builtin 小写命名空间**（`[a-z][a-z0-9-]*`）。落点：`animation-definition.ts` 导出 `isCustomAnimationId()`（单一语法源）；AnimationsStore（存/读/exists/kindOf/文件名双射保持）；host validation 的挂载 id 校验；client `syncCustomAnimations` 与 overlay-session `syncCustoms` 的过滤改为「非 builtin 即自定义领地」。**伴生插件服务自身**新增显式 user: 限制（store 放宽后 `pack:x` 会漏过服务旧约束）——服务契约不变，companion 仍走 user:/user:<pack>-。编辑器手作动画默认仍是 user:。
+
+### C1-A + 工程配套（C1 的第一段）
+
+- `client/overlay/session-surface.ts`：全部共享契约类型搬家 + 结构化 `PetSessionSurface` 接口（服务不再 import OverlaySession 类——静态环消）+ `fanOutSafely` 单一实现（原先 session/service 各持一份私有拷贝）。extension-service re-export 类型保持公共导入点不变。
+- `pnpm test:coverage`（@vitest/coverage-v8，report-only；基线 **90.5% statements / 85.4% branches / 88.6% functions / 94.0% lines**，coverage/ 已入 .gitignore）与 `pnpm run lint`（oxlint 脚手架；存量 10 警告 0 错误，未清）。
+- **C1 剩余（B/C 段）显式留待下一轮**：ExtensionSurface 类抽取（playExternal/flash*/driver/五组订阅/探针 + 外部实例/外部 pose/flash 台账/点击 hover 记账；注意 director⇄surface 构造环用 bind 解）与 overlay/preview 双会话 ~100-120 行重复体并入 session-core。拆分主体完成前不开 Motion Pack 本体。
+
+### 验证
+
+主仓 47 文件 / **843 用例**全绿（较上批 +9：meta 1 / revision 3 / pose 形状 1 / GET pet 1 / B1 2 / B6 2），双工程 typecheck 通过；physics 零改动（121 维持全绿）。

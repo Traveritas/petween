@@ -12,24 +12,24 @@
 
 ---
 
-## 0. 速览（2026-08-27）
+## 0. 速览（2026-08-28）
 
 | 优先级 | 条目 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| 1 | B1+B6+B2+B3+B10 | Motion Pack / 对外开放前的 API 地基包 | 【前置】 |
-| 2 | OverlaySession 拆分 + 双会话去重 | ExtensionSurface 抽取与 session 公共层 | 【前置】 |
+| 1 | C1-B/C ExtensionSurface 拆分 + 双会话去重 | overlay-session 仍 ~1160 行；环已破、工具链已就位 | 【前置·进行中】 |
+| 2 | Motion Pack 导入导出本体 | 格式/路由/命名空间/迁移 seam 地基已全部就位 | 【下一步】 |
 | 3 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
 | 4 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
 
-> 2026-08-27 晚收口（两批）：原【近期】两项已离场——E1（clamp 尺寸
-> 一致性）经核实已于 f84bc50 随 visibleSize 统一落地（含专项用例）；F1
-> （外部播放 reduced-motion）经核实**前提不成立**（编译层坍缩自 v1.0.0
-> 覆盖全部引擎播放路径），本轮以端到端用例锁定后关闭；连带 physics 仓
-> C4（快照镜像升级）已在 418a6e0 落地。三个【待拍板】项同晚全部拍板并
-> 落地：A2 选方案 A（`from:'draft'` 草稿另存为新宠物，不碰活跃宠物）、
-> A5 选 (a)（TTL 内且更新的 error 短暂穿透 waiting，自恢复）、E3 unmount
-> flush（卡片已是自动保存，只补防抖窗口内关闭的 flush）。npm publish 已
-> 拍板「暂不发布、GitHub link 分发」（§1）。以上详见 §9 存档。
+> 2026-08-27 晚收口（两批）：原【近期】两项已离场——E1 经核实已于 f84bc50
+> 随 visibleSize 统一落地；F1 经核实**前提不成立**（编译层坍缩自 v1.0.0
+> 覆盖全部引擎播放路径），端到端用例锁定后关闭；C4 已在 physics 418a6e0
+> 落地。A2/A5/E3 三个【待拍板】项同晚拍板并落地（§9 存档）。npm publish
+> 已拍板「暂不发布、GitHub link 分发」（§1）。
+> **2026-08-28 Motion Pack 地基包落地（B2/B10/B3/B1/B6 + C1-A/工具链）**，
+> 全部移入 §9 存档；C1 的拆分主体（ExtensionSurface 抽取 + 双会话去重）
+> 尚未动工——环已破（session-surface 模块）、coverage/lint 基线已建，是
+> 下一轮的第一件事，随后即可开 Motion Pack 本体。
 
 ---
 
@@ -66,59 +66,26 @@
 
 ---
 
-## 3. Motion Pack（V1.1 P2）/ 对外发布的前置地基【前置】
+## 3. Motion Pack 前置（2026-08-28 地基已落，剩 C1 拆分主体）
 
-> 做Motion Pack 导入导出、或 npm publish 开放第三方客户端之前，建议按序
-> 先落这一组，否则三个入口（pack 导入、host 加载、client 同步）各自为政。
+### C1. OverlaySession 拆分与双会话公共层去重【A 段 + 工具链已落地，B/C 段待做】
 
-### B1. AnimationDefinition 无版本迁移 seam
-
-- 现状：`version: 1` 硬门，无 `upgradeAnimationDefinition()`；未知字段静默
-  容忍并原样持久化。config 侧有集中 migration 入口，动画侧没有。
-- 建议：补集中升级/拒绝 seam 供三入口共用，写下未知字段政策。
-
-### B6. pack 命名空间与 id 重映射
-
-- 现状：registry 支持任意小写命名空间，但 host store / validation / client
-  sync 三处硬编码 `user:`；config 与 pet preset 中的动画引用是全局绝对 id，
-  导入撞车/重复导入没有「改写 id + 同步改写引用」机制，dangling 静默回落。
-- 建议：① 可持久化命名空间白名单（非 builtin）；② pack 格式把「导入 =
-  id 重映射 + 引用改写」列为必备能力。远期关联：附属资产进主库
-  （registerAsset）也依赖此命名空间设计。
-
-### B2. HTTP API 无版本化与能力发现
-
-- 现状：全部路由挂无版本的 `/api/petween/*`；旧 host 面对新客户端只能逐
-  端点 404 试错。
-- 建议：加 `GET /api/petween/meta`（apiVersion / configVersion / features）；
-  约定「字段只加不改、删字段升 v2 路径」。
-
-### B3. 无乐观并发控制
-
-- 现状：多 writer（编辑器/拖动/未来 CLI）靠字段分区约定避免冲突，PUT 无
-  revision/ETag；两个客户端编辑同一 section 时 last-writer-wins 且无冲突信号。
-- 建议：config GET/PUT 带单调 revision，PUT 可选携带期望值，不匹配 409/412。
-
-### B10. 引用校验不对称 + 删除保护 TOCTOU
-
-- 现状：`pose.assetId` 只要是 string 就入库（animationId 有存在性/kind 校验，
-  assetId 没有）；跨 store 删除引用检查在锁外快照，并发窗口可产生悬空引用
-  （运行时有 fallback 兜底）。
-- 建议：`poseField` 加形状校验（16 hex），可选注入 assetExists；跨 store 检查
-  移入同一把锁，或文档声明 409 尽力而为。关联 B11：`GET /pets/<id>` 单读
-  端点缺失（`readPet` 已有但无路由）——pack 导出会需要。
-
-### C1. OverlaySession 拆分与双会话公共层去重【2026-08-27 五维评审新增】
-
-- 现状：overlay-session.ts 已 1179 行呈上帝类趋势（config 热应用/拖拽租约/
-  flash 台账/指针流/扩展服务面全在一类）；extension-service ⇄ overlay-session
-  还有一个 type-only 静态环。overlay-session 与 preview-session 存在约 100~
-  120 行近逐行重复（refreshCurrentPose/syncCustoms/boot 预载/updateConfig 拷贝/
-  applyReducedMotion）。
-- 建议：先抽 `ExtensionSurface`（playExternal/flash*/driver/五组订阅，
-  fanOutSafely 单一实现），再把双会话重复体并入共享 session-core；顺手以
-  session-bridge 小模块消静态环。Motion Pack（B1/B6 地基包）前一并落。
-- 工程配套：引入 @vitest/coverage-v8 度量基线与 lint 脚手架也在这一窗口做。
+- **已落（2026-08-28）**：`client/overlay/session-surface.ts`——全部共享
+  契约类型搬家 + 结构化 `PetSessionSurface` 接口（服务不再 import
+  OverlaySession 类，extension-service ⇄ overlay-session 静态环已消）+
+  `fanOutSafely` 单一实现；工程配套 `pnpm test:coverage`（v8 provider，
+  基线 90.5% statements / 85.4% branches，report-only 无阈值）与
+  `pnpm run lint`（oxlint 脚手架，存量 10 警告 0 错误）。
+- **待做（B 段）**：把 playExternal/flash*/createPositionDriver/五组订阅/
+  探针（isPlaying/listAnimations/resyncAnimations）+ 外部实例/外部 pose/
+  flash 台账/点击与 hover 记账抽成 `ExtensionSurface` 类，session 以窄
+  host 接口注入（注意：director 构造需要 pose-hold seam 与 onPlayback，
+  surface 需要 director 做播放——构造顺序用 bind/惰性解决）。
+- **待做（C 段）**：overlay-session 与 preview-session 约 100~120 行近逐行
+  重复（refreshCurrentPose/syncCustoms/boot 预载/updateConfig 拷贝/
+  applyReducedMotion）并入共享 session-core。
+- 完成后即可开 Motion Pack 本体（导入导出 + id 重映射 + 引用改写；格式
+  地基 B1/B6 与 API 地基 B2/B3/B10 均已就位）。
 
 ---
 
@@ -278,6 +245,33 @@
 
 ## 9. 已解决存档（从本清单移除，详见 implementation-notes 对应日期条目）
 
+- **B2** HTTP API 无能力发现 → 2026-08-28 落地 `GET /api/petween/meta`
+  （apiVersion=1 / configVersion / revision / 只增不减 features 清单）+
+  client `getMeta()`。旧客户端一次探测替代逐端点 404 试错。
+- **B10** 引用校验不对称 + 删除保护 TOCTOU → 2026-08-28 落地：pose
+  assetId 形状校验（16 hex；strict 400 / repair 降级无图走 fallback 链）；
+  `GET /pets/<id>` 单读端点（pack 导出用）；asset/animation DELETE 的引用
+  探测改为**异步**且在 store 串行删除段内**新鲜读取**，四 store
+  （config/assets/animations/pets）共用一把 `WriteLock`（`createWriteLock`，
+  host/storage.ts）——跨 store 变更不再交错，TOCTOU 关闭。注意：pet 镜像
+  onSaved 刻意移到锁段外执行（锁内回调 saveSlice 会等自己死锁）；镜像
+  各自带 slice 载荷排队同锁，乱序完成仍收敛（镜像本就是 best-effort）。
+- **B3** 无乐观并发 → 2026-08-28 落地：单调 revision 记在旁车文件
+  `config.revision.json`（config schema 保持 client 纯净），GET/PUT /config
+  响应携带；PUT 可选 `x-petween-expected-revision` 头（缺省保持 last-
+  writer-wins 完全兼容；过期 → 409 REVISION_MISMATCH 带 currentRevision；
+  畸形头 400）；client `patchConfig(patch, {expectedRevision})` 已通管道
+  （现有调用方未启用）。
+- **B1** AnimationDefinition 无版本 seam → 2026-08-28 落地：
+  `ANIMATION_DEFINITION_VERSION` 出口；更高版本定义**明确拒绝**（PUT 400
+  「written by a newer petween」/ loadAll 跳过并同文案警告，绝不静默误读）；
+  未知字段政策定稿为**原样保留、永不解释**（v1 读取器往返新包不破坏新增
+  字段），写入 motion-format.md 与代码注释。
+- **B6** 命名空间焊死 user: → 2026-08-28 落地：可存自定义 id 从 `user:`
+  放宽到**任意非 builtin 小写命名空间**端到端（store 存取/校验挂载/client
+  同步，`isCustomAnimationId()` 单一语法源；文件名 `<ns>_<name>.json` 保持
+  双射）；伴生插件服务**自身**仍限定 user:/user:<pack>-（能力不做策略）。
+  pack 导入的「id 重映射 + 引用改写」机制留待 Motion Pack 本体。
 - **A2** 「另存为新宠物」无法携带未保存修改 → 2026-08-27 晚拍板方案 A 并
   落地：`POST /api/petween/pets` 新增 `from:'draft'`（请求携带 pet slice，
   经 `validateConfigPatch` 以默认 base 严格校验——动画引用含 kind 检查，

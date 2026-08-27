@@ -16,20 +16,19 @@
 
 | 优先级 | 条目 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| 1 | C1-B/C ExtensionSurface 拆分 + 双会话去重 | overlay-session 仍 ~1160 行；环已破、工具链已就位 | 【前置·进行中】 |
-| 2 | Motion Pack 导入导出本体 | 格式/路由/命名空间/迁移 seam 地基已全部就位 | 【下一步】 |
-| 3 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
-| 4 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
+| 1 | Motion Pack 导入导出本体 | 格式/路由/命名空间/迁移 seam/会话拆分地基已全部就位 | 【进行中】 |
+| 2 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
+| 3 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
 
 > 2026-08-27 晚收口（两批）：原【近期】两项已离场——E1 经核实已于 f84bc50
 > 随 visibleSize 统一落地；F1 经核实**前提不成立**（编译层坍缩自 v1.0.0
 > 覆盖全部引擎播放路径），端到端用例锁定后关闭；C4 已在 physics 418a6e0
 > 落地。A2/A5/E3 三个【待拍板】项同晚拍板并落地（§9 存档）。npm publish
 > 已拍板「暂不发布、GitHub link 分发」（§1）。
-> **2026-08-28 Motion Pack 地基包落地（B2/B10/B3/B1/B6 + C1-A/工具链）**，
-> 全部移入 §9 存档；C1 的拆分主体（ExtensionSurface 抽取 + 双会话去重）
-> 尚未动工——环已破（session-surface 模块）、coverage/lint 基线已建，是
-> 下一轮的第一件事，随后即可开 Motion Pack 本体。
+> **2026-08-28 Motion Pack 地基包（B2/B10/B3/B1/B6 + C1-A/工具链）落地并
+> 经外部评审跟进加固**（§9 存档）；**C1-B/C 会话拆分主体同日完成**（§9
+> 存档）——overlay-session 1160→624 行，扩展面独立成 ExtensionSurface，
+> 双会话共享 session-core。Motion Pack 本体开工。
 
 ---
 
@@ -66,26 +65,12 @@
 
 ---
 
-## 3. Motion Pack 前置（2026-08-28 地基已落，剩 C1 拆分主体）
+## 3. Motion Pack 本体（进行中）
 
-### C1. OverlaySession 拆分与双会话公共层去重【A 段 + 工具链已落地，B/C 段待做】
-
-- **已落（2026-08-28）**：`client/overlay/session-surface.ts`——全部共享
-  契约类型搬家 + 结构化 `PetSessionSurface` 接口（服务不再 import
-  OverlaySession 类，extension-service ⇄ overlay-session 静态环已消）+
-  `fanOutSafely` 单一实现；工程配套 `pnpm test:coverage`（v8 provider，
-  基线 90.5% statements / 85.4% branches，report-only 无阈值）与
-  `pnpm run lint`（oxlint 脚手架，存量 10 警告 0 错误）。
-- **待做（B 段）**：把 playExternal/flash*/createPositionDriver/五组订阅/
-  探针（isPlaying/listAnimations/resyncAnimations）+ 外部实例/外部 pose/
-  flash 台账/点击与 hover 记账抽成 `ExtensionSurface` 类，session 以窄
-  host 接口注入（注意：director 构造需要 pose-hold seam 与 onPlayback，
-  surface 需要 director 做播放——构造顺序用 bind/惰性解决）。
-- **待做（C 段）**：overlay-session 与 preview-session 约 100~120 行近逐行
-  重复（refreshCurrentPose/syncCustoms/boot 预载/updateConfig 拷贝/
-  applyReducedMotion）并入共享 session-core。
-- 完成后即可开 Motion Pack 本体（导入导出 + id 重映射 + 引用改写；格式
-  地基 B1/B6 与 API 地基 B2/B3/B10 均已就位）。
+> 地基全部就位：格式版本 seam（B1）、命名空间（B6）、meta/revision（B2/
+> B3）、单读端点与共享锁（B10）、会话拆分（C1 全段落定）。本体开工时的
+> 拍板点：导入撞车的默认策略（改写 id vs 拒绝）、编辑器入口形态、要不要
+> 「一键应用到所有状态」。
 
 ---
 
@@ -245,6 +230,20 @@
 
 ## 9. 已解决存档（从本清单移除，详见 implementation-notes 对应日期条目）
 
+- **C1** OverlaySession 拆分与双会话去重 → 2026-08-28 全段落定。**A 段**
+  （评审前）：`session-surface.ts` 类型搬家破静态环 + `fanOutSafely` 单一
+  实现 + coverage/lint 工具链（基线 90.5%/85.4%）。**B 段**：扩展面整体
+  迁入 `overlay/extension-surface.ts`（五组订阅、外部播放池、外部 pose、
+  flash 台账、驱动租约、点击/悬停记账、快照组装、全部探针）；OverlaySession
+  以结构化 `ExtensionSurfaceHost` 注入并保留逐字委托——公共 API 与全部
+  844 用例零改动全绿；构造顺序解法 = surface 先建（只做 stage 侧接线）、
+  director 构造时 seam 指向 surface、`attachDirector` 二段挂接目标流。
+  overlay-session 1160→624 行。**C 段**：`client/session-core.ts` 收拢双会
+  话共享流（adoptConfigFields / collectBootPoses / sameRestingPose /
+  effectiveReducedMotion / refreshTargetPose）+ `reconcileCustomAnimations`
+  变更检测包装（顺手修掉 preview updateCustoms 残留的 B6 前 user: 过滤）。
+  验证：844 全绿零改动、typecheck 干净、lint 维持基线 10 警告、coverage
+  90.61% statements（不低于基线）。
 - **B2** HTTP API 无能力发现 → 2026-08-28 落地 `GET /api/petween/meta`
   （apiVersion=1 / configVersion / revision / 只增不减 features 清单）+
   client `getMeta()`。旧客户端一次探测替代逐端点 404 试错。

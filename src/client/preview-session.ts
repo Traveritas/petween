@@ -20,9 +20,16 @@ import { createBuiltinRegistry, type AnimationRegistry } from '../motion/animati
 import type { TimelineInstance } from '../motion/animation-handle'
 import { MotionDirector } from '../motion/motion-director'
 import type { PlayOptions } from '../motion/timeline-engine'
-import { DRAFT_ANIMATION_ID, syncCustomAnimations } from './custom-animations'
+import { DRAFT_ANIMATION_ID, reconcileCustomAnimations } from './custom-animations'
 import { ManualStateSource } from './manual-state-source'
 import type { PetStage } from './overlay/pet-stage'
+import {
+  adoptConfigFields,
+  collectBootPoses,
+  effectiveReducedMotion,
+  refreshTargetPose,
+  sameRestingPose,
+} from './session-core'
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
@@ -124,17 +131,10 @@ export class PreviewSession {
    */
   async updateConfig(config: PetweenConfig, assets: Record<string, AssetMeta>): Promise<void> {
     if (this.disposed) return
-    const snapshot = structuredClone(config)
     const previousStates = JSON.stringify(this.config.states)
     const previousReducedMotion = this.config.global.reducedMotion
 
-    this.config.enabled = snapshot.enabled
-    this.config.global = snapshot.global
-    this.config.poses = snapshot.poses
-    this.config.states = snapshot.states
-    this.config.overlay = snapshot.overlay
-    this.config.advanced = snapshot.advanced
-    this.config.interactions = snapshot.interactions
+    adoptConfigFields(this.config, config)
     this.assets = { ...assets }
     this.resolvePose = createPoseResolver(this.config.poses, this.assets)
     this.stage.setParticlesEnabled(this.config.advanced.particles)
@@ -157,16 +157,7 @@ export class PreviewSession {
 
   private async boot(): Promise<void> {
     if (this.disposed) return
-    const seen = new Set<string>()
-    const poses: ResolvedPose[] = []
-    for (const key of POSE_KEYS) {
-      const pose = this.resolvePose(key)
-      if (pose !== null && !seen.has(pose.asset.id)) {
-        seen.add(pose.asset.id)
-        poses.push(pose)
-      }
-    }
-    await this.stage.preload(poses)
+    await this.stage.preload(collectBootPoses((key) => this.resolvePose(key)))
     if (this.disposed) return
     if (this.resolvePose(this.config.states.idle.pose) === null) {
       return // §2.1: no image at all → nothing to show
@@ -192,62 +183,29 @@ export class PreviewSession {
     const next = this.resolvePose(this.config.states.idle.pose)
     if (next === null) return
     const current = this.stage.currentPose
-    if (
-      current !== null &&
-      next.asset.url === current.asset.url &&
-      next.anchor.x === current.anchor.x &&
-      next.anchor.y === current.anchor.y &&
-      next.zoom === current.zoom
-    ) {
-      return
-    }
+    if (current !== null && sameRestingPose(next, current)) return
     await this.stage.preload([next])
     if (!this.disposed) this.stage.swapPose(next)
   }
 
   /**
    * Re-resolve the current target's pose after a config edit; swap if it
-   * changed. Resolution follows the DIRECTOR's target, not the slot on stage:
-   * a pose shown through fallback carries the fallback SOURCE key on stage,
-   * while the target keeps the requested key — so importing that pose's image
-   * hot-swaps it without another state click.
-   *
-   * A transition in flight still pose-swaps the values resolved at its start,
-   * so the refresh first waits for it to settle and then re-resolves against
-   * the edited config. A transition that started after the edit already
-   * resolved fresh values; the refresh leaves the stage to it.
+   * changed (session-core shared flow — see refreshTargetPose).
    */
   private async refreshCurrentPose(): Promise<void> {
     const seq = ++this.poseRefreshSeq
-    if (this.director.transitionInFlight) {
-      await this.director.whenSettled()
-      if (this.disposed || seq !== this.poseRefreshSeq) return
-      if (this.director.transitionInFlight) return // a newer transition owns the stage
-    }
-    const target = this.director.currentTarget
-    if (target === null) return
-    const current = this.stage.currentPose
-    if (current === null) return
-    const next = this.resolvePose(target.poseKey)
-    if (next === null) return // every image unimported; the editor shows its empty state
-    const unchanged =
-      next.asset.url === current.asset.url &&
-      next.anchor.x === current.anchor.x &&
-      next.anchor.y === current.anchor.y &&
-      next.zoom === current.zoom
-    if (unchanged) return
-    await this.stage.preload([next])
-    if (this.disposed || seq !== this.poseRefreshSeq) return // superseded by a newer edit
-    this.stage.swapPose(next)
-    this.director.noteExternalPose(next.asset.url)
+    await refreshTargetPose({
+      stage: this.stage,
+      director: this.director,
+      resolvePose: (poseKey) => this.resolvePose(poseKey),
+      isDisposed: () => this.disposed,
+      isSuperseded: () => seq !== this.poseRefreshSeq,
+    })
   }
 
   /** §22: push the effective reduced-motion flag into stage + ambient engine. */
   applyReducedMotion(): void {
-    const setting = this.config.global.reducedMotion
-    const system = this.mediaQuery?.matches ?? false
-    const effective = setting === 'always' || (setting === 'system' && system)
-    this.stage.setReducedMotion(effective)
+    this.stage.setReducedMotion(effectiveReducedMotion(this.config, this.mediaQuery?.matches ?? false))
     // Re-evaluate the ambient profile: under reduce, ambient stays off.
     if (!this.auditionOnly) this.director.refreshAmbient()
   }
@@ -310,17 +268,12 @@ export class PreviewSession {
   }
 
   /**
-   * V1.1: reconcile the registry's user:* entries with the latest customs
+   * V1.1: reconcile the registry's custom entries with the latest customs
    * (editor save/clone/delete). Failures are logged, never fatal.
    */
   updateCustoms(customs: AnimationDefinition[]): void {
     if (this.disposed) return
-    const before = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
-    for (const warning of syncCustomAnimations(this.registry, customs)) {
-      console.warn(`petween: ${warning}`)
-    }
-    const after = JSON.stringify(this.registry.list().filter((definition) => definition.id.startsWith('user:')))
-    if (before !== after) this.director.refreshAmbient()
+    if (reconcileCustomAnimations(this.registry, customs)) this.director.refreshAmbient()
   }
 
   /**

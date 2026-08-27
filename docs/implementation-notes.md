@@ -789,3 +789,25 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 ### 验证
 
 主仓 47 文件 / **844 用例**全绿（+1：共享锁交错；namespace 断言并入既有用例、'0x10' 等为既有用例扩展），双工程 typecheck 通过；physics 零改动。
+
+## C1-B/C 会话拆分主体（2026-08-28 第三批）
+
+评审跟进批之后的 C1 收口；用户拍板「做完提交后开 Motion Pack 本体」。
+
+### C1-B：ExtensionSurface 抽取
+
+- 新 `client/overlay/extension-surface.ts`（764 行）：扩展面全部状态与行为自 OverlaySession 迁入——五组订阅集、externalInstances 播放池、externalPoses 表、flash 台账（flashTimer/flashHold）、activeDriver 租约、点击 detail 与 hover 合帧记账、lastSeenTarget、快照组装（getStageSnapshot）、subscribe*/notify*、flashPose/flashAsset/flashResolvedPose、registerPoses/unregisterPoses、resolvePoseAny、createPositionDriver、playExternal、isPlaying/listAnimations/resyncAnimations、stage pose-swap 桥与 hover 监听的挂/摘。
+- `ExtensionSurfaceHost` 结构化接口（stage/registry/hub/director/drag + isDisposed/isStarted/resolveBuiltinPose/positionPx/currentScale/applyExternalPosition/cancelPendingPositionSave/persistPositionNow/awaitPendingUpdate）；OverlaySession 实现之（stage/hub 由 private 放宽为 public readonly，注明「host seam 专用，非消费方 API」）。
+- **构造顺序解法**：surface 先建（只做 stage 侧接线，无 director 依赖）→ director 构造（resolvePose/getExternalPoseHold/onPlayback 三个 seam 指向 surface）→ `surface.attachDirector(director)` 二段挂接目标流。surface 对 director 的读取全部惰性（host 字段），构造窗口内无人调用播放面。
+- OverlaySession 保留逐字委托（petween/client 窗口形状冻结），dispose 顺序保持 L2 契约：drag.dispose()（'end' 相位经 surface 广播时订阅集仍活）→ surface.dispose() → 会话其余拆卸。
+- **保真判据**：844 用例零改动全绿 + typecheck 干净。
+
+### C1-C：session-core 去重
+
+- 新 `client/session-core.ts`（97 行）纯函数集：`adoptConfigFields`（§16.2 七字段就地拷贝）、`collectBootPoses`（§16.3 预载收集去重）、`sameRestingPose`（静止相等）、`effectiveReducedMotion`（§22）、`refreshTargetPose`（编辑后 pose 刷新全流程：等在途 transition 落定 → 按 director target 重解析 → 静止比较 → 预载换图；seq 守卫经 isSuperseded 注入）。
+- `custom-animations.ts` 增 `reconcileCustomAnimations`（sync + 变更检测一体，非 builtin 全命名空间）；overlay.syncCustoms 与 preview.updateCustoms 共用——**顺手修掉 preview updateCustoms 残留的 B6 前 `user:` 过滤**（pack 命名空间 customs 的变更检测此前会漏报 refreshAmbient）。
+- 行数：overlay-session 1160→624、preview-session 380→360；新增 extension-surface 764 + session-surface 192 + session-core 97。
+
+### 验证
+
+844 用例零改动全绿；typecheck 干净；lint 维持基线 10 警告（拆分自身零新增）；coverage 90.61% statements / 85.41% branches（不低于 90.47/85.39 基线）。

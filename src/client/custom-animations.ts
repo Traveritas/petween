@@ -69,3 +69,19 @@ export function syncCustomAnimations(registry: AnimationRegistry, customs: Anima
   }
   return warnings
 }
+
+/**
+ * Reconcile + change detection (the sessions' shared wrapper, C1-C): warns
+ * through the sync's own warnings and resolves whether the custom SET
+ * actually changed — the signal both sessions use to decide whether ambient
+ * needs a restart. Change detection covers every non-builtin namespace (B6).
+ */
+export function reconcileCustomAnimations(registry: AnimationRegistry, customs: AnimationDefinition[]): boolean {
+  const customIds = () =>
+    JSON.stringify(registry.list().filter((definition) => !definition.id.startsWith('builtin:')))
+  const before = customIds()
+  for (const warning of syncCustomAnimations(registry, customs)) {
+    console.warn(`petween: ${warning}`)
+  }
+  return customIds() !== before
+}

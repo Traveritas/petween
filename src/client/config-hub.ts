@@ -8,9 +8,12 @@
  * - publish(): a local save (editor manual save, overlay drag persist) broadcasts
  *   its saved config immediately — the other surface updates without waiting
  *   for a poll.
- * - startPolling(): 3s interval catches external changes (another tab, CLI).
- *   Polling stops while document.hidden (§23) and refetches immediately when
- *   the page returns; a poll only publishes on an actual JSON diff.
+ * - startPolling(owner?): 3s interval catches external changes (another tab,
+ *   CLI). Polling runs while at least one surface holds a claim — passing a
+ *   stable owner object makes stopPolling release just that claim instead of
+ *   stopping the feed for everyone. Polling stops while document.hidden (§23)
+ *   and refetches immediately when the page returns; a poll only publishes on
+ *   an actual JSON diff.
  *
  * Pure TS, no React/DSH. The default singleton {@link configHub} is what the
  * production slots share; tests construct their own with an injected fetch.
@@ -43,6 +46,13 @@ export interface ConfigHubOptions {
 
 const DEFAULT_POLL_INTERVAL_MS = 3000
 
+/**
+ * Claim token for owner-less startPolling()/stopPolling() calls. Real
+ * surfaces pass a stable instance object so an unmount only releases its own
+ * claim instead of killing the shared feed for everyone.
+ */
+const ANONYMOUS_POLL_OWNER: object = { anonymous: true }
+
 export class ConfigHub {
   private readonly fetchConfig: () => Promise<GetConfigResponse>
   private readonly fetchAnimations: () => Promise<GetAnimationsResponse>
@@ -56,6 +66,8 @@ export class ConfigHub {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   /** Bumped by publish(); a poll started before a local save drops its result. */
   private publishGeneration = 0
+  /** Polling runs while at least one surface holds a claim (§23 hidden pause still applies). */
+  private readonly pollOwners = new Set<object>()
 
   constructor(options: ConfigHubOptions = {}) {
     this.fetchConfig = options.fetchConfig ?? httpGetConfig
@@ -114,7 +126,13 @@ export class ConfigHub {
     this.emit()
   }
 
-  startPolling(): void {
+  /**
+   * Registers a polling claim. Pass a stable owner object (component ref,
+   * store) so stopPolling(owner) releases exactly that claim — the feed keeps
+   * running while any other owner remains.
+   */
+  startPolling(owner?: object): void {
+    this.pollOwners.add(owner ?? ANONYMOUS_POLL_OWNER)
     if (this.polling) return
     this.polling = true
     if (typeof document !== 'undefined') {
@@ -124,7 +142,13 @@ export class ConfigHub {
     this.scheduleNextPoll()
   }
 
-  stopPolling(): void {
+  /**
+   * Releases one polling claim; polling actually stops when the last owner
+   * leaves. The owner-less form releases the anonymous claim.
+   */
+  stopPolling(owner?: object): void {
+    this.pollOwners.delete(owner ?? ANONYMOUS_POLL_OWNER)
+    if (this.pollOwners.size > 0) return // another surface still needs the feed
     this.polling = false
     if (this.pollTimer !== null) {
       clearTimeout(this.pollTimer)
@@ -137,6 +161,10 @@ export class ConfigHub {
 
   /** One poll tick; publishes only when the server JSON actually differs. */
   async poll(): Promise<void> {
+    // The initial load() owns the first snapshot: a poll racing it (e.g. the
+    // tab becoming visible before load resolves) would emit an unshared
+    // snapshot that load's later write-over never broadcasts.
+    if (this.snapshot === null) return
     const generation = this.publishGeneration
     try {
       const [{ config, assets }, { customs, warnings }] = await Promise.all([this.fetchConfig(), this.fetchAnimations()])

@@ -2,8 +2,9 @@
 /**
  * PetweenCard tests: the settings.section entry card — status summary
  * (imported poses · enabled state), the enable toggle and scale slider saving
- * through the editor store's explicit-save discipline, the no-image hint,
- * and the link to the standalone full-page editor.
+ * through the editor store's explicit-save discipline, the save prompt on
+ * dialog close (unmount with a dirty draft), the no-image hint, and the link
+ * to the standalone full-page editor.
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -162,5 +163,36 @@ describe('PetweenCard', () => {
     await act(async () => save.click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).global?.scale).toBe(1.5)
+  })
+
+  it('closing with unsaved edits warns (alert) and discards — never fires a save', async () => {
+    const { api, mocks } = makeApi(true)
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
+    await render(api)
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    await act(async () => {
+      root.unmount()
+    })
+    mounted = false
+    expect(alertSpy).toHaveBeenCalledTimes(1)
+    expect(alertSpy.mock.calls[0][0]).toContain('未保存的修改')
+    // Closing never saves: a post-dispose PUT could fail with nobody left to
+    // see it — the discard notice is the honest contract.
+    expect(mocks.patchConfig).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
+  })
+
+  it('a clean card unmounts without any prompt', async () => {
+    const { api } = makeApi(true)
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
+    await render(api)
+    await act(async () => {
+      root.unmount()
+    })
+    mounted = false
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
   })
 })

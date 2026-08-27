@@ -11,7 +11,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type JSX } from '
 import { createRoot } from 'react-dom/client'
 import { createDefaultPetweenConfig } from '../core/defaults'
 import type { AssetMeta, PetweenConfig, PoseKey, TransitionPreset } from '../core/types'
-import { POSE_KEYS } from '../core/types'
+import { POSE_KEYS, TRANSITION_DURATION_LIMITS, TRANSITION_STRENGTH_LIMITS } from '../core/types'
 import { assertValidAnimationDefinition } from '../motion/animation-definition'
 import { ManualStateSource } from '../client/manual-state-source'
 import { PetRenderer } from '../client/overlay/PetRenderer'
@@ -192,9 +192,9 @@ const TRANSITION_PRESETS: readonly TransitionPreset[] = [
   'deflate',
 ]
 
-/** Same wording as the editor's 过渡动画 select (raw preset id stays the value). */
+/** Mirrors the editor's TransitionEditor preset labels (TRANSITION_PRESET_OPTIONS). */
 const PRESET_LABELS: Record<TransitionPreset, string> = {
-  global: '跟随全局',
+  global: '继承全局',
   none: '无',
   soft: '柔和 Soft',
   'comic-pop': '漫画弹出 Comic Pop',
@@ -371,8 +371,8 @@ function App(): JSX.Element {
           {inherited ? <p className="hint">继承下方全局过渡</p> : null}
           <Slider
             label="强度"
-            min={0}
-            max={1.8}
+            min={TRANSITION_STRENGTH_LIMITS.min}
+            max={TRANSITION_STRENGTH_LIMITS.max}
             step={0.05}
             value={inherited ? globalTransition.strength : appearance.enter.strength}
             disabled={inherited}
@@ -383,8 +383,8 @@ function App(): JSX.Element {
           />
           <Slider
             label="时长"
-            min={80}
-            max={650}
+            min={TRANSITION_DURATION_LIMITS.min}
+            max={TRANSITION_DURATION_LIMITS.max}
             step={10}
             unit="ms"
             value={inherited ? globalTransition.durationMs : appearance.enter.durationMs}
@@ -414,8 +414,8 @@ function App(): JSX.Element {
           </label>
           <Slider
             label="强度"
-            min={0}
-            max={1.8}
+            min={TRANSITION_STRENGTH_LIMITS.min}
+            max={TRANSITION_STRENGTH_LIMITS.max}
             step={0.05}
             value={globalTransition.strength}
             onChange={(value) => {
@@ -425,8 +425,8 @@ function App(): JSX.Element {
           />
           <Slider
             label="时长"
-            min={80}
-            max={650}
+            min={TRANSITION_DURATION_LIMITS.min}
+            max={TRANSITION_DURATION_LIMITS.max}
             step={10}
             unit="ms"
             value={globalTransition.durationMs}

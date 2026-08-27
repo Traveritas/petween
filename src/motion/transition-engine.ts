@@ -20,6 +20,13 @@ export interface EnterRequest {
   definitionId: string
   params?: { strength?: number }
   durationMs?: number
+  /**
+   * Fires the moment the pose-swap event actually lands on the stage (past
+   * the generation guard). Callers that keep a "what is on stage" ledger must
+   * record at swap time, not completion: a transition interrupted during its
+   * post segment has already changed the stage image.
+   */
+  onSwap?: () => void
 }
 
 export class TransitionEngine {
@@ -50,6 +57,7 @@ export class TransitionEngine {
         if (generation !== this.generation) return
         if (event.type === 'pose-swap') {
           this.stage.swapPose(request.pose)
+          request.onSwap?.()
         } else if (event.type === 'particle') {
           this.stage.emitParticle?.(event.effect)
         }

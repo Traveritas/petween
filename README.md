@@ -49,6 +49,8 @@ dsh plugin --profile web remove petween     # 卸载
 
 **从 dsh-motion-pet ≤ 1.1.0 升级**：首次启动会自动把 `$DSH_HOME/motion-pet/` 迁移为 `$DSH_HOME/petween/`（目录重命名；跨盘/被占用导致重命名失败时改为复制，并保留旧目录作备份）。
 
+**附属插件配套升级**：1.2.0 起 cordis 服务名由 `motion-pet` / `motion-pet/client` 更名为 `petween` / `petween/client`，且不提供旧名 alias。附属插件必须改用新服务名（`petween-physics` 需 ≥ 0.2.0）；仍在注入旧服务名的旧版附属插件不会加载、也不会报错，请一并升级。
+
 ## 使用
 
 打开 DSH Web UI → 设置 → **Petween** 卡片：可快速启用/停用宠物、调整整体缩放，并查看图片导入进度。点击卡片上的「**打开完整编辑器 →**」（或浏览器直接访问 `/petween-editor/`）会在新标签页打开独立编辑器页面：
@@ -61,7 +63,7 @@ dsh plugin --profile web remove petween     # 卸载
 
 也可以直接访问 `http://127.0.0.1:3080/petween-editor/`（端口以你的 DSH web 配置为准）。
 
-想快速试手感而不碰真实配置：构建后直接双击 `preview/index.html` 打开独立预览页（无需 DSH），还支持贴入自定义 `AnimationDefinition` JSON 即注册即播。
+想快速试手感而不碰真实配置：构建后直接双击 `preview/index.html` 打开独立预览页（无需 DSH，需从源码构建——npm 安装包当前不包含该页），还支持贴入自定义 `AnimationDefinition` JSON 即注册即播。
 
 ## 状态说明
 
@@ -86,7 +88,7 @@ dsh plugin --profile web remove petween     # 卸载
 ```bash
 pnpm install
 pnpm run build       # tsc -b && tsdown → lib/index.js（host）、lib/client.js、lib/editor.js（独立编辑器页）、preview/preview.js
-pnpm vitest run      # 测试（tests/，748 用例）
+pnpm vitest run      # 测试（tests/，800+ 用例）
 pnpm run typecheck   # 双工程类型检查
 ```
 

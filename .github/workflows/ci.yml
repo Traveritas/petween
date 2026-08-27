@@ -8,7 +8,7 @@ jobs:
   verify:
     strategy:
       matrix:
-        node: ['22', '24']
+        node: ['20', '22', '24']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

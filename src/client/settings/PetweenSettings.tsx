@@ -474,7 +474,18 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
               })
             }
           />
-          <p className={styles.hint}>闪现姿势只在点击动画播放期间临时换图；该姿势没有可用图片时保持不变。</p>
+          <Toggle
+            label="执行动画内的换图事件"
+            checked={config.interactions.click.honorAnimationPoseSwap}
+            onChange={(checked) =>
+              store.updateConfig((draft) => {
+                draft.interactions.click.honorAnimationPoseSwap = checked
+              })
+            }
+          />
+          <p className={styles.hint}>
+            闪现姿势只在点击动画播放期间临时换图；该姿势没有可用图片时保持不变。开启「执行动画内的换图事件」后，动画自带的换图指令也会在点击时生效（播完回到当前状态的图）。
+          </p>
         </div>
       </div>
     </section>
@@ -484,6 +495,13 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
 export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
   // With an injected api (tests) the store talks to it directly; in production
   // it shares the config hub with the overlay (M3: one config, one GET).
+  //
+  // StrictMode caveat: the store is created once and disposed by this effect,
+  // but EditorStore.load() refuses to run after dispose. Double-mounting
+  // under <StrictMode> would leave the SECOND mount holding a dead store that
+  // never leaves 'loading'. No production entry wraps these trees in
+  // StrictMode — keep it that way, or move store creation into a
+  // remount-tolerant factory first.
   const [store] = useState(
     () => new EditorStore(props.api !== undefined ? { api: props.api } : { hub: configHub }),
   )

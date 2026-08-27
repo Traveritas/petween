@@ -17,7 +17,8 @@ import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { AnimationDefinition, AnimationKind } from '../motion/animation-definition'
-import { validateAnimationDefinition } from '../motion/animation-definition'
+import { RANDOM_DELAY_LIMITS, validateAnimationDefinition } from '../motion/animation-definition'
+import { isMotionProperty, MOTION_PROPERTIES } from '../motion/motion-properties'
 import { writeJsonAtomic } from './storage'
 
 export type AnimationErrorCode = 'INVALID_DEFINITION' | 'NOT_FOUND' | 'IN_USE'
@@ -45,6 +46,17 @@ export function defaultAnimationsDir(): string {
  */
 const USER_ID_RE = /^user:[A-Za-z0-9][A-Za-z0-9_-]*$/
 
+/**
+ * The client timeline editor keeps its never-persisted preview draft under
+ * this id (src/client/custom-animations.ts DRAFT_ANIMATION_ID). It matches
+ * the user: charset, so without this guard a Motion Pack PUT could legally
+ * claim it and the client sync would silently swallow the animation. The
+ * host must not import client code, hence the literal — keep the two in
+ * sync. Client previewing only registers in memory, never through the host
+ * PUT, so rejecting the id here cannot break it.
+ */
+const RESERVED_CLIENT_DRAFT_ID = 'user:0draft'
+
 /** Route-level id guard: `<namespace>:<name>` with a filename-safe charset. */
 const SAFE_ID_RE = /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/
 
@@ -65,6 +77,62 @@ export function validateAnimationId(id: unknown): string | null {
 /** `user:<name>` → `user_<name>.json` (the charset makes this bijective). */
 function fileNameFor(id: string): string {
   return `${id.replace(':', '_')}.json`
+}
+
+/**
+ * Load-time tolerance for definitions saved under the pre-2026-08-27 schema:
+ * the three tightening rules (ambient keeps off the transition layer,
+ * per-track duplicate `at`, random-interval min >= 1) retroactively
+ * invalidated files that earlier builds legitimately wrote — without this,
+ * they vanish from the library and any config still mounting them can no
+ * longer be saved. Mechanical normalization keeps them loadable: clamp the
+ * delay floor, drop ambient transition-layer tracks, keep the first
+ * keyframe per `at`. Only runs on shapes the current validator rejects;
+ * returns null when even the normalized shape is invalid (caller falls
+ * back to skip-with-warning). Files on disk are never rewritten here —
+ * the next editor save persists the normalized shape.
+ */
+function normalizeLegacyDefinition(raw: unknown): AnimationDefinition | null {
+  const candidate = raw as {
+    kind?: unknown
+    repeat?: { mode?: unknown; minDelayMs?: unknown; maxDelayMs?: unknown }
+    tracks?: Array<{ property?: unknown; keyframes?: Array<{ at?: unknown }> }>
+  }
+  if (typeof candidate !== 'object' || candidate === null || !Array.isArray(candidate.tracks)) return null
+
+  if (
+    candidate.repeat?.mode === 'random-interval' &&
+    typeof candidate.repeat.minDelayMs === 'number' &&
+    Number.isFinite(candidate.repeat.minDelayMs)
+  ) {
+    const flooredMin = Math.max(candidate.repeat.minDelayMs, RANDOM_DELAY_LIMITS.min)
+    candidate.repeat.minDelayMs = flooredMin
+    const max = candidate.repeat.maxDelayMs
+    if (typeof max === 'number' && Number.isFinite(max)) {
+      candidate.repeat.maxDelayMs = Math.max(max, flooredMin)
+    }
+  }
+
+  if (candidate.kind === 'ambient') {
+    candidate.tracks = candidate.tracks.filter(
+      (track) => !(isMotionProperty(track.property) && MOTION_PROPERTIES[track.property].targetLayer === 'transition'),
+    )
+  }
+
+  for (const track of candidate.tracks) {
+    if (!Array.isArray(track.keyframes)) continue
+    const seenAt = new Set<number>()
+    track.keyframes = track.keyframes.filter((keyframe) => {
+      const at = keyframe.at
+      // Invalid `at` values pass through untouched — the validator reports them.
+      if (typeof at !== 'number' || !Number.isFinite(at)) return true
+      if (seenAt.has(at)) return false
+      seenAt.add(at)
+      return true
+    })
+  }
+
+  return validateAnimationDefinition(candidate).valid ? (candidate as AnimationDefinition) : null
 }
 
 function idFromFileName(entry: string): string | null {
@@ -109,11 +177,20 @@ export class AnimationsStore {
         continue
       }
       const result = validateAnimationDefinition(raw)
-      if (!result.valid) {
-        warnings.push(`${entry}: invalid AnimationDefinition (${result.errors.join('; ')}), skipped`)
-        continue
+      let definition: AnimationDefinition
+      if (result.valid) {
+        definition = raw as AnimationDefinition
+      } else {
+        // Pre-tightening shapes get one mechanical normalization pass before
+        // the skip path — dropping them would dangle every config mount.
+        const normalized = normalizeLegacyDefinition(raw)
+        if (normalized === null) {
+          warnings.push(`${entry}: invalid AnimationDefinition (${result.errors.join('; ')}), skipped`)
+          continue
+        }
+        warnings.push(`${entry}: legacy shape auto-normalized (${result.errors.join('; ')})`)
+        definition = normalized
       }
-      const definition = raw as AnimationDefinition
       if (validateUserAnimationId(definition.id) === null) {
         warnings.push(`${entry}: id "${definition.id}" is not in the user: namespace, skipped`)
         continue
@@ -140,6 +217,13 @@ export class AnimationsStore {
           'INVALID_DEFINITION',
           `custom animations must use a "user:<name>" id, got "${definition.id}"`,
           ['"id" must match "user:<name>" (letters, digits, "_" and "-")'],
+        )
+      }
+      if (definition.id === RESERVED_CLIENT_DRAFT_ID) {
+        throw new AnimationError(
+          'INVALID_DEFINITION',
+          '"user:0draft" is reserved for the client-side preview draft and cannot be stored',
+          ['"id" must not be the reserved client draft id "user:0draft"'],
         )
       }
       await writeJsonAtomic(join(this.options.animationsDir, fileNameFor(definition.id)), definition)
@@ -178,8 +262,12 @@ export class AnimationsStore {
     } catch {
       return undefined
     }
-    if (!validateAnimationDefinition(raw).valid) return undefined
-    const definition = raw as AnimationDefinition
+    let definition = raw as AnimationDefinition
+    if (!validateAnimationDefinition(raw).valid) {
+      const normalized = normalizeLegacyDefinition(raw)
+      if (normalized === null) return undefined
+      definition = normalized
+    }
     return definition.id === id ? definition.kind : undefined
   }
 

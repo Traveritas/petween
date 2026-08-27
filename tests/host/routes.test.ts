@@ -473,6 +473,14 @@ describe('/api/petween/animations (V1.1 plan §3)', () => {
     expect((await res.json()).error.code).toBe('INVALID_ANIMATION')
   })
 
+  it('PUT rejects the reserved client preview draft id with 400', async () => {
+    const res = await putAnimation('user:0draft', makeTransition('user:0draft'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVALID_ANIMATION')
+    const listed = await (await fetch(`${base}/api/petween/animations`)).json()
+    expect(listed.customs).toEqual([])
+  })
+
   it('PUT/DELETE 404 on malformed path ids; unsupported methods 405', async () => {
     expect((await putAnimation('..%2Fescape', makeTransition('user:pop'))).status).toBe(404)
     expect((await fetch(`${base}/api/petween/animations/user%3A..%2Fx`, { method: 'DELETE' })).status).toBe(404)
@@ -539,6 +547,29 @@ describe('/api/petween/animations (V1.1 plan §3)', () => {
 
   it('DELETE 404s an unregistered id', async () => {
     expect((await fetch(`${base}/api/petween/animations/user:missing`, { method: 'DELETE' })).status).toBe(404)
+  })
+
+  it('PUT refuses 409 ANIMATION_IN_USE when a still-referenced animation changes kind', async () => {
+    await putAnimation('user:pop', makeTransition('user:pop'))
+    const config = createDefaultPetweenConfig()
+    config.states.idle.enter.animationId = 'user:pop'
+    expect((await putConfig(config)).status).toBe(200)
+
+    // transition → ambient while mounted: refused, stored file untouched.
+    const res = await putAnimation('user:pop', makeAmbient('user:pop'))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'ANIMATION_IN_USE' })
+    const listed = await (await fetch(`${base}/api/petween/animations`)).json()
+    expect(listed.customs).toHaveLength(1)
+    expect(listed.customs[0].kind).toBe('transition')
+
+    // Same kind with other fields changed: allowed.
+    const edited = { ...makeTransition('user:pop'), name: 'Custom Pop v2', durationMs: 320 }
+    expect((await putAnimation('user:pop', edited)).status).toBe(200)
+
+    // An unreferenced animation may change kind freely.
+    await putAnimation('user:free', makeTransition('user:free'))
+    expect((await putAnimation('user:free', makeAmbient('user:free'))).status).toBe(200)
   })
 })
 

@@ -179,6 +179,13 @@ export type ActivityTransition = 'subtle' | 'none' | 'state'
 export interface ClickInteraction {
   animation: string
   pose: PoseKey | null
+  /**
+   * 2026-08-27: also execute the animation's own (named) pose-swap events on
+   * click. Off by default — an interaction authored for external play may
+   * carry swaps the click feel shouldn't; companions can build richer click
+   * logic on subscribeUserPointer + flashPose instead.
+   */
+  honorAnimationPoseSwap: boolean
 }
 
 /** Terminal-state exit policy for PetweenConfig.advanced.terminalHold. */
@@ -231,8 +238,14 @@ export type PetSemanticEvent =
 
 /** A pose after fallback resolution: the asset that is actually shown. */
 export interface ResolvedPose {
-  /** Pose slot the asset belongs to (post-fallback, may differ from the requested one). */
-  poseKey: PoseKey
+  /**
+   * Pose slot the asset belongs to (post-fallback, may differ from the
+   * requested one). Widened from PoseKey to string (2026-08-27): poses
+   * registered through the `petween/client` extension channel carry their
+   * own `user:`-namespaced ids here. The builtin resolver only ever
+   * produces the six slots.
+   */
+  poseKey: string
   asset: {
     id: string
     url: string

@@ -30,7 +30,10 @@ export function StateList(props: StateListProps): JSX.Element {
       {POSE_KEYS.map((key) => {
         const resolved = resolve(key)
         const own = resolved !== null && resolved.poseKey === key
-        const hint = own ? '已导入' : resolved !== null ? `跟随${STATE_LABELS[resolved.poseKey]}` : '无图片'
+        // The builtin resolver only ever yields the six slots; the cast only
+        // bridges ResolvedPose.poseKey's string widening for the label map.
+        const source = resolved === null ? null : (POSE_KEYS as readonly string[]).includes(resolved.poseKey) ? (resolved.poseKey as PoseKey) : null
+        const hint = own ? '已导入' : source !== null ? `跟随${STATE_LABELS[source]}` : '无图片'
         return (
           <button
             key={key}

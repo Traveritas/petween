@@ -4,7 +4,7 @@
  * dimension caps, content-addressed dedup, delete semantics, whitelist
  * path resolution.
  */
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -153,5 +153,35 @@ describe('AssetStore.resolve (§19.5)', () => {
     for (const bad of ['..', '..%2f..', 'a/b', '../../config.json', '0123456789abcdef', 'zzz']) {
       expect(await store.resolve(bad)).toBeNull()
     }
+  })
+})
+
+describe('manifest url normalization (v1.2.0 motion-pet → petween rename)', () => {
+  /** Simulate an upgraded install: a saved asset whose manifest entry still carries the legacy url prefix. */
+  async function seedLegacyUrlManifest(): Promise<{ id: string; png: Buffer }> {
+    const png = makePng(2, 3)
+    const meta = await store.save(png, 'image/png')
+    const manifest = await store.list()
+    manifest[meta.id] = { ...meta, url: `/motion-pet-assets/${meta.id}` }
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8')
+    return { id: meta.id, png }
+  }
+
+  it('list() reports legacy /motion-pet-assets urls under the current prefix', async () => {
+    const { id } = await seedLegacyUrlManifest()
+    expect((await store.list())[id].url).toBe(`/petween-assets/${id}`)
+  })
+
+  it('a sha256 dedup hit returns the normalized url and a later write persists it to disk', async () => {
+    const { id, png } = await seedLegacyUrlManifest()
+    // Dedup returns the existing entry — with the healed url.
+    const deduped = await store.save(png, 'image/png')
+    expect(deduped.id).toBe(id)
+    expect(deduped.url).toBe(`/petween-assets/${id}`)
+    // The dedup path does not rewrite the manifest; uploading NEW content
+    // does, carrying the normalization of the legacy entry back to disk.
+    await store.save(makeJpeg(10, 11), 'image/jpeg')
+    const onDisk = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, { url: string }>
+    expect(onDisk[id].url).toBe(`/petween-assets/${id}`)
   })
 })

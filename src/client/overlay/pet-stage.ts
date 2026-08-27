@@ -173,6 +173,10 @@ export class PetStage implements MotionStage {
   private readonly embedded: boolean
   private userScale = 1
   private pose: ResolvedPose | null = null
+  /** The last layoutPose() result; null until the first swapPose. */
+  private layout: AnchorLayout | null = null
+  /** Displayed-pose subscribers (the extension service's subscribePose). */
+  private readonly poseSwapListeners = new Set<(pose: ResolvedPose) => void>()
   private disposed = false
 
   constructor(options: PetStageOptions = {}) {
@@ -249,8 +253,47 @@ export class PetStage implements MotionStage {
     return this.pose
   }
 
+  /**
+   * The latest §12.3 layout (the pose <img> box inside the stage square);
+   * null until the first swapPose. This is the truth behind the hit region —
+   * the outer layer folds it into viewport px for the extension snapshot.
+   */
+  get poseLayout(): AnchorLayout | null {
+    return this.layout
+  }
+
+  /** The stage-space world anchor (§12.3) as a defensive copy. */
+  get anchor(): PoseAnchor {
+    return { ...this.worldAnchor }
+  }
+
   get stageSize(): number {
     return this.size
+  }
+
+  /**
+   * The VISIBLE pet square — side × user scale, floored at MIN_VISIBLE_PX.
+   * This is the one basis every viewport clamp must share (§27): the drag
+   * path, the position driver, resize re-clamps and setPosition all bound
+   * the same value, so `position` fields, DOM left/top and snapshots can
+   * never disagree after a user-scale change.
+   */
+  get visibleSize(): number {
+    return Math.max(this.size * this.userScale, MIN_VISIBLE_PX)
+  }
+
+  /**
+   * Subscribe to displayed-pose changes: every swapPose call fires with the
+   * pose now on stage (even a same-URL swap — anchor/zoom may have changed).
+   * The one listener set the session bridges into the extension service;
+   * a throwing listener is isolated (console.warn, never breaks the swap).
+   * No immediate push — read currentPose for the current value.
+   */
+  subscribePoseSwap(listener: (pose: ResolvedPose) => void): () => void {
+    this.poseSwapListeners.add(listener)
+    return () => {
+      this.poseSwapListeners.delete(listener)
+    }
   }
 
   /** Synchronous image swap (MotionStage contract): the caller preloaded it. */
@@ -261,6 +304,15 @@ export class PetStage implements MotionStage {
       this.image.src = pose.asset.url
     }
     this.layoutPose()
+    if (this.poseSwapListeners.size > 0) {
+      for (const listener of [...this.poseSwapListeners]) {
+        try {
+          listener(pose)
+        } catch (error) {
+          console.warn('petween: pose swap listener failed', error)
+        }
+      }
+    }
   }
 
   /**
@@ -310,13 +362,10 @@ export class PetStage implements MotionStage {
    * Overlay (fixed) mode only — embedded stages are host-centered.
    */
   setPosition(x: number, y: number): void {
-    // Never smaller than MIN_VISIBLE_PX: a tiny pet may hug the edge fully
-    // visible (a positive lower clamp would push it away from the edge).
-    const visibleSize = Math.max(this.size * this.userScale, MIN_VISIBLE_PX)
     const { x: clampedX, y: clampedY } = clampStagePosition(
       x,
       y,
-      visibleSize,
+      this.visibleSize,
       window.innerWidth,
       window.innerHeight,
     )
@@ -375,6 +424,8 @@ export class PetStage implements MotionStage {
     this.particles.dispose()
     this.root.remove()
     this.pose = null
+    this.layout = null
+    this.poseSwapListeners.clear()
     this.preloaded.clear()
   }
 
@@ -517,5 +568,6 @@ export class PetStage implements MotionStage {
     style.height = px(layout.height)
     style.left = px(layout.offsetX)
     style.top = px(layout.offsetY)
+    this.layout = layout
   }
 }

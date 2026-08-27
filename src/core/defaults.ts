@@ -106,7 +106,7 @@ export function createDefaultPetweenConfig(): PetweenConfig {
     states: createDefaultStateAppearances(),
     overlay: { x: null, y: null },
     advanced: { changePoseWithinActive: false, activityTransition: 'subtle', terminalHold: 'timed', particles: true },
-    interactions: { click: { animation: 'builtin:click-pop', pose: null } },
+    interactions: { click: { animation: 'builtin:click-pop', pose: null, honorAnimationPoseSwap: false } },
     activePetId: null,
   }
 }

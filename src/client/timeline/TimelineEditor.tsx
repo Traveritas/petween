@@ -44,6 +44,7 @@ import {
   removeEvent,
   removeKeyframe,
   removeTrack,
+  setEventPose,
   setKeyframeEasing,
   setKeyframeValue,
   setParticleEffect,
@@ -154,7 +155,11 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   }
 
   const handleAddPoseSwap = (): void => {
-    const edit = addPoseSwapEvent(events)
+    // Interaction additions name the idle slot so the draft stays valid
+    // (every interaction pose-swap must declare a target); the author
+    // retargets in the inspector. A transition addition stays anonymous —
+    // its pose is state-machine-owned (schema forbids the field).
+    const edit = addPoseSwapEvent(events, 0.5, kind === 'interaction' ? 'idle' : undefined)
     updateEvents(edit.events)
     setSelection({ type: 'event', eventIndex: edit.index })
   }
@@ -200,6 +205,7 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
         poseSwapCount={poseSwapCount}
         onSetAt={(at) => updateEvents(moveEvent(events, eventSelection.eventIndex, at))}
         onSetEffect={(effect) => updateEvents(setParticleEffect(events, eventSelection.eventIndex, effect))}
+        onSetPose={(pose) => updateEvents(setEventPose(events, eventSelection.eventIndex, pose))}
         onDelete={() => handleDeleteEvent(eventSelection.eventIndex)}
       />
     )
@@ -252,13 +258,13 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
             ))}
           </select>
         ) : null}
-        {kind === 'transition' && poseSwapCount === 0 ? (
+        {(kind === 'transition' && poseSwapCount === 0) || kind === 'interaction' ? (
           <button type="button" className={settingsStyles.button} onClick={handleAddPoseSwap}>
             ＋ 添加 pose-swap（换图）
           </button>
         ) : null}
         <span className={styles.timelineHint}>
-          单击轨道空白添加关键帧；拖动菱形或事件标记调整时间；同层轨道共享缓动
+          单击轨道空白添加关键帧；拖动或选中菱形/事件标记后用 ←→ 微调、Delete 删除；同层轨道共享缓动
         </span>
       </div>
       <div className={styles.timelineLanes}>
@@ -278,15 +284,19 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
             onSelectKeyframe={(keyframeIndex) => setSelection({ type: 'keyframe', trackIndex, keyframeIndex })}
             onAddKeyframe={(at) => handleAddKeyframe(trackIndex, at)}
             onMoveKeyframe={(keyframeIndex, at) => handleMoveKeyframe(trackIndex, keyframeIndex, at)}
+            onRemoveKeyframe={(keyframeIndex) => handleDeleteKeyframe(trackIndex, keyframeIndex)}
             onRemoveTrack={() => handleRemoveTrack(trackIndex)}
           />
         ))}
         {showEvents ? (
           <EventTrack
+            kind={kind}
+            poseSwapCount={poseSwapCount}
             events={events}
             selectedIndex={eventSelection === null ? -1 : eventSelection.eventIndex}
             onSelectEvent={(eventIndex) => setSelection({ type: 'event', eventIndex })}
             onMoveEvent={(eventIndex, at) => updateEvents(moveEvent(events, eventIndex, at))}
+            onDeleteEvent={(eventIndex) => handleDeleteEvent(eventIndex)}
           />
         ) : null}
       </div>

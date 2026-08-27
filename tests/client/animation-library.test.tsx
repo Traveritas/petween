@@ -465,19 +465,24 @@ describe('AnimationLibrary — editing, validation, save', () => {
     expect(payload.events).toEqual([{ at: 0.25, type: 'pose-swap' }])
   })
 
-  it('switching kind normalizes incompatible events automatically', async () => {
+  it('switching kind normalizes incompatible events and tracks automatically', async () => {
     const { api } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     expect(libraryButton('保存').disabled).toBe(false)
     expect(librarySection().textContent).toContain('自动移除不适用的事件')
 
-    // transition → ambient removes pose-swap and stays valid.
+    // transition → ambient removes the pose-swap AND the transition-layer
+    // track (the schema keeps ambient off that layer), seeding a default loop.
     const kindSelect = libraryControlRow('类型').querySelector('select')
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'ambient'))
     expect(librarySection().textContent).not.toContain('must not declare events')
     expect(librarySection().querySelector('[aria-label^="pose-swap"]')).toBeNull()
+    expect(librarySection().textContent).not.toContain('must not animate')
+    expect(librarySection().querySelector('[aria-label="轨道 transition.scaleY"]')).toBeNull() // dropped
+    expect(librarySection().querySelector('[aria-label="轨道 sway.rotation"]')).not.toBeNull() // seeded
+    expect(keyframeDiamonds('sway.rotation').length).toBeGreaterThan(0)
     expect(libraryButton('保存').disabled).toBe(false)
 
     // Back to transition adds the required pose-swap.
@@ -486,7 +491,7 @@ describe('AnimationLibrary — editing, validation, save', () => {
     expect(libraryButton('保存').disabled).toBe(false)
   })
 
-  it('switching to interaction removes pose-swap and saves a valid definition', async () => {
+  it('switching to interaction keeps the pose-swap timing but names an idle target; back to transition strips it', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
     await render(api, true)
     act(() => libraryButton('My Pop').click())
@@ -494,16 +499,29 @@ describe('AnimationLibrary — editing, validation, save', () => {
     const kindSelect = libraryControlRow('类型').querySelector('select')
     if (kindSelect === null) throw new Error('kind select missing')
     act(() => choose(kindSelect, 'interaction'))
-    expect(librarySection().querySelector('[aria-label^="pose-swap"]')).toBeNull()
+    // The swap survives with a named target (the schema requires one on
+    // interactions) — the author retargets in the event inspector.
+    expect(librarySection().querySelector('[aria-label^="pose-swap"]')).not.toBeNull()
     expect(librarySection().textContent).not.toContain('must not declare pose-swap')
     expect(libraryButton('保存').disabled).toBe(false)
 
     await act(async () => {
       libraryButton('保存').click()
     })
-    const payload = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
+    let payload = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
     expect(payload.kind).toBe('interaction')
-    expect(payload.events).toBeUndefined()
+    expect(payload.events).toEqual([{ at: 0.5, type: 'pose-swap', pose: 'idle' }])
+
+    // And back: the target is stripped (the enter pose is state-machine-
+    // owned), the exactly-one swap kept, the draft still saves.
+    act(() => choose(kindSelect, 'transition'))
+    expect(libraryButton('保存').disabled).toBe(false)
+    await act(async () => {
+      libraryButton('保存').click()
+    })
+    payload = mocks.putAnimation.mock.calls[mocks.putAnimation.mock.calls.length - 1][0] as AnimationDefinition
+    expect(payload.kind).toBe('transition')
+    expect(payload.events).toEqual([{ at: 0.5, type: 'pose-swap' }])
   })
 
   it('试播 plays the current draft on the live preview stage', async () => {
@@ -688,6 +706,19 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
     expect(select?.value).toBe('user:missing')
     expect(select?.textContent).toContain('不可用')
   })
+
+  it('echoes a dangling custom transition id instead of silently showing the preset', async () => {
+    const { api } = makeApi({
+      mutateConfig: (config) => {
+        config.states.idle.enter.animationId = 'user:missing'
+      },
+    })
+    await render(api, true)
+    const select = findControlRow('预设').querySelector('select')
+    // the real config value stays visible as an explicit 「不可用」 option
+    expect(select?.value).toBe('user:missing')
+    expect(select?.textContent).toContain('user:missing（不可用）')
+  })
 })
 
 describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
@@ -758,6 +789,68 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
     expect(confirm).toHaveBeenCalledTimes(2)
     expect(mocks.putAnimation).not.toHaveBeenCalled()
     expect(nameInput().value).toBe('Renamed') // still on the dirty draft
+  })
+
+  it('克隆 keeps the unsaved edits and says the copy will include them', async () => {
+    const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    const confirm = vi.fn().mockReturnValueOnce(true)
+    vi.stubGlobal('confirm', confirm)
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+    renameDraft('My Pop v2')
+
+    await act(async () => {
+      libraryButton('克隆为自定义').click()
+    })
+    // not the discard wording: the edits ride into the copy
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm.mock.calls[0][0]).toContain('副本将包含这些修改')
+    expect(mocks.putAnimation).toHaveBeenCalledTimes(1)
+    const clone = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
+    expect(clone.name).toBe('My Pop v2 副本')
+  })
+
+  it('clears the ● marker after saving a switch away from random-interval repeat', async () => {
+    // The saved definition keeps custom 500/900 interval bounds; switching to
+    // 单次 persists only {mode:'once'} (min/max never reach the wire), so the
+    // raw-draft baseline (defaults 800/1300) could never match the draft's
+    // leftover 500/900 again — the marker must compare ASSEMBLED definitions.
+    const randomized: AnimationDefinition = {
+      ...transitionCustom('user:r1', 'Random Pop'),
+      repeat: { mode: 'random-interval', minDelayMs: 500, maxDelayMs: 900 },
+    }
+    const { api, mocks } = makeApi({ customs: [randomized] })
+    await render(api, true)
+    act(() => libraryButton('Random Pop').click())
+    expect(libraryButton('Random Pop').textContent).not.toContain('●')
+
+    const repeatSelect = libraryControlRow('重复').querySelector('select')
+    if (repeatSelect === null) throw new Error('repeat select missing')
+    act(() => choose(repeatSelect, 'once'))
+    expect(libraryButton('Random Pop').textContent).toContain('●') // repeat changed, unsaved
+
+    await act(async () => {
+      libraryButton('保存').click()
+    })
+    const payload = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
+    expect(payload.repeat).toEqual({ mode: 'once' })
+    // the draft still carries the 500/900 leftovers; assembled vs assembled
+    // they are equal, so the marker clears (it used to be stuck forever)
+    expect(libraryButton('Random Pop').textContent).not.toContain('●')
+  })
+
+  it('registers a beforeunload guard while the timeline draft is dirty', async () => {
+    const { api } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
+    await render(api, true)
+    act(() => libraryButton('My Pop').click())
+    const clean = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(false) // clean draft: nothing registered
+
+    renameDraft('My Pop v2')
+    const dirty = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirty)
+    expect(dirty.defaultPrevented).toBe(true) // unsaved edits: leaving is guarded
   })
 
   it('删除 asks for an irreversible confirmation naming the animation', async () => {

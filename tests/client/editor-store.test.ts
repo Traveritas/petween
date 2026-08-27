@@ -761,6 +761,26 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     expect(store.getSnapshot().customs).toHaveLength(0)
   })
 
+  it('transport TIMEOUT/NETWORK codes map to Chinese notices instead of the raw English message', async () => {
+    const timeoutApi = makeApi({
+      putAnimation: vi.fn(async () => {
+        throw new ApiError(0, 'TIMEOUT', 'request timed out after 15000ms')
+      }),
+    })
+    await loadStore(timeoutApi.api)
+    await store.saveAnimation(makeCustom('user:a'))
+    expect(store.getSnapshot().notice?.text).toContain('动画保存失败：请求超时，请稍后重试')
+
+    const networkApi = makeApi({
+      putAnimation: vi.fn(async () => {
+        throw new ApiError(0, 'NETWORK', 'connection refused')
+      }),
+    })
+    await loadStore(networkApi.api)
+    await store.saveAnimation(makeCustom('user:a'))
+    expect(store.getSnapshot().notice?.text).toContain('动画保存失败：网络连接失败，请检查网络')
+  })
+
   it('deleteAnimation refuses while referenced — naming the state, without an API call', async () => {
     const config = createDefaultPetweenConfig()
     config.states.thinking.enter.animationId = 'user:a'

@@ -156,6 +156,24 @@ export function defaultManifestPath(): string {
   return dshHomePath('petween', 'assets.json')
 }
 
+/**
+ * Read-time url normalization: manifests written before the v1.2.0 rename
+ * (motion-pet → Petween) carry the dead `/motion-pet-assets/<id>` prefix,
+ * which 404s against the current static route. Normalizing on read
+ * self-heals every entry, and because save()/delete() do their
+ * read-modify-write through list(), the next manifest write persists the
+ * fixed urls back to disk. There is deliberately no legacy alias route —
+ * this normalization is the only repair path.
+ */
+function normalizeAssetUrls(manifest: Record<string, AssetMeta>): Record<string, AssetMeta> {
+  for (const [id, meta] of Object.entries(manifest)) {
+    if (typeof meta === 'object' && meta !== null && meta.url !== `/petween-assets/${id}`) {
+      manifest[id] = { ...meta, url: `/petween-assets/${id}` }
+    }
+  }
+  return manifest
+}
+
 export class AssetStore {
   readonly maxFileBytes: number
   private readonly maxTotalBytes: number
@@ -171,7 +189,8 @@ export class AssetStore {
 
   /** Current manifest; empty when the file is missing or corrupt. */
   async list(): Promise<Record<string, AssetMeta>> {
-    return (await readJsonFile<Record<string, AssetMeta>>(this.options.manifestPath)) ?? {}
+    const manifest = (await readJsonFile<Record<string, AssetMeta>>(this.options.manifestPath)) ?? {}
+    return normalizeAssetUrls(manifest)
   }
 
   /**

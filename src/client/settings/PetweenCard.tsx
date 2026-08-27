@@ -30,7 +30,18 @@ export function PetweenCard(props: PetweenCardProps): JSX.Element {
   )
   useEffect(() => {
     void store.load()
-    return () => store.dispose()
+    return () => {
+      // DSH tears its settings dialog down without a vetoable close event, so
+      // this cleanup is the card's only hook — the teardown cannot be stopped.
+      // Closing NEVER saves: a save fired here would run after dispose() with
+      // nobody left to see it fail (silent loss). Instead, tell the user the
+      // draft is gone and how to keep it next time (the full-page editor
+      // guards tab close via beforeunload; this guards the dialog close).
+      if (store.getSnapshot().saveState === 'dirty') {
+        window.alert('Petween 卡片有未保存的修改，已随卡片关闭丢弃。如需保留，请在关闭前点击保存。')
+      }
+      store.dispose()
+    }
   }, [store])
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
 

@@ -130,7 +130,16 @@ export interface EditorStoreOptions {
   hub?: ConfigHub
 }
 
+/**
+ * Notices are user-facing: well-known transport codes get Chinese copy
+ * instead of the raw English message; anything else (host validation
+ * messages included) passes through unchanged.
+ */
 function describeError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === 'TIMEOUT') return '请求超时，请稍后重试'
+    if (error.code === 'NETWORK') return '网络连接失败，请检查网络'
+  }
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -218,6 +227,10 @@ export class EditorStore {
         ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
       }
       if (this.disposed) return
+      // Hub-backed stores keep the shared poll alive themselves: when the pet
+      // overlay is disabled or unmounted it releases its own claim, but the
+      // settings built on this hub must still observe external changes.
+      this.hub?.startPolling(this)
       // GET /pets is authoritative for the pointer and may observe a newer
       // switch than a separately fetched config response.
       config = structuredClone(config)
@@ -657,6 +670,7 @@ export class EditorStore {
   dispose(): void {
     if (this.disposed) return
     this.unsubscribeHub?.()
+    this.hub?.stopPolling(this)
     this.disposed = true
   }
 

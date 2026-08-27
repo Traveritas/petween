@@ -49,6 +49,7 @@ interface Setup {
   registry: AnimationRegistry
   config: PetweenConfig
   director: MotionDirector
+  resolvePose: (poseKey: string) => ResolvedPose | null
 }
 
 const setup = (reducedMotion = false): Setup => {
@@ -62,13 +63,14 @@ const setup = (reducedMotion = false): Setup => {
     assets[key] = asset(key)
     config.poses[key].assetId = key
   }
+  const resolvePose = createPoseResolver(config.poses, assets)
   const director = new MotionDirector({
     stage,
     registry,
     config,
-    resolvePose: createPoseResolver(config.poses, assets),
+    resolvePose,
   })
-  return { harness, stage, registry, config, director }
+  return { harness, stage, registry, config, director, resolvePose }
 }
 
 const target = (partial: Partial<MotionTarget> & Pick<MotionTarget, 'visualState' | 'poseKey'>): MotionTarget => ({
@@ -188,6 +190,61 @@ describe('MotionDirector — interruption matrix (§29.1 generation cancellation
   })
 })
 
+describe('MotionDirector — settleCurrentTarget (external interrupt follow-up)', () => {
+  it('lands the abandoned target: pose swapped, ambient running', async () => {
+    const { stage, director } = setup()
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+
+    // the external interrupt path: an enter invalidated mid-flight leaves its
+    // target abandoned — the pose-swap never fires and ambient stays stopped
+    const enter = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    expect(director.transitionInFlight).toBe(true)
+    director.interruptEnterTransition()
+    director.settleCurrentTarget()
+
+    // the target's pose landed through the silent-swap bookkeeping…
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'thinking'])
+    // …and its ambient profile is running again (no silent stage)
+    const sway = harness.pending().find(
+      (animation) => animation.target === stage.layers.sway && animation.options.iterations === Infinity,
+    )
+    expect(sway?.playState).toBe('running')
+
+    await settleTransitions()
+    await enter
+    director.dispose()
+  })
+
+  it('settle is safe after the pose-swap already fired: same pose, ambient restored', async () => {
+    const { stage, director } = setup()
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+
+    const enter = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    harness.finishPending() // pre segment done → the pose-swap fired
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'thinking'])
+
+    director.interruptEnterTransition() // interrupted mid-post-segment
+    director.settleCurrentTarget()
+    // The ledger was updated the moment the swap fired (not at completion), so
+    // settle recognizes thinking as already on stage and skips the redundant
+    // swap entirely — no caller-pairing discipline needed any more.
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'thinking'])
+    const sway = harness.pending().find(
+      (animation) => animation.target === stage.layers.sway && animation.options.iterations === Infinity,
+    )
+    expect(sway?.playState).toBe('running')
+
+    await settleTransitions()
+    await enter
+    director.dispose()
+  })
+})
+
 describe('MotionDirector — silent pose change inside a visual state (§15.2, activityTransition=none)', () => {
   it('same visualState + new poseKey swaps silently: no transition, ambient applied', async () => {
     const { stage, config, director } = setup()
@@ -252,6 +309,36 @@ describe('MotionDirector — silent pose change inside a visual state (§15.2, a
     // …but the new activity's ambient profile still applied (breathe on)
     const added = harness.animations.slice(countAfterEnter)
     expect(added.some((animation) => animation.target === stage.layers.breathe)).toBe(true)
+    director.dispose()
+  })
+
+  it('a silent same-state swap lands even when a cut-off post segment already swapped (ledger stays truthful)', async () => {
+    const { stage, config, director } = setup()
+    config.advanced.activityTransition = 'none'
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+
+    // thinking enters fully: stage and the silent-swap ledger both wear it
+    const first = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await settleTransitions()
+    await first
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'thinking'])
+
+    // working's enter gets PAST its pose-swap (stage wears working), post still running…
+    const enter = director.setTarget(target({ visualState: 'active', activityMode: 'command', poseKey: 'working' }))
+    harness.finishPending() // pre segment → the swap event fires mid-timeline
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'thinking', 'working'])
+
+    // …then a silent same-state swap back to thinking cuts the post off.
+    const silent = director.setTarget(target({ visualState: 'active', activityMode: 'thinking', poseKey: 'thinking' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.all([enter.catch(() => undefined), silent])
+
+    // The skip guard must see the ledger as WORKING (the interrupted swap did
+    // land on stage), so the silent swap really runs and thinking wins.
+    expect(stage.swapped[stage.swapped.length - 1]?.poseKey).toBe('thinking')
     director.dispose()
   })
 })
@@ -1214,5 +1301,139 @@ describe('MotionDirector — custom ambient animation per state', () => {
       director.dispose()
       harness.animations.length = 0
     }
+  })
+})
+
+describe('MotionDirector — enter candidates and playback pairing (2026-08-27 hardening)', () => {
+  it('resolveEnter falls back to the preset for a repeating transition (an eventful loop would never settle)', async () => {
+    const { stage, registry, config, director } = setup()
+    const loopTransition: AnimationDefinition = {
+      version: 1,
+      id: 'user:looper',
+      name: 'Looper',
+      kind: 'transition',
+      durationMs: 500,
+      repeat: { mode: 'loop' },
+      tracks: [
+        {
+          property: 'transition.scaleY',
+          keyframes: [
+            { at: 0, value: 1 },
+            { at: 1, value: 1 },
+          ],
+        },
+      ],
+      events: [{ at: 0.5, type: 'pose-swap' }],
+    }
+    registry.register(loopTransition)
+    config.states.idle.enter.animationId = 'user:looper'
+
+    const pending = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await vi.advanceTimersByTimeAsync(0)
+    // The mounted candidate was rejected for its repeat mode — the enter
+    // runs the once-mode preset instead. A looping enter would replay its
+    // (mandatory) pose-swap forever: runEnter never resolves, ambient stays
+    // stopped, whenSettled() hangs. Fail fast on the infinite signature.
+    const enterAnimation = harness.animations.find((animation) => animation.target === stage.layers.transition)
+    expect(enterAnimation).toBeDefined()
+    expect(enterAnimation?.options.iterations).not.toBe(Infinity)
+
+    await settleTransitions()
+    await pending
+    // Decisively: the enter SETTLED and ambient restarted.
+    const sway = harness.pending().find(
+      (animation) => animation.target === stage.layers.sway && animation.options.iterations === Infinity,
+    )
+    expect(sway?.playState).toBe('running')
+    director.dispose()
+  })
+
+  it('settleCurrentTarget is a no-op on a quiet stage (no generation bump, no ambient restart)', async () => {
+    const { director } = setup()
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+    expect(director.transitionInFlight).toBe(false)
+
+    // A stray settle with nothing in flight must not restart ambient (new
+    // channel animations) — the old behavior bumped the generation and
+    // reset live guards for nothing.
+    const animationsBefore = harness.animations.length
+    director.settleCurrentTarget()
+    expect(harness.animations.length).toBe(animationsBefore)
+    director.dispose()
+  })
+
+  it('a synchronous engine throw emits no playback start — starts always pair with a settle', () => {
+    const { stage, registry, config, resolvePose } = setup()
+    const events: string[] = []
+    const director = new MotionDirector({
+      stage,
+      registry,
+      config,
+      resolvePose,
+      onPlayback: (event) => events.push(`${event.phase}:${event.definitionId}`),
+    })
+    expect(() => director.play('user:missing')).toThrow(/unknown animation/)
+    expect(events).toEqual([])
+    director.dispose()
+  })
+})
+
+describe('MotionDirector — click honorAnimationPoseSwap (2026-08-27 opt-in)', () => {
+  const clickSwapCustom = (): AnimationDefinition => ({
+    version: 1,
+    id: 'user:clickswap',
+    name: 'Click Swap',
+    kind: 'interaction',
+    durationMs: 400,
+    repeat: { mode: 'once' },
+    tracks: [
+      {
+        property: 'transition.scaleX',
+        keyframes: [
+          { at: 0, value: 1 },
+          { at: 1, value: 1.2 },
+        ],
+      },
+    ],
+    events: [{ at: 0.5, type: 'pose-swap', pose: 'success' }],
+  })
+
+  it('on: the animation\'s named pose-swap swaps mid-run and restores at settle', async () => {
+    const { stage, registry, config, director } = setup()
+    registry.register(clickSwapCustom())
+    config.interactions.click.animation = 'user:clickswap'
+    config.interactions.click.honorAnimationPoseSwap = true
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle'])
+
+    const playing = director.playInteraction()
+    harness.finishPending() // pre-swap segment → the event fires
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'success'])
+    harness.finishPending() // post segment → settle → restore to the target pose
+    await vi.advanceTimersByTimeAsync(0)
+    await playing
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle', 'success', 'idle'])
+    director.dispose()
+  })
+
+  it('off (default): the animation\'s pose-swap events stay inert on click', async () => {
+    const { stage, registry, config, director } = setup()
+    registry.register(clickSwapCustom())
+    config.interactions.click.animation = 'user:clickswap'
+    const boot = director.setTarget(target({ visualState: 'idle', poseKey: 'idle' }))
+    await settleTransitions()
+    await boot
+
+    const playing = director.playInteraction()
+    await settleTransitions()
+    await playing
+    // The click ran (scaleX track animated) but the pose never changed.
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['idle'])
+    director.dispose()
   })
 })

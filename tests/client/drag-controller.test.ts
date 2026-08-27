@@ -34,7 +34,7 @@ const setup = (start: { x: number; y: number } = { x: 800, y: 500 }): Harness =>
   }
   harness.controller = new DragController({
     handle,
-    stageSize: STAGE_SIZE,
+    stageSize: () => STAGE_SIZE,
     getPosition: () => harness.position,
     onMove: (x, y) => {
       harness.position = { x, y }
@@ -163,7 +163,7 @@ describe('DragController — onDragStart seam', () => {
     const dragStarts: number[] = []
     const controller = new DragController({
       handle,
-      stageSize: STAGE_SIZE,
+      stageSize: () => STAGE_SIZE,
       getPosition: () => ({ x: 800, y: 500 }),
       onMove: () => {},
       onDragEnd: () => {},

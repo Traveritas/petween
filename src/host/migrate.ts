@@ -23,6 +23,9 @@
  * 4. even the copy fails (disk full, permissions) → warn, best-effort remove
  *    a half-written target so the next boot can retry, and keep booting on
  *    defaults. The plugin must not crash over its own data migration.
+ *    Exception: when the legacy dir disappeared mid-flight, a concurrent
+ *    process finished the migration — its target is complete data and is
+ *    never removed ("skipped").
  */
 import { cpSync, existsSync, renameSync, rmSync } from 'node:fs'
 
@@ -71,6 +74,20 @@ export function migrateLegacyHome(
       deps.copyDirSync(legacyDir, targetDir)
       return 'copied'
     } catch (error) {
+      // Concurrency guard: two processes sharing $DSH_HOME may boot and
+      // migrate at the same time. If the legacy dir is gone by now, another
+      // process finished the migration after our existsSync checks — the
+      // target holds its complete data, not our partial copy, and removing
+      // it would destroy the only remaining copy ("old data is never
+      // destroyed"). Skip instead.
+      if (!existsSync(legacyDir)) return 'skipped'
+      // Re-check immediately before the remove: a concurrent winner may have
+      // renamed legacy onto the target AFTER the guard above passed — from
+      // that moment the target is the winner's ONLY copy and rmSync would
+      // destroy it. (A microsecond TOCTOU remains between this check and the
+      // rmSync; on Windows a rename onto a non-empty target fails anyway, so
+      // the re-check closes every practically reachable interleaving.)
+      if (!existsSync(legacyDir)) return 'skipped'
       // Drop a partial copy so the next boot retries from a clean slate;
       // never touch the legacy tree.
       try {

@@ -208,12 +208,25 @@ export class PetsStore {
   /**
    * Replace a preset's slice (the config mirror path), keeping name and
    * createdAt. NOT_FOUND when the file is gone — the mirror caller treats
-   * that as a warning, since the config stays authoritative.
+   * that as a warning, since the config stays authoritative. When the
+   * normalized content is unchanged the write is skipped and the original
+   * updatedAt kept: the mirror fires on every config save (e.g. each drag
+   * persisting overlay.x/y), and rewriting identical slices would churn the
+   * preset files and fake content changes in updatedAt.
    */
   saveSlice(id: string, slice: unknown): Promise<PetPreset> {
     return this.enqueue(async () => {
       const preset = await this.read(id)
-      const updated: PetPreset = { ...preset, ...normalizePetSlice(slice), updatedAt: this.now() }
+      const normalized = normalizePetSlice(slice)
+      // Both sides pass through normalizePetSlice/repairConfig, which builds
+      // fresh objects with a fixed key order — a stringify comparison is
+      // stable here.
+      const unchanged =
+        preset.scale === normalized.scale &&
+        JSON.stringify(preset.poses) === JSON.stringify(normalized.poses) &&
+        JSON.stringify(preset.states) === JSON.stringify(normalized.states)
+      if (unchanged) return preset
+      const updated: PetPreset = { ...preset, ...normalized, updatedAt: this.now() }
       await writeJsonAtomic(this.filePathFor(preset.id), updated)
       return updated
     })

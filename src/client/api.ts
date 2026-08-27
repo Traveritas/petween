@@ -1,7 +1,7 @@
 /**
  * client/api.ts — typed fetch wrapper for the M2 host HTTP API (spec §19).
  * Same-origin only; every failure is an {@link ApiError} carrying the host
- * error code (`INVALID_CONFIG`, `ASSET_IN_USE`, …) or `NETWORK`/`HTTP_*`.
+ * error code (`INVALID_CONFIG`, `ASSET_IN_USE`, …) or `NETWORK`/`TIMEOUT`/`HTTP_*`.
  *
  * Endpoints (host/routes.ts):
  * - GET    /api/petween/config         → { config, assets }
@@ -87,23 +87,39 @@ async function parseError(response: Response): Promise<ApiError> {
  * connection that died with a host restart can hang for the browser's TCP
  * timeout (minutes), which wedged ConfigHub's memoized load() at
  * "正在加载" forever — a hung load neither rejects (retryable) nor resolves.
- * The timeout turns hangs into NETWORK errors the existing retry paths
- * already handle. Generous enough for a slow first paint; SSE streams are
- * NOT routed through request() and stay unaffected.
+ * The timeout aborts the underlying fetch (no request left hanging) and turns
+ * the hang into a TIMEOUT ApiError the existing retry paths already handle;
+ * plain network failures stay NETWORK. Generous enough for a slow first
+ * paint; SSE streams are NOT routed through request() and stay unaffected.
  */
 const REQUEST_TIMEOUT_MS = 15_000
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  // The raced timeout reject stays as a belt-and-braces prompt even where a
+  // fetch implementation ignores the abort signal.
+  const controller = new AbortController()
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
   let response: Response
   try {
     response = await Promise.race([
-      fetch(url, init),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`request timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS),
-      ),
+      fetch(url, { ...init, signal: init?.signal ?? controller.signal }),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort()
+          reject(new Error(`request timed out after ${REQUEST_TIMEOUT_MS}ms`))
+        }, REQUEST_TIMEOUT_MS)
+      }),
     ])
   } catch (error) {
+    // A real fetch rejects with AbortError once the timeout aborts it; either
+    // path leaves the controller aborted, which separates TIMEOUT from a
+    // genuine NETWORK failure (editor-store maps the codes to Chinese copy).
+    if (controller.signal.aborted) {
+      throw new ApiError(0, 'TIMEOUT', `request timed out after ${REQUEST_TIMEOUT_MS}ms`)
+    }
     throw new ApiError(0, 'NETWORK', error instanceof Error ? error.message : 'network error')
+  } finally {
+    clearTimeout(timeoutId)
   }
   if (!response.ok) throw await parseError(response)
   return (await response.json()) as T

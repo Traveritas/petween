@@ -539,3 +539,118 @@ describe('TimelineEditor — validation surfacing', () => {
     expect(validations[validations.length - 1]).toEqual([])
   })
 })
+
+describe('TimelineEditor — keyboard operability', () => {
+  const key = (el: Element, value: string): void => {
+    act(() => {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))
+    })
+  }
+  /** The click a focused button fires on Enter/Space: detail === 0. */
+  const keyboardClick = (el: Element): void => {
+    act(() => {
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+  }
+
+  it('Enter selects a diamond, ←/→ nudge by one grid step, Delete removes it', async () => {
+    const { changes } = await mount('transition', duoTracks(), poseSwap())
+    const diamonds = keyframeDiamonds('transition.scaleY')
+    expect(diamonds).toHaveLength(3)
+
+    // Enter/Space activation (detail === 0) selects and opens the inspector
+    keyboardClick(diamonds[1])
+    expect(inspector().textContent).toContain('@ 0.5')
+
+    key(diamonds[1], 'ArrowRight')
+    const moved = changes[changes.length - 1]
+    expect(moved?.tracks[0]?.keyframes.map((keyframe) => keyframe.at)).toEqual([0, 0.51, 1])
+
+    // re-query: the nudge re-rendered the diamond row
+    const again = keyframeDiamonds('transition.scaleY')
+    expect(again[1]?.getAttribute('aria-label')).toContain('0.51')
+    key(again[1], 'Delete')
+    const removed = changes[changes.length - 1]
+    expect(removed?.tracks[0]?.keyframes.map((keyframe) => keyframe.at)).toEqual([0, 1])
+  })
+
+  it('event markers select with Enter; Delete follows the schema deletion rules', async () => {
+    const { changes } = await mount('transition', linearTracks(), [
+      { at: 0.3, type: 'pose-swap' },
+      { at: 0.7, type: 'particle', effect: 'confetti' },
+    ])
+    const poseSwapMarker = q<HTMLButtonElement>('[aria-label="pose-swap（换图）事件 @ 0.3"]')
+    const particleMarker = q<HTMLButtonElement>('[aria-label="粒子事件 confetti @ 0.7"]')
+
+    keyboardClick(poseSwapMarker)
+    expect(q<HTMLElement>('[aria-label="事件检查器"]').textContent).toContain('@ 0.3')
+
+    // a transition's lone pose-swap is not deletable — neither by keyboard…
+    const before = changes.length
+    key(poseSwapMarker, 'Delete')
+    expect(changes.length).toBe(before)
+    expect(container.querySelector('[aria-label="事件轨"]')).not.toBeNull()
+
+    // …while the particle event deletes fine
+    key(particleMarker, 'Delete')
+    expect(changes[changes.length - 1]?.events.map((event) => event.type)).toEqual(['pose-swap'])
+  })
+})
+
+describe('TimelineEditor — keyboard focus retention & interaction pose-swap authoring', () => {
+  const key = (el: Element, value: string): void => {
+    act(() => {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))
+    })
+  }
+
+  it('←/→ nudge keeps focus on the diamond — continuous keyboard nudging works', async () => {
+    const { changes } = await mount('transition', duoTracks(), poseSwap())
+    const diamonds = keyframeDiamonds('transition.scaleY')
+    act(() => {
+      diamonds[1]?.focus()
+    })
+    expect(document.activeElement).toBe(diamonds[1])
+
+    key(diamonds[1] as Element, 'ArrowRight')
+    expect(changes[changes.length - 1]?.tracks[0]?.keyframes[1]?.at).toBe(0.51)
+    // The button must be the SAME DOM node after the re-render (an at-bearing
+    // key would remount it and drop focus to <body>, killing step 2).
+    const after = keyframeDiamonds('transition.scaleY')
+    expect(document.activeElement).toBe(after[1])
+    key(after[1] as Element, 'ArrowRight')
+    expect(changes[changes.length - 1]?.tracks[0]?.keyframes[1]?.at).toBe(0.52)
+  })
+
+  it('interaction: the toolbar adds a TARGETED pose-swap; the inspector retargets it', async () => {
+    const { changes, validations } = await mount('interaction', linearTracks(), [])
+    const add = [...container.querySelectorAll('button')].find(
+      (el) => el.textContent === '＋ 添加 pose-swap（换图）',
+    )
+    if (add === undefined) throw new Error('add pose-swap button missing for interaction kind')
+    act(() => {
+      add.click()
+    })
+    // The schema requires every interaction pose-swap to name a target — a
+    // fresh addition defaults to the idle slot and stays valid.
+    expect(changes[0]?.events).toEqual([{ at: 0.5, type: 'pose-swap', pose: 'idle' }])
+    expect(validations[validations.length - 1]).toEqual([])
+
+    const marker = q<HTMLButtonElement>('[aria-label="pose-swap（换图）事件 @ 0.5"]')
+    down(marker, 100)
+    up(100)
+    const eventInspector = q<HTMLElement>('[aria-label="事件检查器"]')
+    const poseInput = eventInspector.querySelector('input[type="text"]')
+    if (poseInput === null) throw new Error('pose target input missing')
+    type(poseInput as HTMLInputElement, 'working')
+    expect(changes[changes.length - 1]?.events).toEqual([{ at: 0.5, type: 'pose-swap', pose: 'working' }])
+    expect(validations[validations.length - 1]).toEqual([])
+    // The hint teaches the play-time semantics instead of telling the author
+    // to delete a legal event.
+    expect(eventInspector.textContent).toContain('播放时')
+
+    // Clearing the target makes the draft invalid (schema) until fixed.
+    type(poseInput as HTMLInputElement, '')
+    expect(validations[validations.length - 1].some((error) => error.includes('pose'))).toBe(true)
+  })
+})

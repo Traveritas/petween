@@ -158,16 +158,30 @@ describe('validateConfigPatch (§19.2)', () => {
   })
 
   it('accepts interactions.click and fills it from the base when absent', () => {
-    const turned = validateConfigPatch({ version: 1, interactions: { click: { animation: 'builtin:click-spin', pose: 'success' } } })
-    expect(turned.interactions).toEqual({ click: { animation: 'builtin:click-spin', pose: 'success' } })
+    const turned = validateConfigPatch({
+      version: 1,
+      interactions: { click: { animation: 'builtin:click-spin', pose: 'success', honorAnimationPoseSwap: true } },
+    })
+    expect(turned.interactions).toEqual({
+      click: { animation: 'builtin:click-spin', pose: 'success', honorAnimationPoseSwap: true },
+    })
 
     const withNull = validateConfigPatch({ version: 1, interactions: { click: { animation: 'builtin:click-pop', pose: null } } })
     expect(withNull.interactions.click.pose).toBeNull()
+    // absent field → the base default (false): configs predating the field
+    // keep the off behavior with no migration step.
+    expect(withNull.interactions.click.honorAnimationPoseSwap).toBe(false)
 
     const base = createDefaultPetweenConfig()
-    base.interactions.click = { animation: 'builtin:click-wiggle', pose: 'thinking' }
+    base.interactions.click = { animation: 'builtin:click-wiggle', pose: 'thinking', honorAnimationPoseSwap: true }
     const patched = validateConfigPatch({ version: 1, enabled: false }, base)
-    expect(patched.interactions.click).toEqual({ animation: 'builtin:click-wiggle', pose: 'thinking' })
+    expect(patched.interactions.click).toEqual({ animation: 'builtin:click-wiggle', pose: 'thinking', honorAnimationPoseSwap: true })
+  })
+
+  it('rejects a non-boolean interactions.click.honorAnimationPoseSwap', () => {
+    expect(() =>
+      validateConfigPatch({ version: 1, interactions: { click: { animation: 'builtin:click-pop', honorAnimationPoseSwap: 'yes' } } }),
+    ).toThrowError(ConfigValidationError)
   })
 
   it('throws with field paths on bad interaction values, collecting all issues', () => {
@@ -256,10 +270,12 @@ describe('repairConfig — advanced defaults (§18.3)', () => {
     const repaired = repairConfig({
       version: 1,
       advanced: { activityTransition: 'fancy' },
-      interactions: { click: { animation: 42, pose: 'happy' } },
+      interactions: { click: { animation: 42, pose: 'happy', honorAnimationPoseSwap: 'nope' } },
     })
     expect(repaired.advanced.activityTransition).toBe('subtle')
-    expect(repaired.interactions).toEqual({ click: { animation: 'builtin:click-pop', pose: null } })
+    expect(repaired.interactions).toEqual({
+      click: { animation: 'builtin:click-pop', pose: null, honorAnimationPoseSwap: false },
+    })
   })
 })
 

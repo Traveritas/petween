@@ -95,6 +95,70 @@ describe('AnimationsStore.loadAll', () => {
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('duplicate')
   })
+
+  it('auto-normalizes legacy pre-tightening shapes instead of dropping them', async () => {
+    await mkdir(join(dir, 'animations'), { recursive: true })
+    // All three shapes were LEGAL under the pre-2026-08-27 schema (the old
+    // compiler tests even blessed ambient transition-layer tracks).
+    await writeFile(
+      join(dir, 'animations', 'user_legacy.json'),
+      JSON.stringify(
+        makeDefinition('user:legacy', {
+          kind: 'ambient',
+          repeat: { mode: 'random-interval', minDelayMs: 0, maxDelayMs: 800 },
+          tracks: [
+            {
+              property: 'transition.scaleX',
+              keyframes: [
+                { at: 0, value: 1 },
+                { at: 1, value: 1 },
+              ],
+            },
+            {
+              property: 'sway.rotation',
+              keyframes: [
+                { at: 0, value: 0 },
+                { at: 0.5, value: 6 },
+                { at: 0.5, value: 9 }, // duplicate at: first wins
+                { at: 1, value: 0 },
+              ],
+            },
+          ],
+        }),
+      ),
+      'utf8',
+    )
+    const { customs, warnings } = await store.loadAll()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('auto-normalized')
+    expect(customs).toHaveLength(1)
+    const definition = customs[0]
+    // transition-layer track dropped (ambient owns no transition tracks)
+    expect(definition.tracks.map((track) => track.property)).toEqual(['sway.rotation'])
+    // duplicate `at` resolved to the first keyframe
+    expect(definition.tracks[0].keyframes).toHaveLength(3)
+    expect(definition.tracks[0].keyframes[1].value).toBe(6)
+    // random-interval floor applied (and max stays >= min)
+    expect(definition.repeat).toEqual({ mode: 'random-interval', minDelayMs: 1, maxDelayMs: 800 })
+    // kindOf sees the normalized shape too, so a config mounting this id
+    // keeps saving (the pre-fix skip made it dangle).
+    expect(store.kindOf('user:legacy')).toBe('ambient')
+  })
+
+  it('still skips files that stay invalid after normalization', async () => {
+    await mkdir(join(dir, 'animations'), { recursive: true })
+    await writeFile(
+      join(dir, 'animations', 'user_hopeless.json'),
+      JSON.stringify(makeDefinition('user:hopeless', { durationMs: 0 })),
+      'utf8',
+    )
+    const { customs, warnings } = await store.loadAll()
+    expect(customs).toEqual([])
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('skipped')
+    expect(warnings[0]).toContain('durationMs')
+    expect(store.kindOf('user:hopeless')).toBeUndefined()
+  })
 })
 
 describe('AnimationsStore.save', () => {
@@ -122,6 +186,14 @@ describe('AnimationsStore.save', () => {
       expect(error, id).toBeInstanceOf(AnimationError)
       expect((error as AnimationError).code).toBe('INVALID_DEFINITION')
     }
+    expect(await store.listIds()).toEqual([])
+  })
+
+  it('rejects the reserved client preview draft id "user:0draft" (DRAFT_ANIMATION_ID)', async () => {
+    const error = await store.save(makeDefinition('user:0draft')).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(AnimationError)
+    expect((error as AnimationError).code).toBe('INVALID_DEFINITION')
+    expect((error as AnimationError).message).toContain('user:0draft')
     expect(await store.listIds()).toEqual([])
   })
 

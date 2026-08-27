@@ -120,6 +120,28 @@ describe('createPetweenHostService', () => {
     await expect(service.hasAnimation('user:motion-run-wall-bounce')).resolves.toBe(true)
     await expect(service.hasAnimation('user:other')).resolves.toBe(false)
   })
+
+  it('pack isolation: a pack-scoped register cannot leave user:<pack>- (2026-08-27)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'petween-service-'))
+    const store = makeStore()
+    const service = createPetweenHostService(store)
+
+    // the user's hand-made entry (or another pack's) is structurally out of reach
+    await service.registerAnimation(makeTransition('user:hand-made'))
+    await expect(service.registerAnimation(makeTransition('user:hand-made'), { pack: 'physics' })).rejects.toThrow(
+      'outside the user:physics- namespace',
+    )
+    await expect(service.registerAnimation(makeTransition('user:other-pack-thing'), { pack: 'physics' })).rejects.toThrow(
+      'outside the user:physics- namespace',
+    )
+    await expect(
+      service.registerAnimation(makeTransition('user:physics-bounce'), { pack: 'not valid!' }),
+    ).rejects.toThrow('invalid pack id')
+
+    await expect(service.registerAnimation(makeTransition('user:physics-bounce'), { pack: 'physics' })).resolves.toBeUndefined()
+    const { customs } = await store.loadAll()
+    expect(customs.map((entry) => entry.id).sort()).toEqual(['user:hand-made', 'user:physics-bounce'])
+  })
 })
 
 describe('host entry provides the service', () => {

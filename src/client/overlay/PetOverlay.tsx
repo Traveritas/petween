@@ -29,6 +29,8 @@ export function PetOverlay(props: PetOverlayProps): JSX.Element | null {
   const hub = props.hub ?? sharedConfigHub
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(() => hub.getCurrent())
   const sessionRef = useRef<OverlaySession | null>(null)
+  /** Stable polling claim: unmounting releases only OUR claim on the shared feed. */
+  const pollOwnerRef = useRef({})
 
   useEffect(() => {
     let active = true
@@ -42,14 +44,14 @@ export function PetOverlay(props: PetOverlayProps): JSX.Element | null {
         },
       )
     }
-    hub.startPolling()
+    hub.startPolling(pollOwnerRef.current)
     const unsubscribe = hub.subscribe((next) => {
       setSnapshot(next)
     })
     return () => {
       active = false
       unsubscribe()
-      hub.stopPolling()
+      hub.stopPolling(pollOwnerRef.current)
     }
   }, [hub])
 

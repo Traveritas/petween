@@ -134,6 +134,8 @@
   background: var(--dsw-alias-bg-layer-2, #ffffff);
   transform: translate(-50%, -50%) rotate(45deg);
   cursor: grab;
+  /* a touch press on a diamond is a drag gesture, not page scroll */
+  touch-action: none;
 }
 
 .keyframe:hover {
@@ -180,6 +182,7 @@
   line-height: 1;
   padding: 2px 3px;
   cursor: grab;
+  touch-action: none; /* same reason as .keyframe */
 }
 
 .eventIconSelected,

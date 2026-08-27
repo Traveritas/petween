@@ -553,6 +553,78 @@ describe('OverlaySession — flash hold + teardown edges (review round 2)', () =
     expect(patchConfig).toHaveBeenCalledTimes(1) // the final position was not lost
     expect(patchConfig.mock.calls[0][0]).toEqual({ overlay: { x: 880, y: 624 } })
   })
+
+  it('a same-shape target (§10.3 dedupe) never ends a holdMs<=0 flash hold', async () => {
+    const context = setup()
+    const { session, image } = context
+    await boot(context)
+    const pending = session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await settleTransitions()
+    await pending
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-thinking'))
+
+    expect(session.flashPose('success', 0)).toBe(true)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+
+    // reasoning→tool switch: same visualState, same poseKey → the director's
+    // dedupe branch (§10.3, ambient-only). The director hook still fires, but
+    // a same-shape target must not clear the hold — the stage keeps the flash.
+    await session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'command',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success')) // hold intact
+
+    // A hub publish (e.g. the physics companion's settle commit) runs the
+    // refresh pass — an active hold defers it. With the hold wrongly cleared
+    // the refresh would force the state pose back and strand the ledger.
+    publish(context.hub, context.config, context.assets)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+
+    // a real state change still re-owns the pose (flash is not sticky)
+    const back = session.director.setTarget({ visualState: 'idle', poseKey: 'idle', reason: 'agent-state' })
+    await settleTransitions()
+    await back
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-idle'))
+    session.dispose()
+  })
+
+  it('a same-shape target never cancels a pending timed flash restore', async () => {
+    const context = setup()
+    const { session, image } = context
+    await boot(context)
+    const pending = session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await settleTransitions()
+    await pending
+
+    expect(session.flashPose('success', 1000)).toBe(true)
+    // the same activity switch mid-hold must not cancel the restore timer
+    await session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'command',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+    await vi.advanceTimersByTimeAsync(1)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-thinking')) // restored on schedule
+    session.dispose()
+  })
 })
 
 describe('OverlaySession — custom animation sync (V1.1)', () => {
@@ -659,5 +731,125 @@ describe('OverlaySession — custom animation sync (V1.1)', () => {
       )?.playState,
     ).toBe('running')
     session.dispose()
+  })
+})
+
+describe('OverlaySession — pose ledger hardening + clamp basis (review round 3, 2026-08-27)', () => {
+  const swapFlashCustom = (): AnimationDefinition => ({
+    version: 1,
+    id: 'user:swapflash',
+    name: 'Swap Flash',
+    kind: 'interaction',
+    durationMs: 600,
+    repeat: { mode: 'once' },
+    tracks: [
+      {
+        property: 'transition.scaleX',
+        keyframes: [
+          { at: 0, value: 1 },
+          { at: 1, value: 1.2 },
+        ],
+      },
+    ],
+    events: [{ at: 0.5, type: 'pose-swap', pose: 'success' }],
+  })
+
+  it("an external run's settle never clears a LATER flashPose hold (P1)", async () => {
+    const context = setup(undefined, undefined, [swapFlashCustom()])
+    const { session, image } = context
+    await boot(context)
+    const enter = session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await settleTransitions()
+    await enter
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-thinking'))
+
+    const instance = session.playExternal('user:swapflash')
+    expect(instance).not.toBeNull()
+    // Finish the pre-swap segment: the event lands the success hold
+    // (holdMs 0 = until the next state change).
+    harness.finishPending()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+
+    // A later flash legitimately replaces the ledger mid-run…
+    expect(session.flashPose('error', 10_000)).toBe(true)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-error'))
+
+    // …so the run's own settle must NOT cut the 10s hold short.
+    await settleTransitions()
+    await instance?.play()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-error'))
+    // The hold's own timer restores the CURRENT target's pose on schedule.
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-thinking'))
+    session.dispose()
+  })
+
+  it('a flash mid-enter preempts the transition: stage and ledger never drift (P1)', async () => {
+    const context = setup()
+    const { session, image } = context
+    await boot(context)
+    const enter = session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    // Still in the pre segment — the enter's own pose-swap has not fired.
+    expect(session.director.transitionInFlight).toBe(true)
+    expect(session.flashPose('success', 800)).toBe(true)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+
+    // Whatever the interrupted enter leaves behind settles cleanly; the flash
+    // image stays on stage (pre-fix, the enter's swap overwrote it here and
+    // the ledger kept reporting the flash pose).
+    await settleTransitions()
+    await enter
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-success'))
+    await vi.advanceTimersByTimeAsync(801)
+    expect(image.getAttribute('src')).toBe(assetUrl('asset-thinking'))
+    session.dispose()
+  })
+
+  it('drag clamps on the VISIBLE square (side × scale): memory, DOM and snapshot agree', async () => {
+    const context = setup((config) => {
+      config.global.scale = 0.5
+    })
+    const { stage, session, patchConfig } = context
+    await boot(context)
+    const body = stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', -5000, 600)) // hard against the left wall
+    window.dispatchEvent(pointer('pointerup', -5000, 600))
+    // visibleSize = max(160×0.5, 32) = 80 → the floor is -(80−32) = −48 on
+    // ALL three surfaces. (The pre-fix drag clamp used the unscaled 160 and
+    // let this.position carry −128 while the DOM showed −48.)
+    expect(stage.element.style.left).toBe('-48px')
+    expect(session.getStageSnapshot()?.x).toBe(-48)
+    await vi.advanceTimersByTimeAsync(500) // drag-end debounce → the overlay-only patch
+    expect(patchConfig.mock.calls[0][0]).toEqual({ overlay: { x: -48, y: 584 } })
+    session.dispose()
+  })
+
+  it("teardown mid-gesture fires the paired 'end' phase before the streams go dark", async () => {
+    const context = setup()
+    const { stage, session } = context
+    await boot(context)
+    const phases: string[] = []
+    session.subscribeUserDrag((phase) => {
+      phases.push(phase)
+    })
+    const body = stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 940, 640)) // crosses the threshold → 'start'
+    expect(phases).toEqual(['start'])
+    session.dispose()
+    expect(phases).toEqual(['start', 'end'])
   })
 })

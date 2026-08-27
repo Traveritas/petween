@@ -454,6 +454,14 @@ function buildConfig(raw: unknown, base: PetweenConfig, mode: Mode, options: Con
           walk,
         ),
         pose: nullablePoseField(clickSource.pose, base.interactions.click.pose, 'interactions.click.pose', walk),
+        // Boolean with base fallback: config files predating the field keep
+        // the default (false) on load — no migration step needed.
+        honorAnimationPoseSwap: booleanField(
+          clickSource.honorAnimationPoseSwap,
+          base.interactions.click.honorAnimationPoseSwap,
+          'interactions.click.honorAnimationPoseSwap',
+          walk,
+        ),
       },
     },
     activePetId: nullablePetIdField(source.activePetId, base.activePetId, 'activePetId', walk),

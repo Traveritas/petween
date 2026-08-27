@@ -19,6 +19,7 @@ import {
   petweenClientService,
   setActivePetSession,
   type StageSnapshot,
+  type UserPointerEvent,
 } from '../../src/client/extension-service'
 import { OverlaySession } from '../../src/client/overlay-session'
 import { PetOverlay } from '../../src/client/overlay/PetOverlay'
@@ -27,6 +28,7 @@ import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AssetMeta, PetweenConfig } from '../../src/core/types'
 import { POSE_KEYS } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
+import type { DirectorPlaybackEvent } from '../../src/motion/motion-director'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -174,6 +176,13 @@ const makeCustom = (id: string, durationMs = 300): AnimationDefinition => ({
     },
   ],
 })
+
+const makePoseSwapCustom = (id: string, pose: string, durationMs = 320): AnimationDefinition => ({
+  ...makeCustom(id, durationMs),
+  events: [{ at: 0.5, type: 'pose-swap', pose }],
+})
+
+const DOZE_URL = 'https://example.test/doze.webp'
 
 describe('extension service — no active session', () => {
   it('all three APIs degrade to null', () => {
@@ -373,6 +382,30 @@ describe('extension service — drag arbitration', () => {
     offDrag()
     driver.release()
   })
+
+  it('the driver hears both gesture phases: start suspends, end resumes', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const driver = petweenClientService.requestPositionControl()
+    if (driver === null) throw new Error('driver missing')
+    const phases: string[] = []
+    const offDrag = driver.onUserDrag((phase) => phases.push(phase))
+    expect(driver.apply(400, 400)).toBe(true)
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 460, 460))
+    window.dispatchEvent(pointer('pointermove', 470, 470)) // ≥4px: threshold crossed
+    expect(phases).toEqual(['start'])
+    expect(driver.apply(200, 200)).toBe(false) // suspended for the gesture
+
+    window.dispatchEvent(pointer('pointerup', 470, 470))
+    expect(phases).toEqual(['start', 'end']) // the contract's end signal, not a guess
+    expect(driver.apply(200, 200)).toBe(true)
+
+    offDrag()
+    driver.release()
+  })
 })
 
 describe('extension service — playAnimation', () => {
@@ -459,6 +492,74 @@ describe('extension service — playAnimation', () => {
     await settleTransitions()
     expect(second?.status).toBe('finished')
   })
+
+  it('interrupt:true settles the abandoned target: pose landed, ambient running', async () => {
+    const context = setup(undefined, [makeCustom('user:spin', 320)])
+    setActivePetSession(context.session)
+    await boot(context)
+    const srcOf = (): string | null => context.stage.element.querySelector('img')?.getAttribute('src') ?? null
+
+    const pending = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(context.session.director.transitionInFlight).toBe(true)
+    expect(srcOf()).toBe(assetUrl('asset-idle')) // pre segment: no swap yet
+
+    const instance = petweenClientService.playAnimation('user:spin', { interrupt: true })
+    expect(instance).not.toBeNull()
+    // Without the settle the interrupted enter left the target abandoned: the
+    // stage kept the idle pose and ambient stayed silent after runEnter's stop.
+    expect(srcOf()).toBe(assetUrl('asset-thinking')) // the current target's pose landed
+    const sway = harness.pending().find(
+      (animation) => animation.target === context.stage.layers.sway && animation.options.iterations === Infinity,
+    )
+    expect(sway?.playState).toBe('running') // thinking ambient restarted (no silent stage)
+
+    await settleTransitions()
+    await pending
+    expect(instance?.status).toBe('finished')
+  })
+
+  it('no enter in flight: an interrupting play never settles (flash + ambient phase intact)', async () => {
+    const context = setup(
+      (config) => {
+        config.interactions.click.pose = 'success'
+      },
+      [makeCustom('user:spin', 320)],
+    )
+    setActivePetSession(context.session)
+    await boot(context)
+    const srcOf = (): string | null => context.stage.element.querySelector('img')?.getAttribute('src') ?? null
+    const swayLoop = harness.pending().find(
+      (animation) => animation.target === context.stage.layers.sway && animation.options.iterations === Infinity,
+    )
+    expect(swayLoop?.playState).toBe('running')
+
+    // a click flashes its pose while its pop plays out — no enter in flight
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointerup', 901, 600))
+    expect(srcOf()).toBe(assetUrl('asset-success'))
+    expect(context.session.director.transitionInFlight).toBe(false)
+
+    const instance = petweenClientService.playAnimation('user:spin') // default interrupt: true
+    expect(instance).not.toBeNull()
+    // A spurious settle would bump the generation (killing the click's restore
+    // guard) and swap the stage back to the state pose, cutting the flash.
+    expect(srcOf()).toBe(assetUrl('asset-success')) // the click's flash still owns the stage
+    expect(
+      harness.pending().find(
+        (animation) => animation.target === context.stage.layers.sway && animation.options.iterations === Infinity,
+      ),
+    ).toBe(swayLoop) // ambient kept its instance: no needless restart
+
+    await settleTransitions()
+    await flushUntil(() => srcOf() === assetUrl('asset-idle'))
+    expect(srcOf()).toBe(assetUrl('asset-idle')) // the click's restore still realigned
+  })
 })
 
 describe('extension service — stageSize', () => {
@@ -469,6 +570,189 @@ describe('extension service — stageSize', () => {
     const snapshot = petweenClientService.getStageSnapshot()
     expect(snapshot?.stageSize).toBe(context.stage.stageSize)
     expect(snapshot?.stageSize).toBe(160)
+  })
+})
+
+describe('extension service — snapshot enrichment (v1 widening)', () => {
+  it('before boot: poseKey and bodyRect null; after boot: viewport, flags and the resting img box', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    const early = petweenClientService.getStageSnapshot()
+    expect(early?.poseKey).toBeNull()
+    expect(early?.bodyRect).toBeNull()
+
+    await boot(context)
+    const snapshot = petweenClientService.getStageSnapshot()
+    // jsdom viewport 1024×768 — the clamp math the position layer runs against
+    expect(snapshot?.viewport).toEqual({ width: 1024, height: 768 })
+    expect(snapshot?.dragging).toBe(false)
+    expect(snapshot?.reducedMotion).toBe(false) // default 'system' with no media preference
+    expect(snapshot?.poseKey).toBe('idle')
+    // 240×240 asset contain-fit into the 160 square, pose anchor {0.5,0.96}
+    // onto the world anchor {0.5,0.9}: full-square box shifted up by 9.6px
+    expect(snapshot?.bodyRect?.x).toBe(840)
+    expect(snapshot?.bodyRect?.y).toBeCloseTo(574.4, 5)
+    expect(snapshot?.bodyRect?.width).toBeCloseTo(160, 5)
+    expect(snapshot?.bodyRect?.height).toBeCloseTo(160, 5)
+  })
+
+  it('bodyRect follows the user scale through the world-anchor origin', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
+    next.global.scale = 1.5
+    publish(context.hub, next, context.assets)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const snapshot = petweenClientService.getStageSnapshot()
+    expect(snapshot?.scale).toBe(1.5)
+    // scale around the world anchor (80,144): x' = 840+80+1.5*(0-80) = 800;
+    // y' = 584+144+1.5*(-9.6-144) = 497.6; the box grows to 240×240
+    expect(snapshot?.bodyRect?.x).toBe(800)
+    expect(snapshot?.bodyRect?.y).toBeCloseTo(497.6, 5)
+    expect(snapshot?.bodyRect?.width).toBeCloseTo(240, 5)
+    expect(snapshot?.bodyRect?.height).toBeCloseTo(240, 5)
+  })
+
+  it('dragging flips with the gesture in the snapshot stream', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const seen: Array<StageSnapshot | null> = []
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 920, 620)) // threshold crossed
+    expect(seen[seen.length - 1]?.dragging).toBe(true)
+    window.dispatchEvent(pointer('pointerup', 920, 620))
+    expect(seen[seen.length - 1]?.dragging).toBe(false)
+  })
+
+  it('reducedMotion follows a config publish; poseKey follows a target change', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.getStageSnapshot()?.reducedMotion).toBe(false)
+
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
+    next.global.reducedMotion = 'always'
+    publish(context.hub, next, context.assets)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(petweenClientService.getStageSnapshot()?.reducedMotion).toBe(true)
+
+    const pending = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    expect(petweenClientService.getStageSnapshot()?.poseKey).toBe('thinking')
+    await settleTransitions()
+    await pending
+  })
+})
+
+describe('extension service — isPlaying', () => {
+  it('null without a session; quiet after boot', async () => {
+    expect(petweenClientService.isPlaying()).toBeNull()
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.isPlaying()).toEqual({ enter: false, external: false })
+  })
+
+  it('enter is true while an enter transition is in flight', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const pending = context.session.director.setTarget({
+      visualState: 'active',
+      activityMode: 'thinking',
+      poseKey: 'thinking',
+      reason: 'agent-state',
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(petweenClientService.isPlaying()).toEqual({ enter: true, external: false })
+    await settleTransitions()
+    await pending
+    expect(petweenClientService.isPlaying()).toEqual({ enter: false, external: false })
+  })
+
+  it('external tracks service-played instances through their lifecycle', async () => {
+    const context = setup(undefined, [makeCustom('user:spin', 320)])
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.isPlaying()?.external).toBe(false)
+
+    const instance = petweenClientService.playAnimation('user:spin')
+    expect(instance).not.toBeNull()
+    expect(petweenClientService.isPlaying()).toEqual({ enter: false, external: true })
+
+    await settleTransitions()
+    await flushUntil(() => petweenClientService.isPlaying()?.external === false)
+    expect(instance?.status).toBe('finished')
+    expect(petweenClientService.isPlaying()).toEqual({ enter: false, external: false })
+  })
+})
+
+describe('extension service — listAnimations', () => {
+  it('null without a session; builtin presets and synced customs with full metadata', async () => {
+    expect(petweenClientService.listAnimations()).toBeNull()
+    const context = setup(undefined, [makeCustom('user:spin', 320)])
+    setActivePetSession(context.session)
+    await boot(context)
+
+    const listed = petweenClientService.listAnimations()
+    expect(listed).not.toBeNull()
+    const builtin = listed?.find((entry) => entry.id === 'builtin:comic-pop')
+    expect(builtin).toMatchObject({ id: 'builtin:comic-pop', namespace: 'builtin', kind: 'transition' })
+    expect(builtin?.durationMs).toBeGreaterThan(0)
+    expect(builtin?.name.length ?? 0).toBeGreaterThan(0)
+    expect(listed).toContainEqual({
+      id: 'user:spin',
+      name: 'Custom user:spin',
+      kind: 'interaction',
+      durationMs: 320,
+      namespace: 'user',
+    })
+  })
+
+  it('follows the hub: an unpublished custom appears after a publish', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.listAnimations()?.some((entry) => entry.id === 'user:spin')).toBe(false)
+
+    publish(context.hub, context.config, context.assets, [makeCustom('user:spin', 320)])
+    await flushUntil(() => context.session.registry.get('user:spin') !== undefined)
+    expect(petweenClientService.listAnimations()?.some((entry) => entry.id === 'user:spin')).toBe(true)
+  })
+})
+
+describe('extension service — resyncAnimations', () => {
+  it('resolves without a session', async () => {
+    await expect(petweenClientService.resyncAnimations()).resolves.toBeUndefined()
+  })
+
+  it('closes the register→sync window on demand (no 3s poll wait)', async () => {
+    const customs: AnimationDefinition[] = []
+    const context = setup(undefined, customs)
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(context.session.registry.get('user:spin')).toBeUndefined()
+
+    // the "host" gains the animation (registerAnimation landed server-side)
+    customs.push(makeCustom('user:spin', 320))
+    expect(petweenClientService.playAnimation('user:spin')).toBeNull() // not synced yet
+
+    await petweenClientService.resyncAnimations()
+    expect(context.session.registry.get('user:spin')).toBeDefined()
+    const instance = petweenClientService.playAnimation('user:spin')
+    expect(instance).not.toBeNull()
+    await settleTransitions()
   })
 })
 
@@ -665,6 +949,90 @@ describe('extension service — flashPose competition (pose hold ledger)', () =>
   })
 })
 
+describe('extension service — third-party listener isolation', () => {
+  it('a throwing stage listener never breaks the fan-out or the emitting flow', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const seen: Array<StageSnapshot | null> = []
+    let badCalls = 0
+    // survives the contract's immediate push (that call runs in the
+    // companion's own subscribe stack); throws on every later emission
+    serviceUnsubscribers.push(
+      petweenClientService.subscribeStage(() => {
+        badCalls += 1
+        if (badCalls > 1) throw new Error('bad companion')
+      }),
+    )
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    const seenBefore = seen.length
+
+    const driver = petweenClientService.requestPositionControl()
+    expect(driver?.apply(100, 100)).toBe(true) // the emitting flow itself must not throw
+    expect(seen.length).toBe(seenBefore + 1) // the healthy listener still heard it
+    expect(warn).toHaveBeenCalledWith('petween: stage listener failed', expect.any(Error))
+    driver?.release()
+  })
+
+  it('a throwing subscribeUserDrag listener never blocks the healthy one', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const phases: string[] = []
+    serviceUnsubscribers.push(
+      petweenClientService.subscribeUserDrag(() => {
+        throw new Error('bad companion')
+      }),
+    )
+    serviceUnsubscribers.push(petweenClientService.subscribeUserDrag((phase) => phases.push(phase)))
+
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 920, 620)) // ≥4px: threshold crossed
+    window.dispatchEvent(pointer('pointerup', 930, 630))
+    expect(phases).toEqual(['start', 'end']) // both phases reached the healthy listener
+    expect(warn).toHaveBeenCalledWith('petween: user drag listener failed', expect.any(Error))
+  })
+
+  it('session-level snapshot listeners and driver drag listeners are isolated too', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const seen: StageSnapshot[] = []
+    serviceUnsubscribers.push(
+      context.session.subscribeSnapshot(() => {
+        throw new Error('bad companion')
+      }),
+    )
+    serviceUnsubscribers.push(context.session.subscribeSnapshot((snapshot) => seen.push(snapshot)))
+    const driver = petweenClientService.requestPositionControl()
+    if (driver === null) throw new Error('driver missing')
+    let dragStarts = 0
+    const offBad = driver.onUserDrag(() => {
+      throw new Error('bad companion')
+    })
+    const offGood = driver.onUserDrag(() => {
+      dragStarts += 1
+    })
+
+    expect(driver.apply(100, 100)).toBe(true) // notifySnapshot with a thrower inside
+    expect(seen.some((snapshot) => snapshot.x === 100)).toBe(true)
+    expect(warn).toHaveBeenCalledWith('petween: snapshot listener failed', expect.any(Error))
+
+    context.stage.interactiveElement.dispatchEvent(pointer('pointerdown', 150, 150))
+    window.dispatchEvent(pointer('pointermove', 160, 160)) // threshold crossed
+    expect(dragStarts).toBe(1) // the healthy driver listener heard the gesture start
+    expect(warn).toHaveBeenCalledWith('petween: driver drag listener failed', expect.any(Error))
+    window.dispatchEvent(pointer('pointerup', 170, 170))
+
+    offBad()
+    offGood()
+    driver.release()
+  })
+})
+
 describe('extension service — active session bridge', () => {
   it('a stale clear never detaches the current session', async () => {
     const first = setup()
@@ -708,5 +1076,227 @@ describe('extension service — active session bridge', () => {
 
     act(() => root.unmount())
     expect(petweenClientService.getStageSnapshot()).toBeNull()
+  })
+})
+
+describe('extension service — external pose channel', () => {
+  const srcOf = (context: Setup): string | null => context.stage.interactiveElement.getAttribute('src')
+
+  it('registerPoses is all-or-nothing and unlocks flashPose by external id', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    // not a user: id — the whole batch refuses
+    expect(petweenClientService.registerPoses([{ id: 'doze', url: DOZE_URL }])).toBe(false)
+    expect(petweenClientService.flashPose('user:doze-doze', 100)).toBe(false) // nothing registered
+
+    expect(
+      petweenClientService.registerPoses([
+        { id: 'user:doze-doze', url: DOZE_URL },
+        { id: 'user:doze-snore', url: 'https://example.test/snore.webp', anchor: { x: 0.5, y: 1 }, zoom: 1.2 },
+      ]),
+    ).toBe(true)
+    expect(petweenClientService.flashPose('user:doze-doze', 200)).toBe(true)
+    expect(srcOf(context)).toBe(DOZE_URL)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // restored to the target pose
+  })
+
+  it('flashAsset swaps a one-off companion-hosted image and restores', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+
+    expect(petweenClientService.flashAsset({ url: 'https://example.test/mouth.webp' }, 150)).toBe(true)
+    expect(srcOf(context)).toBe('https://example.test/mouth.webp')
+    await vi.advanceTimersByTimeAsync(150)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle'))
+
+    // invalid definitions refuse without touching the stage
+    expect(petweenClientService.flashAsset({ url: '' }, 100)).toBe(false)
+    expect(petweenClientService.flashAsset({ url: DOZE_URL, anchor: { x: 1.5, y: 0.5 } }, 100)).toBe(false)
+    expect(srcOf(context)).toBe(assetUrl('asset-idle'))
+  })
+
+  it('unregisterPoses drops targets; registerPoses is false without a session', async () => {
+    expect(petweenClientService.registerPoses([{ id: 'user:doze-doze', url: DOZE_URL }])).toBe(false)
+    expect(petweenClientService.flashAsset({ url: DOZE_URL }, 100)).toBe(false)
+
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.registerPoses([{ id: 'user:doze-doze', url: DOZE_URL }])).toBe(true)
+    petweenClientService.unregisterPoses(['user:doze-doze'])
+    expect(petweenClientService.flashPose('user:doze-doze', 100)).toBe(false)
+  })
+
+  it('an interaction animation pose-swaps to a registered pose mid-run and restores on settle', async () => {
+    const context = setup(undefined, [makePoseSwapCustom('user:doze', 'user:doze-doze')])
+    setActivePetSession(context.session)
+    await boot(context)
+    expect(petweenClientService.registerPoses([{ id: 'user:doze-doze', url: DOZE_URL }])).toBe(true)
+
+    const seen: Array<string | null> = []
+    serviceUnsubscribers.push(petweenClientService.subscribePose((pose) => seen.push(pose === null ? null : pose.poseKey)))
+    const instance = petweenClientService.playAnimation('user:doze')
+    expect(instance).not.toBeNull()
+    await settleTransitions()
+    expect(seen).toContain('user:doze-doze') // the mid-run swap fired
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // settle realigned to the state pose
+    expect(instance?.status).toBe('finished')
+  })
+
+  it('a pose-swap naming an unregistered pose is skipped, never fatal', async () => {
+    const context = setup(undefined, [makePoseSwapCustom('user:doze', 'user:missing')])
+    setActivePetSession(context.session)
+    await boot(context)
+
+    const instance = petweenClientService.playAnimation('user:doze')
+    expect(instance).not.toBeNull()
+    await settleTransitions()
+    expect(srcOf(context)).toBe(assetUrl('asset-idle')) // never swapped anywhere
+    expect(instance?.status).toBe('finished')
+  })
+})
+
+describe('extension service — subscribePose', () => {
+  it('current pose arrives immediately; null without a session and across teardown', async () => {
+    const beforeSession: Array<string | null> = []
+    const offBefore = petweenClientService.subscribePose((pose) =>
+      beforeSession.push(pose === null ? null : pose.poseKey),
+    )
+    expect(beforeSession).toEqual([null])
+    offBefore()
+
+    const context = setup()
+    setActivePetSession(context.session)
+    const seen: Array<string | null> = []
+    serviceUnsubscribers.push(
+      petweenClientService.subscribePose((pose) => seen.push(pose === null ? null : pose.poseKey)),
+    )
+    await boot(context)
+    expect(seen).toContain('idle') // boot's idle swap (or the immediate push post-boot)
+
+    clearActivePetSession(context.session)
+    expect(seen[seen.length - 1]).toBeNull() // teardown pushes null
+  })
+
+  it('a flash drives the stream (the displayed truth, not the target want)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const seen: Array<string | null> = []
+    serviceUnsubscribers.push(
+      petweenClientService.subscribePose((pose) => seen.push(pose === null ? null : pose.poseKey)),
+    )
+    expect(petweenClientService.flashPose('success', 300)).toBe(true)
+    expect(seen[seen.length - 1]).toBe('success') // flash shown NOW, unlike snapshot.poseKey
+    await vi.advanceTimersByTimeAsync(300)
+    expect(seen[seen.length - 1]).toBe('idle')
+  })
+})
+
+describe('extension service — subscribeUserPointer', () => {
+  it('clicks carry a maintained detail count (double-click window)', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const events: UserPointerEvent[] = []
+    serviceUnsubscribers.push(petweenClientService.subscribeUserPointer((event) => events.push(event)))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointerup', 900, 600))
+    body.dispatchEvent(pointer('pointerdown', 902, 601))
+    window.dispatchEvent(pointer('pointerup', 902, 601))
+    expect(events.filter((event) => event.kind === 'click')).toEqual([
+      { kind: 'click', x: 900, y: 600, detail: 1 },
+      { kind: 'click', x: 902, y: 601, detail: 2 },
+    ])
+    await settleTransitions() // the two click pops played out
+  })
+
+  it('a drag fires no click events', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const events: UserPointerEvent[] = []
+    serviceUnsubscribers.push(petweenClientService.subscribeUserPointer((event) => events.push(event)))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointermove', 920, 620)) // ≥4px: a drag
+    window.dispatchEvent(pointer('pointerup', 920, 620))
+    expect(events).toEqual([]) // neither click nor hover came from the gesture
+  })
+
+  it('hover enter/move/leave; move coalesces to the last position per frame', async () => {
+    // Deterministic rAF: a faked-timer frame, so coalescing is observable.
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      (callback: FrameRequestCallback): number => setTimeout(() => callback(performance.now()), 16) as unknown as number,
+    )
+    vi.stubGlobal('cancelAnimationFrame', (handle: number): void => {
+      clearTimeout(handle)
+    })
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const events: UserPointerEvent[] = []
+    serviceUnsubscribers.push(petweenClientService.subscribeUserPointer((event) => events.push(event)))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('mouseenter', 910, 610))
+    expect(events).toEqual([{ kind: 'hover-enter', x: 910, y: 610 }])
+
+    body.dispatchEvent(pointer('mousemove', 911, 611))
+    body.dispatchEvent(pointer('mousemove', 915, 614))
+    expect(events.filter((event) => event.kind === 'hover-move')).toEqual([]) // still one frame out
+    await vi.advanceTimersByTimeAsync(20)
+    expect(events.filter((event) => event.kind === 'hover-move')).toEqual([{ kind: 'hover-move', x: 915, y: 614 }])
+
+    body.dispatchEvent(pointer('mouseleave', 930, 630))
+    expect(events[events.length - 1]).toEqual({ kind: 'hover-leave', x: 930, y: 630 })
+  })
+})
+
+describe('extension service — subscribeAnimation', () => {
+  it('external plays: start + settle(finished); an interrupted play settles cancelled', async () => {
+    const context = setup(undefined, [makeCustom('user:spin', 320)])
+    setActivePetSession(context.session)
+    const events: DirectorPlaybackEvent[] = []
+    serviceUnsubscribers.push(petweenClientService.subscribeAnimation((event) => events.push(event)))
+    await boot(context) // the idle enter: start + settle(finished)
+    expect(events.some((event) => event.source === 'enter' && event.phase === 'start')).toBe(true)
+    expect(events.some((event) => event.source === 'enter' && event.phase === 'settle' && event.status === 'finished')).toBe(true)
+
+    petweenClientService.playAnimation('user:spin')
+    await settleTransitions()
+    expect(events.filter((event) => event.source === 'external')).toEqual([
+      { phase: 'start', source: 'external', definitionId: 'user:spin' },
+      { phase: 'settle', source: 'external', definitionId: 'user:spin', status: 'finished' },
+    ])
+
+    petweenClientService.playAnimation('user:spin')
+    petweenClientService.playAnimation('user:spin') // interrupts the one above
+    await settleTransitions()
+    expect(events.filter((event) => event.source === 'external' && event.status === 'cancelled')).toHaveLength(1)
+  })
+
+  it('click interactions attribute as interaction', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const events: DirectorPlaybackEvent[] = []
+    serviceUnsubscribers.push(petweenClientService.subscribeAnimation((event) => events.push(event)))
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 900, 600))
+    window.dispatchEvent(pointer('pointerup', 901, 600)) // a click
+    await settleTransitions()
+    const interactions = events.filter((event) => event.source === 'interaction')
+    expect(interactions[0]?.phase).toBe('start')
+    expect(interactions.some((event) => event.phase === 'settle' && event.status === 'finished')).toBe(true)
   })
 })

@@ -23,7 +23,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { AssetMeta, PetweenConfig, PoseKey } from '../core/types'
 import { POSE_KEYS } from '../core/types'
-import type { AnimationDefinition } from '../motion/animation-definition'
+import { ANIMATION_KINDS, type AnimationDefinition } from '../motion/animation-definition'
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
@@ -333,6 +333,18 @@ function animationReferenced(config: PetweenConfig, id: string): boolean {
   return POSE_KEYS.some((key) => stateReferencesAnimation(config.states[key], id))
 }
 
+/**
+ * Reference judgement shared by the DELETE 409 and the PUT kind-change 409:
+ * the live config (state timelines + click interaction) plus every pet
+ * preset, active or not.
+ */
+function animationReferencedAnywhere(config: PetweenConfig, pets: PetPreset[], id: string): boolean {
+  return (
+    animationReferenced(config, id) ||
+    pets.some((pet) => POSE_KEYS.some((key) => stateReferencesAnimation(pet.states[key], id)))
+  )
+}
+
 async function handleAnimations(
   req: IncomingMessage,
   res: ServerResponse,
@@ -355,19 +367,31 @@ async function handleAnimations(
     }
     const bodyId = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).id : undefined
     if (bodyId !== id) throw new HttpError(400, 'ID_MISMATCH', `path id "${id}" does not match body id ${JSON.stringify(bodyId)}`)
+    // Kind-change guard (DELETE parity): flipping the kind of a still-
+    // referenced animation (e.g. transition → ambient) would silently break
+    // its mounts — the runtime falls back, config repair drops the mount and
+    // the preset mirror writes the loss into every referencing preset. Same
+    // reference judgement as DELETE, same 409 ANIMATION_IN_USE body. Only a
+    // well-formed kind participates: a garbage kind must surface as the
+    // store's 400 INVALID_DEFINITION, not as a kind-change 409.
+    const incoming = raw as AnimationDefinition
+    const kindUsable = typeof incoming.kind === 'string' && ANIMATION_KINDS.includes(incoming.kind)
+    const { customs } = await deps.listAnimations()
+    const existing = customs.find((definition) => definition.id === id)
+    if (kindUsable && existing !== undefined && existing.kind !== incoming.kind) {
+      const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+      if (animationReferencedAnywhere(config, pets, id)) {
+        throw new AnimationError('IN_USE', '动画仍被挂载引用，不能变更类型；请先解除引用，或另存为新动画')
+      }
+    }
     // Full schema + user-namespace validation happens in the store.
-    await deps.saveAnimation(raw as AnimationDefinition)
+    await deps.saveAnimation(incoming)
     sendJson(res, 200, { animation: raw })
     return
   }
   if (req.method === 'DELETE') {
     const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
-    await deps.deleteAnimation(
-      id,
-      (animationId) =>
-        animationReferenced(config, animationId) ||
-        pets.some((pet) => POSE_KEYS.some((key) => stateReferencesAnimation(pet.states[key], animationId))),
-    )
+    await deps.deleteAnimation(id, (animationId) => animationReferencedAnywhere(config, pets, animationId))
     sendJson(res, 200, { deleted: id })
     return
   }

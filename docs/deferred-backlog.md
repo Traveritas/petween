@@ -1,193 +1,356 @@
-# 暂缓项备忘录（deferred backlog）
+# 暂缓项备忘录（deferred-backlog）
 
-> 来源：2026-08-23 独立代码审查（用户体验 + 接口可扩展性）。已修复项（UX-1..UX-4、
-> 运行时小项、EXT-1 enter kind 契约、EXT-2 跨源写防护）见
-> `docs/implementation-notes.md` 同日条目，此处只收录**明确暂缓、待拍板**的内容。
-> 每项按「现状 → 影响 → 建议」组织；条目无优先级排序，做不做由后续迭代决定。
-> 2026-08-25 第二轮评审（附属 flashPose / 物理插件）新增条目见文末 D 节。
+> 用途：收录**明确暂缓、待拍板、排队**的内容；已修复项记录在
+> `docs/implementation-notes.md` 同日条目，不在此重复。
+>
+> **2026-08-27 全量梳理**：原按评审来源分的 A/B/D/E/F 五节合并为下述主题分组；
+> 已随后续迭代落地的条目（isPlaying、listAnimations、快照增补、resync、
+> host pack 可选隔离等）移入文末「已解决存档」；每条带状态标记——
+> **【待拍板】**需要用户决策、**【近期】**建议尽快（小成本/正确性）、
+> **【前置】**某大功能开工前建议先落、**【排队】**已拍板"后面再加"、
+> **【按需】**无明确触发点、**【搁置】**拍板不做（带重开条件）。
 
 ---
 
-## A. 用户体验
+## 0. 速览（2026-08-27）
 
-### A1. 空状态塌缩：删掉最后一张图后编辑器只剩导入框
+| 优先级 | 条目 | 一句话 | 状态 |
+| --- | --- | --- | --- |
+| 1 | F1 reduced-motion 约束 | 外部播放不看用户无障碍偏好，几行 gate | 【近期】 |
+| 2 | E1 clamp 尺寸一致性 | apply 预夹用未缩放尺寸，scale≠1 时附属几何失真 | 【近期】 |
+| 3 | npm publish / GitHub 公开 | 对外发布拍板（含 B2/B3 是否先行） | 【待拍板】 |
+| 4 | A2 另存为新宠物 | 变体工作流的覆盖风险 | 【待拍板】 |
+| 5 | A5 waiting 压制 error | 回退聚合模式无 TTL，报错脸出不来 | 【待拍板】 |
+| 6 | E3 physics 卡片未保存 | 关闭丢弃未保存修改，三候选选一 | 【待拍板】 |
+| 7 | B1+B6+B2+B3+B10 | Motion Pack / 对外发布前的 API 地基包 | 【前置】 |
+| 8 | OverlaySession 拆分 + 双会话去重 | ExtensionSurface 抽取与 session 公共层 | 【前置】 |
+| 9 | F2 attachStageOverlay | 贴身挂件层 | 【排队】 |
+| 10 | F3 playAnimationOn | 跟班/配件复用动画引擎 | 【排队】 |
 
-- 现状：`MotionPetSettings.tsx` 在 `hasAnyUsableImage === false` 时提前 return，全局设置、
-  高级卡、动画库全部不可达（未保存的其它配置仍在 draft 里但无法编辑）。
-- 影响：误删唯一图片后，用户无法在此状态下关闭宠物、管理动画库或改全局设置。
-- 建议：空状态保留可折叠的全局/高级卡与「启用宠物」开关；需要重排 §2.1 门控的布局
-  结构，建议单独一轮 + 真机目视。
+> （原第 3 位「B5(短期) strength 默认上限」已于 2026-08-27 下午落地，
+> 见 §9 存档。）
+
+---
+
+## 1. 待用户拍板（决策类，非编码）
+
+### npm publish 与对外发布
+
+- 现状：M6 打包就绪，tarball 干净安装验收通过；用户自评未到对外可用阶段。
+- 关联：若对外发布，B2（HTTP meta）、B3（乐观并发）、B9（未知字段策略）
+  建议先行——旧客户端对新 host 的兼容面目前靠逐端点 404 试错。
+- 附属生态同理：physics 未发布则 E4（服务名旧 alias）维持已决策的 README
+  矩阵即可；出现真实旧版用户再议双 provide。
 
 ### A2. 「另存为新宠物」：无法携带未保存修改建副本
 
-- 现状：宠物操作永不隐式保存（`preparePetAction`），create/apply 一律要求 clean draft；
-  想做角色变体必须先「保存修改」覆盖当前宠物（store 层已放宽 rename/delete 非 active，
-  但 create 未动）。
+- 现状：宠物 create/apply 一律要求 clean draft；做角色变体必须先「保存修改」
+  覆盖当前宠物。
 - 影响：变体工作流有覆盖风险，无法无损试验。
-- 建议：提供「另存为新宠物」入口 = 先隐式落盘克隆再回切，或 draft 快照携带克隆；
-  是产品语义决策，不只是代码。
+- 建议：先隐式落盘克隆再回切，或 draft 快照携带克隆；产品语义决策。
 
-### A3. 撤销（undo / Ctrl+Z）
-
-- 现状：关键帧/轨道/事件删除等破坏性操作无 undo；「撤回修改」只覆盖整体放弃。
-- 影响：时间轴调误一键删除需手工恢复。
-- 建议：`timeline-model.ts` 已是纯函数，加 history 栈成本低；涉及全套快捷键与 UI，
-  建议按需排期。
-
-### A4. 预览页（preview/index.html）增强
-
-- 现状：无点击交互试播、无拖拽/位置夹紧验证；`successHoldMs/errorHoldMs`、
-  `terminalHold`、`changePoseWithinActive/activityTransition`、coding/command 活动面
-  无开关；设置页 Live Preview 的键盘互动也未接线。
-- 影响：V1.1 招牌交互在无 DSH 环境下无法验证，只能真机试错。
-- 建议：预览页接入 `playInteraction()` 按钮 + hold/terminalHold 控件，顺手改用
-  `embedded` 模式消除对 fixed+flex 静态位置的脆弱依赖。
-
-### A5. waiting 无限压制 error（回退聚合模式）— 需产品拍板
+### A5. waiting 无限压制 error（回退聚合模式）
 
 - 现状：sessions 桥不可用的回退模式下 `waiting` rank 高于 `error` 且无 TTL
-  （`state-adapter.ts` rankOf）；一个会话停在 approval 时其它会话的报错脸永远出不来。
-- 建议：给 waiting 加长 TTL（如 30s）或让 error 短暂穿透；属优先级策略取舍。
+  （`state-adapter.ts` rankOf）；一个会话停在 approval 时其它会话的报错脸
+  永远出不来。
+- 建议：给 waiting 加长 TTL（如 30s）或让 error 短暂穿透；优先级策略取舍。
 
-### A6. 时间轴键盘可达性
+### E3. physics 紧凑设置卡片未保存修改在关闭时丢弃
 
-- 现状：lane 是 `div onClick`，键盘无法添加关键帧；菱形可聚焦但不能用方向键微调时间。
-- 建议：lane 聚焦后 Enter 加帧、选中菱形方向键 ±snap 步进；中等工作量。
+- 现状：卡片 unmount 即 dispose，未保存修改丢弃且无 beforeunload；但有
+  「保存修改」按钮与未保存提示。前提「DSH 对话框关闭不可拦截」需真机复核。
+- 候选：开关即时 patchConfig / unmount 时 fire-and-forget 保存 / 维持现状。
 
-### A7. 其余小项（低）
+### B9. 未知字段全量 strip 是单向兼容
 
-- 错误通知固定在页面顶部，滚动后远离触发点 → toast 化或内联。
-- 拖动手势中的实时 clamp 仍用未缩放方块（`setPosition` 已按 scale 收紧，手势内较宽松）。
-- `config-hub` 轮询开关无引用计数，防御性问题（暂无现实触发路径）。
-- 默认位置 CSS 锚定与 px 换算在经典滚动条下有约一个滚动条宽的偏差。
+- 现状：strict/repair 均 strip 未知字段（符合 §19.2）；client 比 host 新时
+  PUT 的新字段被静默丢弃。
+- 建议：面向第三方客户端二选一——`extensions`/`x-*` 保留袋，或 PUT 响应带
+  `stripped` 列表。开放第三方客户端前拍板。
 
 ---
 
-## B. 接口可扩展性
+## 2. 建议近期修（小成本、正确性/无障碍）
 
-### B1. AnimationDefinition 无版本迁移 seam（做 Motion Pack 前建议先落）
+### F1. 外部播放不受 reduced-motion 约束【无障碍】
 
-- 现状：`version: 1` 是硬门，无 `upgradeAnimationDefinition()`；未知字段静默容忍并
-  原样持久化。config 侧有集中 migration 入口，动画侧没有。
-- 影响：未来 v2 定义 ↔ v1 运行时（或反向）在 pack 导入导出、host 加载、client 同步
-  三个入口各自为政，现在只能整文件跳过。
-- 建议：补一个集中升级/拒绝 seam 供三入口共用，并写下未知字段政策（建议非阻断 warning）。
+- 现状：§22 只 gate 内置 ambient 与粒子；经 `playAnimation` 播的外部动画
+  完全不看用户的「减少动态」偏好（`ambient-engine.ts` 只约束 ambient）。
+- 建议：外部播放默认 respect（PlayOptions 一行 gate）；行为变更——physics
+  碰壁动画将被抑制（本就应当）。几行 + 测试。
 
-### B2. HTTP API 无版本化与能力发现（开放第三方客户端前建议先落）
+### E1. `apply()` 预夹与舞台 clamp 的尺寸语义不一致
 
-- 现状：全部路由挂无版本的 `/api/motion-pet/*`；旧 host 面对新客户端只能逐端点 404 试错。
-- 建议：加 `GET /api/motion-pet/meta`（apiVersion / configVersion / features）；
+- 现状：`overlay-session.ts` 的 driver.apply 用**未缩放** `stage.stageSize`
+  预夹，`pet-stage.ts` setPosition 内部用 `size * userScale` 再夹；scale ≠ 1
+  时持久化坐标与显示坐标可偏离，附属（physics 用 `stageSize * scale` 当
+  bbox）的墙面数学会失真。
+- 建议：apply 入口 clamp 改用缩放后尺寸，与快照 `bodyRect`（已是缩放后真值）
+  对齐，补跨仓测试。同根小项：拖拽手势内实时 clamp 也用未缩放尺寸（原 A7
+  之一）。（resize 后的位置回写已于 2026-08-27 下午修复，与本项不同根。）
+
+---
+
+## 3. Motion Pack（V1.1 P2）/ 对外发布的前置地基【前置】
+
+> 做Motion Pack 导入导出、或 npm publish 开放第三方客户端之前，建议按序
+> 先落这一组，否则三个入口（pack 导入、host 加载、client 同步）各自为政。
+
+### B1. AnimationDefinition 无版本迁移 seam
+
+- 现状：`version: 1` 硬门，无 `upgradeAnimationDefinition()`；未知字段静默
+  容忍并原样持久化。config 侧有集中 migration 入口，动画侧没有。
+- 建议：补集中升级/拒绝 seam 供三入口共用，写下未知字段政策。
+
+### B6. pack 命名空间与 id 重映射
+
+- 现状：registry 支持任意小写命名空间，但 host store / validation / client
+  sync 三处硬编码 `user:`；config 与 pet preset 中的动画引用是全局绝对 id，
+  导入撞车/重复导入没有「改写 id + 同步改写引用」机制，dangling 静默回落。
+- 建议：① 可持久化命名空间白名单（非 builtin）；② pack 格式把「导入 =
+  id 重映射 + 引用改写」列为必备能力。远期关联：附属资产进主库
+  （registerAsset）也依赖此命名空间设计。
+
+### B2. HTTP API 无版本化与能力发现
+
+- 现状：全部路由挂无版本的 `/api/petween/*`；旧 host 面对新客户端只能逐
+  端点 404 试错。
+- 建议：加 `GET /api/petween/meta`（apiVersion / configVersion / features）；
   约定「字段只加不改、删字段升 v2 路径」。
 
 ### B3. 无乐观并发控制
 
-- 现状：多 writer（编辑器/拖动/未来 CLI）靠字段分区约定避免冲突，PUT 无 revision/ETag。
-- 影响：两个客户端编辑同一 section 时 last-writer-wins 且无冲突信号。
+- 现状：多 writer（编辑器/拖动/未来 CLI）靠字段分区约定避免冲突，PUT 无
+  revision/ETag；两个客户端编辑同一 section 时 last-writer-wins 且无冲突信号。
 - 建议：config GET/PUT 带单调 revision，PUT 可选携带期望值，不匹配 409/412。
-
-### B4. ambient channel 是分散的封闭枚举（V1.1 P2「更多 ambient channel」前建议先落）
-
-- 现状：motion 层数据驱动没问题；封闭点在 config 侧——`AmbientConfig` 三字段定死、
-  `resolveAmbientChannel` switch、`ambientField` 校验器、六个状态各一份默认值手写，
-  加一个 channel（如 blink）要同步改约 8~10 个文件。
-- 建议：channel 描述成单一数据表（id/definition/config 片段/resolve/defaults 派生）。
-
-### B5. 参数化维度单参焊死 + 编译器默认上限不一致（建议尽早处理一致性部分）
-
-- 现状：`ParameterizedValue.parameter` 字面量 'strength' 三处焊死；未声明 parameters 的
-  定义编译时 strength 静默钳到 **1.8**（`timeline-compiler.ts` 默认值），而
-  `TRANSITION_STRENGTH_LIMITS` 与内置 preset 已放宽到 3，`motion-format.md` 未记载该默认。
-  另：`parameters` 声明未知键放行、keyframe 使用点拒绝，校验不对称。
-- 建议：短期先对齐默认 max（或写入文档）；中期把 parameter 放宽为受声明集约束的字符串。
-
-### B6. Motion Pack 命名空间与 id 重映射（P2 设计时必须回答）
-
-- 现状：registry 本身支持任意小写命名空间，但 host store / validation / client sync
-  三处硬编码 `user:`；config 与 pet preset 中的动画引用是全局绝对 id，导入撞车/重复导入
-  没有「改写 id + 同步改写引用」机制，dangling 只会静默回落。
-- 建议：现在不必实现，但应固化两个决定——① 可持久化命名空间白名单（非 builtin）；
-  ② pack 格式把「导入 = id 重映射 + 引用改写」列为必备能力。
-
-### B7. 新增 VisualState 的静默失败点
-
-- 现状：`state-machine.ts` reducer 的兜底 return 使新事件类型不报编译错误而是 no-op；
-  terminal 语义（success/error）与 hold 字段散落硬编码在 resolver/adapter。
-- 建议：reducer 改穷尽检查（`default: never`）；导出 `TERMINAL_STATES` + hold 字段映射表。
-  （加新 ActivityMode 只需 2 处，路径健康，无需动。）
-
-### B8. config migration 链无结构
-
-- 现状：`loadConfig` 直接是 `repairConfig`，无版本分派；v2 文件被静默重标 v1 且有测试
-  锁定该行为；host 降级读新配置静默丢字段。
-- 建议：改为显式 `version → migrationSteps[]` 分派（哪怕只有 no-op），降级路径至少告警。
-
-### B9. 未知字段全量 strip 是单向兼容
-
-- 现状：strict/repair 均 strip 未知字段（符合 §19.2）；client 比 host 新时 PUT 的新字段
-  被静默丢弃。
-- 建议：面向第三方客户端二选一——`extensions`/`x-*` 保留袋，或 PUT 响应带 `stripped` 列表。
 
 ### B10. 引用校验不对称 + 删除保护 TOCTOU
 
-- 现状：`pose.assetId` 只要是 string 就入库（animationId 有存在性/kind 校验，assetId 没有）；
-  跨 store 的删除引用检查在锁外快照，并发窗口可产生悬空引用（运行时有 fallback 兜底）。
-- 建议：`poseField` 至少加形状校验（16 hex），可选注入 assetExists；跨 store 检查移入
-  同一把锁，或文档声明 409 为尽力而为。
+- 现状：`pose.assetId` 只要是 string 就入库（animationId 有存在性/kind 校验，
+  assetId 没有）；跨 store 删除引用检查在锁外快照，并发窗口可产生悬空引用
+  （运行时有 fallback 兜底）。
+- 建议：`poseField` 加形状校验（16 hex），可选注入 assetExists；跨 store 检查
+  移入同一把锁，或文档声明 409 尽力而为。关联 B11：`GET /pets/<id>` 单读
+  端点缺失（`readPet` 已有但无路由）——pack 导出会需要。
 
-### B11. 低优先级清单
+### C1. OverlaySession 拆分与双会话公共层去重【2026-08-27 五维评审新增】
 
-- 错误体双形状（409 扁平 / 其余信封）、POST 返 200 而非 201、405 无 `allow` 头 → 统一信封 + 文档标注遗留。
-- SSE 无 `id:`/`retry:` 字段（快照即补偿，自洽；多 client 序号去重前预留最便宜）。
-- `lastBySession` map 依赖 session/disposed 事件，无上界 → LRU 或定期清扫。
-- `Symbol.for` mount flag 吞掉第二份插件副本且无日志 → key 带版本 + 跳过时 warn。
-- `NormalizedAgentEvent.sessionId` 声明可选但 host 恒填充 → 协议层改必填。
-- pets POST 非幂等（双击建重复）→ 可选客户端稳定 id 或 Idempotency-Key。
-- `GET /pets/<id>` 单读端点缺失（`readPet` 已有但无路由）→ pack 导出会需要。
-- `TransitionEngine.onEvent` 未知事件类型静默吞 → 显式默认处理器或注释声明。
-- core ⇄ motion 互相 import → 抽独立动画 SDK 前解环（内置动画数据挪层或 registry 注入式）。
-- `AnimationRegistry` 无变更通知 → pack 动态装载前加 `onChange`（现在加成本最低）。
-- reduced-motion 下「transition 应以属性默认值收尾」的建议应写入 motion-format.md
-  （自定义 transition 结尾停在非中性值会永久停留）。
-- motion-format.md 内置 id 清单遗漏 `builtin:activity-swap` 与四个 `builtin:click-*`。
-- 错误文案直接透传 host 英文信息（如 "invalid AnimationDefinition: …"）→ 面向用户中文化。
+- 现状：overlay-session.ts 已 1179 行呈上帝类趋势（config 热应用/拖拽租约/
+  flash 台账/指针流/扩展服务面全在一类）；extension-service ⇄ overlay-session
+  还有一个 type-only 静态环。overlay-session 与 preview-session 存在约 100~
+  120 行近逐行重复（refreshCurrentPose/syncCustoms/boot 预载/updateConfig 拷贝/
+  applyReducedMotion）。
+- 建议：先抽 `ExtensionSurface`（playExternal/flash*/driver/五组订阅，
+  fanOutSafely 单一实现），再把双会话重复体并入共享 session-core；顺手以
+  session-bridge 小模块消静态环。Motion Pack（B1/B6 地基包）前一并落。
+- 工程配套：引入 @vitest/coverage-v8 度量基线与 lint 脚手架也在这一窗口做。
 
 ---
 
-## D. 附属插件体系（2026-08-25 第二轮评审）
+## 4. 附属生态排队（已拍板「后面再加」）
 
-> 来源：附属 `flashPose` / 抛掷物理插件上线后的真机反馈评审。已修复项
-> （M1/M2/M3、L1/L2，主插件；M5a/M5b 测试、L4，物理插件）见
-> `docs/implementation-notes.md` 同日条目，此处收录明确暂缓的条目。
+### 中断池 per-caller 分池（forCaller 方案）【搁置，带重开条件】
 
-### D1. 位置租约在 commit 往返期间未还，快速再掷被吞（评审 M4，用户拍板不修）
+- 拍板（2026-08-27）：**不做，保留全局 interrupt「谁都能掐断」**。理由：
+  插件作者有动机保证体验；讲礼貌的协调工具已齐（isPlaying / interrupt:false
+  / subscribeAnimation 结束事件）；分池防的是"不靠谱附属互相干扰"，该前提
+  目前不成立，符合「主插件提供能力不做策略」。被掐断的进场动画有 settle
+  兜底（落姿势 + 重启 ambient，测试锁定），最坏是观感截断不是状态故障。
+- 重开条件：真实出现多附属互相干扰的用户反馈。届时按 implementation-notes
+  2026-08-27 第二批末节已定稿方案实施（`forCaller` 句柄 + `Map<caller,Set>`
+  分池 + 默认只掐自己 + preempt external-only），纯增量。
 
-- 现状：物理插件落定路径是 `commit()`（一次配置 PUT + 广播的网络往返）完成后才
-  `release()`——这个顺序本身是正确性要求（先还租约会让远端 overlay 坐标覆盖落定
-  位置）。代价是往返期间租约仍被持有，用户此刻再次甩出会因 `requestPositionControl()`
-  返回 null 被静默吞掉。
-- 影响：本地 DSH 往返通常 <100ms，只有连环快掷能感知；丢的是一次手势，无状态损坏。
-- 建议（若将来要修）：方向是"commit 在途时允许新租约接管待写的位置"（旧 commit
-  的写内容被新手势立即取代，语义安全），需要在 OverlaySession 的
-  saveInFlight/persistPosition 上加一代际标记。用户结论：不好修就没必要修。
+### F2. attachStageOverlay 挂载层 API
 
-### D2. commit 与在途防抖 PUT 的交错窗口（评审 L3，极窄）
+- 气泡/配件/HUD 贴身跟随。核心不难（PetStage stageLayer 受控插入点，挂
+  userScale 层内即继承位置/缩放/全部身体变换）；成本在契约——session 重建
+  重挂约定、pointer-events 禁止、z 序规则、dispose 传播。
 
-- 现状：用户拖拽结束的 300ms 防抖保存与附属 `driver.commit()` 都走
-  `persistPosition`（单飞行标志 saveInFlight，无排队）；commit 会清掉 pending
-  debounce 再立即写，但一次**已在途**的防抖 PUT 与随后的 commit PUT 之间仍是
-  last-write-wins，理论上旧坐标可晚到覆盖新坐标。
-- 影响：需要拖拽结束 ≤300ms 内恰好有附属落定 commit，且两次写到达 host 的顺序
-  发生倒置——极窄。host 侧 read-merge-write 按会话序列化，单写内无损坏。
-- 建议：真要修就在 persistPosition 加单调递增 writeSeq，晚到的响应/早发的旧写
-  丢弃；当前记录在案即可。
+### F3. playAnimationOn(id, layers) 外部元素动画通道
 
-### D3. 未来在 `motion-pet/client` 服务上暴露 isPlaying 查询，供附属节流
+- 让跟班/配件复用动画引擎（含 reduced-motion/隐藏页冻结全套语义），化解
+  「Animation Middleware 只作用于主舞台」的定位冲突。
 
-- 现状：附属判断"有东西在播"只能靠 `playAnimation({ interrupt: false })` 返回
-  null 这一隐式信号；无法区分"enter 在播 / 点播实例在播 / 服务实例在播"，也不
-  能只查询不打扰。
-- 影响：多附属并存时，效果类播放（碰壁动画、滑动动画）缺少统一的节流依据，只能
-  各自靠去抖窗口。
-- 建议：服务 v2 加 `isPlaying(): { enter: boolean; external: boolean }` 之类的只读
-  查询（overlay-session 从 director.transitionInFlight + externalInstances 派生，
-  成本极低）。当前各附属自带去抖够用，暂缓。
+### F4. playAnimation 返回 {ok, reason}（随 v2）
+
+- 消 null 三义（无会话/未知 id/遇忙）；破坏性变更，攒下一次服务大版本。
+
+---
+
+## 5. UX 债（中期，按需排期）
+
+### A1. 空状态塌缩：删掉最后一张图后编辑器只剩导入框
+
+- `MotionPetSettings.tsx` 在无可用图时提前 return，全局设置/高级卡/动画库
+  不可达。建议空状态保留可折叠卡片与「启用宠物」开关；需重排 §2.1 门控
+  布局 + 真机目视。
+
+### A3. 撤销（undo / Ctrl+Z）
+
+- 关键帧/轨道/事件删除无 undo，「撤回修改」只覆盖整体放弃。timeline-model
+  已是纯函数，加 history 栈成本低；涉及全套快捷键与 UI。
+
+### A4. 预览页（preview/index.html）增强
+
+- 无点击交互试播、无拖拽/位置夹紧验证；`successHoldMs/errorHoldMs`、
+  `terminalHold`、`changePoseWithinActive/activityTransition`、coding/command
+  活动面无开关。建议接 `playInteraction()` 按钮 + hold/terminalHold 控件，
+  顺手改 `embedded` 模式。
+
+### C2. 原生 prompt/confirm 依赖宿主 modals 权限【2026-08-27 五维评审新增】
+
+- 新建/重命名宠物用 `window.prompt`、删除类确认用 `window.confirm`；若 DSH
+  把 settings.section 放进不带 `allow-modals` 的 sandbox iframe，它们会静默
+  失效（重命名点了没反应）。需真机确认一次 iframe 权限，无论结论如何，
+  主流程改内联输入框/自制对话框更稳。
+
+### C3. 编辑器性能化与代码卫生小项【2026-08-27 五维评审新增】
+
+- AnimationLibrary 每次渲染重复 evaluateDraft + 全量 JSON.stringify diff，
+  且全树无 memo——动画库变大后拖滑块可能掉帧：evaluation/draftDirty 上
+  useMemo、子卡片 React.memo。
+- 拖动位置持久化失败只有 console.error，用户无感知丢失重启即回弹；可把
+  最近保存状态放进 StageSnapshot 让有界面的附属卡片代为展示。
+- keyframe/event marker 的 React key 用索引+at 组合而非稳定 id。
+- api.ts request() 无调用方 signal 透传（在途请求不能随组件取消）。
+- settings brand 色 fallback hex 有四种、NoticeBar 单槽位不支持排队提示。
+
+### A6. 时间轴键盘可达性 → 已于 2026-08-27 下午解决（§9 存档）
+
+### A7. 其余小项（低）
+
+- 错误通知固定页面顶部，滚动后远离触发点 → toast 化或内联。
+- 默认位置 CSS 锚定在经典滚动条下约一个滚动条宽偏差。
+- （拖拽手势内 clamp 未按 scale 收紧 → 已并入 §2 E1 同修。）
+
+---
+
+## 6. 引擎 / 数据模型中期项
+
+### B4. ambient channel 是分散的封闭枚举
+
+- `AmbientConfig` 三字段定死、`resolveAmbientChannel` switch、`ambientField`
+  校验器、六个状态默认值手写——加一个 channel（如 blink）要同步改 8~10 个
+  文件。建议 channel 描述成单一数据表。V1.1 P2「更多 ambient channel」前落。
+
+### B5（完整）. 参数化维度单参焊死
+
+- `ParameterizedValue.parameter` 字面量 'strength' 三处焊死；`parameters`
+  声明未知键放行、keyframe 使用点拒绝，校验不对称。中期把 parameter 放宽
+  为受声明集约束的字符串。
+
+### B7. 新增 VisualState 的静默失败点
+
+- `state-machine.ts` reducer 兜底 return 使新事件类型 no-op 而非编译错误；
+  terminal 语义与 hold 字段散落硬编码。建议 reducer 改穷尽检查
+  （`default: never`）+ 导出 `TERMINAL_STATES` 与 hold 字段映射表。
+  （加新 ActivityMode 只需 2 处，路径健康。）
+
+### B8. config migration 链无结构
+
+- `loadConfig` 直接是 `repairConfig`，无版本分派；v2 文件被静默重标 v1；
+  host 降级读新配置静默丢字段。建议显式 `version → migrationSteps[]` 分派，
+  降级路径至少告警。
+
+### B11. 低优先级清单
+
+- 错误体双形状（409 扁平 / 其余信封）、POST 返 200 而非 201、405 无
+  `allow` 头 → 统一信封 + 文档标注遗留。
+- SSE 无 `id:`/`retry:` 字段（快照即补偿，自洽；多 client 序号去重前预留）。
+- `lastBySession` map 无上界 → LRU 或定期清扫。
+- `Symbol.for` mount flag 吞第二份插件副本且无日志 → key 带版本 + 跳过时 warn。
+- `NormalizedAgentEvent.sessionId` 声明可选但 host 恒填充 → 协议层改必填。
+- pets POST 非幂等（双击建重复）→ 可选客户端稳定 id 或 Idempotency-Key。
+- `TransitionEngine.onEvent` 未知事件类型静默吞 → 显式默认处理器或注释声明。
+- core ⇄ motion 互相 import → 抽独立动画 SDK 前解环。
+- `AnimationRegistry` 无变更通知 → pack 动态装载前加 `onChange`（现在加
+  成本最低）。
+- reduced-motion 下「transition 应以属性默认值收尾」写入 motion-format.md。
+- （内置 id 清单补 `builtin:activity-swap` 与四个 `builtin:click-*` → 已于
+  2026-08-27 下午解决，§9 存档。）
+- 错误文案直接透传 host 英文信息 → 面向用户中文化。
+- 资产总量记账依赖 assets.json：清单损坏后计数清零、旧文件成孤儿游离在
+  60MB 红线之外 → 启动/定期扫描孤儿文件计入或 GC【2026-08-27 五维评审新增】。
+- 目录迁移 copy 分支的并发盲区：B 进程停滞期间 A 完成迁移后，B 的
+  rmSync 可能误删 A 的成果（数据兜底成立，仅一次性回退窗口）→ copy 先落
+  唯一临时目录再 rename【2026-08-27 五维评审新增】。
+
+---
+
+## 7. physics 仓
+
+### E2. `config-hub.update()` 无客户端串行化（low-medium）
+
+- 慢保存 + 再次编辑时响应按完成顺序回写本地快照，旧数据可盖回新数据；
+  host 侧 writeChain 已按会话串行，磁盘无损，主要污染 `hub.getConfig()`。
+- 建议：client 侧加 latest-wins 串行队列。
+
+### C4. physics 服务类型镜像升级【2026-08-27 五维评审新增】
+
+- 现状：`petween-physics/src/client/types.ts` 的 StageSnapshot 镜像停留在
+  petween@1.0.0 形状（缺 viewport/bodyRect），只能自带 getViewport 并用
+  `stageSize*scale` 近似 bbox；主侧 2026-08-27 已补齐正是为此。
+- 建议：镜像补两字段后删除自算几何，改读 snapshot.viewport 与 bodyRect；
+  与 §2 E1（apply 预夹缩放语义）同一窗口落地并补跨仓一致性测试。
+
+（E1 的跨仓对齐见 §2；E3 见 §1。）
+
+---
+
+## 8. 已拍板关闭
+
+- **D1** commit 往返期间租约未还、快速再掷被吞——用户拍板「不好修就没必要
+  修」（往返 <100ms，只丢一次手势，无状态损坏）。若将来要修：commit 在途
+  允许新租约接管待写位置（代际标记）。
+- **D2** commit 与在途防抖 PUT 的 last-write-wins 交错窗口——极窄，记录在案
+  即可；真要修在 persistPosition 加单调 writeSeq。
+- **E4** 改名无旧服务名 alias——已决策 README 配套矩阵；对外发布且有真实
+  旧版用户再议。
+
+---
+
+## 9. 已解决存档（从本清单移除，详见 implementation-notes 对应日期条目）
+
+- **D3** isPlaying 查询缺失 → 2026-08-27 落地 `isPlaying(): {enter, external}`。
+- **E5-1** playAnimation null 三义 → 部分缓解（isPlaying/listAnimations 可判
+  因），完整 `{ok, reason}` 转为 §4 F4 随 v2。
+- **E5-2** host registerAnimation 无调用方隔离 → 2026-08-27 落地可选
+  `{pack}` 前缀强制；client 侧 per-caller 隔离随中断池拍板搁置（§4）。
+- **E5-3** 缺 listAnimations → 2026-08-27 落地（registry 侧可播真值）。
+- **E5-4** 快照缺 viewport/dragging → 2026-08-27 落地（另加 poseKey /
+  bodyRect / reducedMotion）。
+- **E5-5** register→play 同步盲区 → 2026-08-27 落地 `resyncAnimations()`
+  （中期方案）。
+- **A7 拖拽手势内 clamp** → 并入 §2 E1 同修项。
+- 2026-08-27 第二批评估中的其余「待拍板」（pose 通道数据模型/资产来源/
+  事件流形状/挂载层）→ 全部已拍板并落地或转入 §4 排队。
+- **2026-08-27 下午 · 五维评审（架构/安全/引擎/UI/测试文档）后无争议项批量落地**：
+  - **B5(短期)** compiler strength 默认上限对齐 `TRANSITION_STRENGTH_LIMITS`
+    （未声明参数的定义不再静默钳 1.8）。
+  - **A6** 时间轴键盘可达性：菱形/事件标记 Enter 选中、←→ 按网格微调、
+    Delete 删除（事件遵循 schema 删除规则）；`touch-action: none` 补齐触屏拖拽；
+    编辑器提示文案更新。
+  - TransitionEngine 新增 `onSwap` seam：pose-swap 落台瞬间回写 stagePoseUrl
+    台账——中断自愈从「调用方必须配对 settle 的纪律」变为结构保证（director
+    端到端回归用例 + 引擎单测锁定；原 settle 冗余换图断言随语义更新）。
+  - 动画 schema 收紧三条：ambient 定义禁用 transition 层轨道（防同层无仲裁
+    竞争）；同一 track 重复 `at` 拒绝；random-interval `minDelayMs ≥ 1`。
+    compileTimeline 对运行时 repeat 覆盖补 alternate+events 守卫；编辑器切换
+    类型时自动清理 transition 层轨道并播种默认循环轨道（既有事件规范化惯例的
+    延伸，hint 文案同步更新）。
+  - ConfigHub.startPolling/stopPolling 支持按 owner 引用计数：PetOverlay 用
+    实例令牌、hub 型 EditorStore 以自身为持有者——宠物停用时设置侧仍能收到
+    配置变更推送。
+  - resize 后 `this.position` 回写 clamp 值：舞台快照与位置租约消费方不再读
+    到越界坐标。
+  - Host SSE 响应补 `res.on('error') → dropClient` 兜底（异步写错误不再可能
+    变 uncaughtException）。
+  - 文档修正：motion-format.md 校验汇总与 §6 的 interaction pose-swap 规则
+    自相矛盾处改正并纳入本轮新规则；§8 内置 id 清单补 `builtin:activity-swap`
+    与四个 `builtin:click-*`；README 测试数 748→800+、独立预览页注明 npm 包
+    未收录；host/service.ts 头注释与实际双方法契约对齐；
+    animation-definition.ts 错误文案示例去业务名；PetweenSettings 标注
+    StrictMode 不兼容约定。
+  - 工程：petween-physics 新增 CI workflow；主仓 CI 矩阵补 Node 20（对齐
+    engines >=20）。两仓 vitest 811+114 全绿、typecheck 通过。

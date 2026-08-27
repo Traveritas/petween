@@ -5,7 +5,7 @@
  * the aggregate stream, heartbeats, close cleanup, the /state snapshot
  * endpoint, and `session/disposed` memory cleanup.
  */
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -25,6 +25,8 @@ let base: string
 let channel: StateChannel
 let listeners: Map<string, ((...args: any[]) => void)[]>
 let routes: WebRoute[]
+/** Live request/response pairs, newest last — lets tests emit socket errors. */
+let exchanges: Array<{ req: IncomingMessage; res: ServerResponse }> = []
 
 beforeEach(async () => {
   listeners = new Map()
@@ -48,6 +50,7 @@ beforeEach(async () => {
     },
   }
   channel = attachStateChannel(host, { heartbeatMs: HEARTBEAT_MS })
+  exchanges = []
   server = createServer((req, res) => {
     const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
     const route = routes.find((candidate) => candidate.kind === 'exact' && candidate.path === pathname)
@@ -55,6 +58,7 @@ beforeEach(async () => {
       res.writeHead(404).end()
       return
     }
+    exchanges.push({ req, res })
     void route.handler(req, res)
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -186,6 +190,26 @@ describe('GET /api/petween/events (SSE)', () => {
     const stream = await openStream('?session=s1')
     await stream.waitFor((text) => text.includes('snapshot'))
     expect(channel.clientCount()).toBe(1)
+    await stream.close()
+    const deadline = Date.now() + 5000
+    while (channel.clientCount() !== 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(channel.clientCount()).toBe(0)
+  })
+
+  it("res/req 'error' events drop the client once, without crashing the host", async () => {
+    const stream = await openStream('?session=s1')
+    await stream.waitFor((text) => text.includes('snapshot'))
+    expect(channel.clientCount()).toBe(1)
+    const { res, req } = exchanges[exchanges.length - 1]
+    // Async write failures surface as 'error' on BOTH stream sides; without
+    // listeners an uncaught exception would take the host process down.
+    res.emit('error', new Error('write-after-end'))
+    res.emit('error', new Error('second error: drop stays idempotent'))
+    req.emit('error', new Error('socket level'))
+    expect(channel.clientCount()).toBe(0)
+    // The later 'close' (dropClient is a no-op the second time) keeps it at 0.
     await stream.close()
     const deadline = Date.now() + 5000
     while (channel.clientCount() !== 0 && Date.now() < deadline) {

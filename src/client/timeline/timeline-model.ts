@@ -274,8 +274,21 @@ export function addParticleEvent(events: TimelineEvent[], effect: ParticleEffect
   return { events: [...events, { at: snapAt(at), type: 'particle', effect }], index: events.length }
 }
 
-export function addPoseSwapEvent(events: TimelineEvent[], at = 0.5): EventEdit {
-  return { events: [...events, { at: snapAt(at), type: 'pose-swap' }], index: events.length }
+export function addPoseSwapEvent(events: TimelineEvent[], at = 0.5, pose?: string): EventEdit {
+  // An interaction pose-swap must name its target (schema); the editor
+  // defaults to the idle slot so a freshly added event stays valid — the
+  // inspector lets the author change it (builtin slot or user: pose id).
+  const event: TimelineEvent =
+    pose === undefined ? { at: snapAt(at), type: 'pose-swap' } : { at: snapAt(at), type: 'pose-swap', pose }
+  return { events: [...events, event], index: events.length }
+}
+
+/** Set/replace/clear the pose target of a pose-swap event (interaction authoring). */
+export function setEventPose(events: TimelineEvent[], eventIndex: number, pose: string | undefined): TimelineEvent[] {
+  return events.map((event, index) => {
+    if (index !== eventIndex || event.type !== 'pose-swap') return event
+    return pose === undefined || pose === '' ? { at: event.at, type: 'pose-swap' } : { ...event, pose }
+  })
 }
 
 /**

@@ -28,8 +28,9 @@ import type {
   TimelineEvent,
 } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
+import { MOTION_PROPERTIES } from '../../motion/motion-properties'
 import { TimelineEditor } from '../timeline/TimelineEditor'
-import { validateTimelineDraft } from '../timeline/timeline-model'
+import { addTrack, validateTimelineDraft } from '../timeline/timeline-model'
 import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
 import { PreviewSession } from '../preview-session'
@@ -150,6 +151,24 @@ function evaluateDraft(
   return { definition: candidate as unknown as AnimationDefinition, errors: [] }
 }
 
+/**
+ * UX-2 dirty check, run on the ASSEMBLED definitions (exactly what a save
+ * would persist). A raw DraftState comparison would flag repeatMinMs/MaxMs
+ * leftovers — e.g. a custom interval from an earlier random-interval setting
+ * that a non-random-interval save legitimately drops (evaluateDraft omits
+ * them) — and keep the ● marker on forever after such a save. An invalid
+ * draft (null assembly) always counts as dirty so the unsaved-edit guards
+ * stay armed.
+ */
+function draftDivergesFromBaseline(
+  selected: AnimationDefinition,
+  assembled: AnimationDefinition | null,
+): boolean {
+  if (assembled === null) return true
+  const baseline = evaluateDraft(selected.id, selected.parameters, draftFrom(selected)).definition
+  return baseline === null || JSON.stringify(assembled) !== JSON.stringify(baseline)
+}
+
 export interface AnimationLibraryProps {
   store: EditorStore
   customs: AnimationDefinition[]
@@ -193,18 +212,31 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
    * UX-2: the pristine draft of the current selection — the baseline for
    * "unsaved edits" — is derived from `selected` itself: a customs entry IS
    * its saved version (a successful save refreshes the list, which clears
-   * the marker), and builtins are immutable, so any JSON divergence from the
+   * the marker), and builtins are immutable, so any divergence from the
    * re-derived baseline means the user edited something (builtins included —
    * timeline tweaks on a read-only entry are audition-only until cloned).
+   * The comparison runs on assembled definitions (draftDivergesFromBaseline).
    */
   const draftDirty =
-    draft !== null &&
-    selected !== undefined &&
-    JSON.stringify(draft) !== JSON.stringify(draftFrom(selected))
+    draft !== null && selected !== undefined && draftDivergesFromBaseline(selected, evaluation?.definition ?? null)
 
   /** Refuse to silently discard unsaved timeline edits; false = aborted. */
   const guardUnsavedDraft = (): boolean =>
     !draftDirty || window.confirm('当前动画有未保存的修改，继续将丢弃这些修改。')
+
+  // Page-close protection for the timeline draft, mirroring PetweenSettings'
+  // config-draft guard: unsaved edits may only leave through an explicit
+  // browser confirmation. Clean states register nothing.
+  useEffect(() => {
+    if (!draftDirty) return
+    const guard = (event: BeforeUnloadEvent): void => {
+      event.preventDefault()
+      // Legacy Chromium/IE only show the prompt when returnValue is assigned.
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', guard)
+    return () => window.removeEventListener('beforeunload', guard)
+  }, [draftDirty])
 
   const applySelection = (definition: AnimationDefinition): void => {
     auditionSessionRef.current?.stopPreviewDefinition()
@@ -220,18 +252,47 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     setDraft((current) => (current === null ? current : { ...current, ...patch }))
   }
 
-  /** Kind switches normalize event rules so a valid draft stays editable. */
+  /**
+   * Kind switches normalize event rules AND the track set so a valid draft
+   * stays editable: ambient timelines may keep no transition-layer track
+   * (the schema rejects them — enter/click own that DOM layer), and an
+   * emptied-out ambient is reseeded with a default loop. Pose-swap rules
+   * convert in BOTH directions: → interaction keeps the timing but names a
+   * target (idle — retarget in the inspector), → transition strips targets
+   * and truncates to the exactly-one anonymous swap.
+   */
   const changeKind = (kind: AnimationKind): void => {
     setDraft((current) => {
       if (current === null || current.kind === kind) return current
       let events = current.events
-      if (kind === 'ambient') events = []
-      if (kind === 'interaction') events = events.filter((event) => event.type !== 'pose-swap')
-      if (kind === 'transition' && !events.some((event) => event.type === 'pose-swap')) {
-        events = [...events, { at: 0.5, type: 'pose-swap' }]
+      let tracks = current.tracks
+      if (kind === 'ambient') {
+        events = []
+        tracks = tracks.filter((track) => MOTION_PROPERTIES[track.property].targetLayer !== 'transition')
+        if (tracks.length === 0) tracks = addTrack([], 'sway.rotation').tracks
+      }
+      if (kind === 'interaction') {
+        // Interaction swaps are legal only with a named target; the timing
+        // the author tuned on the transition survives the switch.
+        events = events.map((event) =>
+          event.type === 'pose-swap' && event.pose === undefined ? { ...event, pose: 'idle' } : event,
+        )
+      }
+      if (kind === 'transition') {
+        // Keep the FIRST pose-swap's timing, drop extras, strip the target:
+        // the enter pose is state-machine-owned (schema forbids "pose").
+        let keptSwap = false
+        events = events.filter((event) => {
+          if (event.type !== 'pose-swap') return true
+          if (keptSwap) return false
+          keptSwap = true
+          return true
+        })
+        events = events.map((event) => (event.type === 'pose-swap' ? { at: event.at, type: 'pose-swap' } : event))
+        if (!keptSwap) events = [...events, { at: 0.5, type: 'pose-swap' }]
       }
       const repeatMode = events.length > 0 && current.repeatMode === 'alternate' ? 'once' : current.repeatMode
-      return { ...current, kind, events, repeatMode }
+      return { ...current, kind, events, repeatMode, tracks }
     })
   }
 
@@ -250,7 +311,10 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     // Clone what you see: the current draft (must be valid) becomes the copy,
     // so timeline tweaks on a built-in survive into the custom.
     if (selected === undefined || draft === null || evaluation?.definition == null || timelineErrors.length > 0) return
-    if (!guardUnsavedDraft()) return
+    // Unlike switching/deleting, a clone KEEPS the unsaved edits (they ride
+    // into the copy), so it gets its own accurate wording instead of the
+    // discard guard.
+    if (draftDirty && !window.confirm('当前动画有未保存的修改，副本将包含这些修改。是否继续？')) return
     setBusy(true)
     try {
       const clone: AnimationDefinition = {
@@ -471,7 +535,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 disabled={readOnly}
                 onChange={changeKind}
               />
-              <p className={styles.hint}>切换类型时会自动移除不适用的事件；切回过渡类型时会补充 pose-swap（换图）。</p>
+              <p className={styles.hint}>切换类型时会自动移除不适用的事件与轨道；切回过渡类型时会补充 pose-swap（换图）。</p>
               <NumberField
                 label="时长"
                 min={1}
@@ -493,7 +557,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 <>
                   <NumberField
                     label="最小间隔"
-                    min={0}
+                    min={1}
                     max={600000}
                     step={50}
                     unit="ms"
@@ -503,7 +567,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                   />
                   <NumberField
                     label="最大间隔"
-                    min={0}
+                    min={1}
                     max={600000}
                     step={50}
                     unit="ms"

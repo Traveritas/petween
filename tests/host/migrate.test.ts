@@ -146,4 +146,31 @@ describe('migrateLegacyHome', () => {
       warn.mockRestore()
     }
   })
+
+  it('never deletes a target another process fully migrated mid-race (concurrent boots)', () => {
+    const home = makeHome()
+    const legacy = join(home, 'motion-pet')
+    const target = join(home, 'petween')
+    seedLegacyHome(legacy)
+
+    const outcome = migrateLegacyHome(legacy, target, {
+      // Process A completes the migration AFTER this process's existsSync
+      // checks: the legacy tree disappears and the target appears with real
+      // data — then A's success surfaces here as just another rename failure.
+      renameDirSync: (from, to) => {
+        rmSync(from, { recursive: true, force: true })
+        mkdirSync(to, { recursive: true })
+        writeFileSync(join(to, 'config.json'), JSON.stringify({ schema: 1, activePetId: 'pet-1' }))
+        throw new Error('EEXIST: file already exists (lost the race)')
+      },
+      copyDirSync: () => {
+        throw new Error('ENOENT: no such file or directory') // legacy is gone
+      },
+    })
+    expect(outcome).toBe('skipped')
+    // Process A's migrated data survives — the pre-guard code returned
+    // 'failed' and deleted it, the only copy left.
+    expect(existsSync(legacy)).toBe(false)
+    expect(readFileSync(join(target, 'config.json'), 'utf8')).toBe(JSON.stringify({ schema: 1, activePetId: 'pet-1' }))
+  })
 })

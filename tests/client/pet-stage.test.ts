@@ -513,3 +513,39 @@ describe('PetStage — particle layer (§8.5)', () => {
     }
   })
 })
+
+describe('PetStage — pose layout exposure (extension snapshot backing)', () => {
+  it('poseLayout is null before any swap, then reflects the §12.3 math', () => {
+    const stage = new PetStage()
+    expect(stage.poseLayout).toBeNull()
+    stage.swapPose(makePose({}))
+    const layout = stage.poseLayout
+    expect(layout).not.toBeNull()
+    expect(layout?.width).toBeCloseTo(160, 5) // 240×240 contain-fit into 160
+    expect(layout?.height).toBeCloseTo(160, 5)
+    expect(layout?.offsetX).toBe(0)
+    expect(layout?.offsetY).toBeCloseTo(-9.6, 5) // anchor 0.96 onto world 0.9
+    stage.dispose()
+    expect(stage.poseLayout).toBeNull()
+  })
+
+  it('a wide asset lays out off-center without touching the square', () => {
+    const stage = new PetStage()
+    stage.swapPose(makePose({ width: 512, height: 256 }))
+    const layout = stage.poseLayout
+    expect(layout?.width).toBeCloseTo(160, 5)
+    expect(layout?.height).toBeCloseTo(80, 5)
+    expect(layout?.offsetY).toBeCloseTo(67.2, 5) // 0.9*160 - 0.96*80
+    stage.dispose()
+  })
+
+  it('anchor hands out a defensive copy of the world anchor', () => {
+    const stage = new PetStage()
+    expect(stage.anchor).toEqual(WORLD_ANCHOR)
+    const stolen = stage.anchor
+    stolen.x = 0
+    stolen.y = 0
+    expect(stage.anchor).toEqual(WORLD_ANCHOR)
+    stage.dispose()
+  })
+})

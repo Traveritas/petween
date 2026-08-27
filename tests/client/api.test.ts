@@ -63,7 +63,7 @@ const lastCall = (): { url: string; init: RequestInit } => {
 }
 
 describe('client api — request timeout', () => {
-  it('a hung fetch rejects as NETWORK after the timeout instead of wedging load() forever', async () => {
+  it('a hung fetch aborts the request and rejects as TIMEOUT instead of wedging load() forever', async () => {
     vi.useFakeTimers()
     // A request sent on a connection that died with a host restart never
     // settles: the browser has no default fetch timeout, and ConfigHub's
@@ -74,12 +74,15 @@ describe('client api — request timeout', () => {
     const assertion = expect(pending).rejects.toMatchObject({
       name: 'ApiError',
       status: 0,
-      code: 'NETWORK',
+      code: 'TIMEOUT',
       message: expect.stringContaining('timed out'),
     })
     await vi.advanceTimersByTimeAsync(15_000)
     await assertion
     vi.useRealTimers()
+    // The timeout must also abort the underlying fetch, not just lose the race.
+    const signal = (lastCall().init as RequestInit & { signal?: AbortSignal }).signal
+    expect(signal?.aborted).toBe(true)
   })
 })
 

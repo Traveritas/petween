@@ -51,11 +51,18 @@ export const PARTICLE_EFFECT_IDS: readonly ParticleEffectId[] = ['confetti', 'st
 /**
  * V1 events: the pose swap plus particle bursts (spec §8.5). The union still
  * leaves room for sound/etc.
+ *
+ * 2026-08-27 widening: a pose-swap event may name its target pose
+ * (`pose`). The enter path ignores it — its target is state-machine-owned
+ * and arrives via the transition request — but an externally played
+ * interaction resolves the string at play time (a builtin slot name, or a
+ * `user:` id registered through petween/client's registerPoses).
  */
 export type TimelineEvent =
   | {
       at: number
       type: 'pose-swap'
+      pose?: string
     }
   | {
       at: number
@@ -174,9 +181,16 @@ export function unionTrackTimes(start: number, end: number, tracks: EasingTimeli
 export type AnimationValidationResult = { valid: true } | { valid: false; errors: string[] }
 
 const ID_RE = /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/
-const ANIMATION_KINDS: readonly string[] = ['transition', 'ambient', 'interaction']
+/**
+ * A pose-swap target: one of the six builtin slot names or an id in the
+ * shared `<namespace>:<name>` charset (registered poses use `user:` ids).
+ * Opaque to the engine — the play-time seam resolves it.
+ */
+const POSE_TARGET_RE = /^(?:[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*|[a-z][a-z0-9_-]*)$/
+export const ANIMATION_KINDS: readonly string[] = ['transition', 'ambient', 'interaction']
 const DURATION_LIMITS = { min: 1, max: 60_000 } as const
-const RANDOM_DELAY_LIMITS = { min: 0, max: 600_000 } as const
+/** A floor of 1ms keeps random-interval from degenerating into a full-speed replay loop. */
+export const RANDOM_DELAY_LIMITS = { min: 1, max: 600_000 } as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -219,7 +233,7 @@ function validateRepeat(repeat: unknown, errors: string[]): void {
       maxDelayMs > RANDOM_DELAY_LIMITS.max ||
       minDelayMs > maxDelayMs
     ) {
-      errors.push('"repeat.random-interval" requires 0 <= minDelayMs <= maxDelayMs <= 600000')
+      errors.push('"repeat.random-interval" requires 1 <= minDelayMs <= maxDelayMs <= 600000')
     }
     return
   }
@@ -279,7 +293,7 @@ export function validateAnimationDefinition(definition: unknown): AnimationValid
 
   if (definition.version !== 1) errors.push('"version" must be 1')
   if (typeof definition.id !== 'string' || !ID_RE.test(definition.id)) {
-    errors.push('"id" must match "<namespace>:<name>", e.g. builtin:comic-pop or user:<uuid>')
+    errors.push('"id" must match "<namespace>:<name>", e.g. user:<uuid>')
   }
   if (typeof definition.name !== 'string' || definition.name.length === 0) {
     errors.push('"name" must be a non-empty string')
@@ -319,13 +333,35 @@ export function validateAnimationDefinition(definition: unknown): AnimationValid
       } else {
         seenProperties.add(property)
         validProperty = property
+        if (
+          definition.kind === 'ambient' &&
+          MOTION_PROPERTIES[validProperty].targetLayer === 'transition'
+        ) {
+          // Ambient timelines run forever on a DOM layer that enter/click
+          // transitions also animate; concurrent WAAPI animations there have
+          // no arbitration (last-created wins), so an ambient must keep off
+          // the transition layer entirely (V1 data-plane guard).
+          errors.push(
+            `${where}: an "ambient" definition must not animate ${JSON.stringify(property)} — the transition layer belongs to enter/click transitions`,
+          )
+        }
       }
       if (!Array.isArray(track.keyframes) || track.keyframes.length === 0) {
         errors.push(`${where}: a track needs at least 1 keyframe`)
       } else {
-        track.keyframes.forEach((keyframe, keyframeIndex) =>
-          validateKeyframe(keyframe, `${where}.keyframes[${keyframeIndex}]`, errors),
-        )
+        // Two keyframes sharing one `at` leave WAAPI ordering unspecified
+        // (same-offset keyframes are browser-dependent) — reject like the
+        // duplicate-property rule above instead of silently depending on it.
+        const seenAt = new Set<number>()
+        track.keyframes.forEach((keyframe, keyframeIndex) => {
+          validateKeyframe(keyframe, `${where}.keyframes[${keyframeIndex}]`, errors)
+          if (isRecord(keyframe) && isFiniteNumber(keyframe.at)) {
+            if (seenAt.has(keyframe.at)) {
+              errors.push(`${where}.keyframes[${keyframeIndex}]: duplicate "at" ${String(keyframe.at)} in one track`)
+            }
+            seenAt.add(keyframe.at)
+          }
+        })
         if (validProperty !== null) {
           const timeline = normalizedEasingTimeline(track.keyframes)
           if (timeline !== null) {
@@ -356,6 +392,11 @@ export function validateAnimationDefinition(definition: unknown): AnimationValid
         if (event.type === 'particle' && !PARTICLE_EFFECT_IDS.includes(event.effect as ParticleEffectId)) {
           errors.push(`${where}: unknown particle effect ${JSON.stringify(event.effect)}`)
         }
+        if (event.type === 'pose-swap' && event.pose !== undefined && !POSE_TARGET_RE.test(event.pose as string)) {
+          errors.push(
+            `${where}: "pose" must be a builtin slot name or a registered pose id (letters, digits, : _ -)`,
+          )
+        }
         if (!isFiniteNumber(event.at) || event.at < 0 || event.at > 1) {
           errors.push(`${where}: "at" must be a number in 0..1`)
         }
@@ -364,15 +405,23 @@ export function validateAnimationDefinition(definition: unknown): AnimationValid
   }
 
   // V1 event cardinality (§8.5/§8.10): a transition swaps the pose exactly
-  // once and may burst particles; an interaction never swaps but may burst;
-  // ambient timelines stay eventless.
+  // once (state-machine-owned — a `pose` target on it is meaningless) and may
+  // burst particles; an interaction MAY swap poses but every swap must name
+  // its target (resolved at play time, never state-owned); ambient timelines
+  // stay eventless.
   const events = Array.isArray(definition.events) ? definition.events : []
-  const poseSwapCount = events.filter((event) => isRecord(event) && event.type === 'pose-swap').length
-  if (definition.kind === 'transition' && poseSwapCount !== 1) {
-    errors.push(`a transition needs exactly 1 pose-swap event, got ${poseSwapCount}`)
+  const poseSwaps = events.filter((event) => isRecord(event) && event.type === 'pose-swap')
+  if (definition.kind === 'transition' && poseSwaps.length !== 1) {
+    errors.push(`a transition needs exactly 1 pose-swap event, got ${poseSwaps.length}`)
   }
-  if (definition.kind === 'interaction' && poseSwapCount > 0) {
-    errors.push('"interaction" definitions must not declare pose-swap events (V1)')
+  if (definition.kind === 'transition' && poseSwaps.some((event) => (event as { pose?: unknown }).pose !== undefined)) {
+    errors.push('a transition pose-swap must not declare "pose" (the enter pose is state-machine-owned)')
+  }
+  if (definition.kind === 'interaction') {
+    const anonymous = poseSwaps.filter((event) => (event as { pose?: unknown }).pose === undefined).length
+    if (anonymous > 0) {
+      errors.push(`an interaction pose-swap must declare its "pose" target, ${anonymous} did not`)
+    }
   }
   if (definition.kind === 'ambient' && events.length > 0) {
     errors.push('"ambient" definitions must not declare events (V1)')

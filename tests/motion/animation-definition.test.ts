@@ -136,7 +136,7 @@ describe('validateAnimationDefinition', () => {
     expect(errorsOf(definition).join()).toContain('duplicate track for "transition.scaleX"')
   })
 
-  it('enforces V1 event cardinality: transitions exactly 1 pose-swap, ambient none', () => {
+  it('enforces event cardinality: transitions exactly 1 pose-swap, ambient none', () => {
     const transition = validDefinition()
     transition.events = []
     expect(errorsOf(transition).join()).toContain('exactly 1 pose-swap')
@@ -149,12 +149,35 @@ describe('validateAnimationDefinition', () => {
     const ambient: AnimationDefinition = { ...validDefinition(), kind: 'ambient', events: [{ at: 0.5, type: 'pose-swap' }] }
     expect(errorsOf(ambient).join()).toContain('must not declare events')
 
-    const interaction: AnimationDefinition = {
+    // 2026-08-27: interactions MAY swap poses, but every swap must name its
+    // target (resolved at play time); transitions must not name one (the
+    // enter pose is state-machine-owned).
+    const anonymousInteraction: AnimationDefinition = {
       ...validDefinition(),
       kind: 'interaction',
       events: [{ at: 0.5, type: 'pose-swap' }],
     }
-    expect(errorsOf(interaction).join()).toContain('must not declare pose-swap events')
+    expect(errorsOf(anonymousInteraction).join()).toContain('must declare its "pose" target')
+
+    const targetedInteraction: AnimationDefinition = {
+      ...validDefinition(),
+      kind: 'interaction',
+      events: [{ at: 0.5, type: 'pose-swap', pose: 'user:doze-doze' }],
+    }
+    expect(errorsOf(targetedInteraction)).toEqual([])
+
+    const badTargetInteraction: AnimationDefinition = {
+      ...validDefinition(),
+      kind: 'interaction',
+      events: [{ at: 0.5, type: 'pose-swap', pose: 'not a valid id!' }],
+    }
+    expect(errorsOf(badTargetInteraction).join()).toContain('must be a builtin slot name')
+
+    const namedTransition: AnimationDefinition = {
+      ...validDefinition(),
+      events: [{ at: 0.5, type: 'pose-swap', pose: 'user:doze-doze' }],
+    }
+    expect(errorsOf(namedTransition).join()).toContain('state-machine-owned')
 
     const eventlessInteraction: AnimationDefinition = { ...validDefinition(), kind: 'interaction', events: undefined }
     expect(errorsOf(eventlessInteraction)).toEqual([])
@@ -206,8 +229,39 @@ describe('validateAnimationDefinition', () => {
     eventful.repeat = { mode: 'alternate' }
     expect(errorsOf(eventful).join()).toContain('"alternate" with events')
 
-    const eventless: AnimationDefinition = { ...validDefinition(), kind: 'ambient', repeat: { mode: 'alternate' }, events: undefined }
+    const eventless: AnimationDefinition = {
+      ...validDefinition(),
+      kind: 'ambient',
+      repeat: { mode: 'alternate' },
+      events: undefined,
+      tracks: [
+        { property: 'sway.rotation', keyframes: [{ at: 0, value: -4 }, { at: 1, value: 4 }] },
+      ],
+    }
     expect(errorsOf(eventless)).toEqual([])
+  })
+
+  it('rejects duplicate "at" values inside one track', () => {
+    const definition = validDefinition()
+    definition.tracks[0].keyframes.push({ at: 1, value: 1.4 })
+    expect(errorsOf(definition).join()).toContain('duplicate "at" 1')
+  })
+
+  it('requires random-interval minDelayMs >= 1 (no full-speed replay loop)', () => {
+    const definition = validDefinition()
+    definition.repeat = { mode: 'random-interval', minDelayMs: 0, maxDelayMs: 0 }
+    expect(errorsOf(definition).join()).toContain('1 <= minDelayMs')
+    definition.repeat = { mode: 'random-interval', minDelayMs: 1, maxDelayMs: 10 }
+    expect(errorsOf(definition)).toEqual([])
+  })
+
+  it('keeps ambient definitions off the transition layer (enter/click own that DOM layer)', () => {
+    const ambient: AnimationDefinition = { ...validDefinition(), kind: 'ambient', events: undefined }
+    expect(errorsOf(ambient).join()).toContain('must not animate')
+
+    // the motion layers are fine for ambient
+    ambient.tracks[0].property = 'sway.rotation'
+    expect(errorsOf(ambient)).toEqual([])
   })
 
   it('rejects same-layer tracks whose easings disagree on any interval', () => {

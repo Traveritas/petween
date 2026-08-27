@@ -219,6 +219,28 @@ describe('ConfigHub — polling (3s, §23 visibility)', () => {
     await vi.advanceTimersByTimeAsync(20_000)
     expect(fetchConfig).toHaveBeenCalledTimes(1)
   })
+
+  it('polling continues while another owner still holds its claim', async () => {
+    const fetchConfig = fetcherFor(makeSnapshot())
+    const hub = new ConfigHub({ fetchConfig, fetchAnimations: animationsFetcherFor(), pollIntervalMs: 3000 })
+    await hub.load()
+
+    // e.g. the pet overlay and a hub-backed editor are alive together; the
+    // overlay unmounts (disabled pet) but the editor keeps the feed running.
+    const overlayOwner = {}
+    const editorOwner = {}
+    hub.startPolling(overlayOwner)
+    hub.startPolling(editorOwner)
+
+    hub.stopPolling(overlayOwner)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(fetchConfig.mock.calls.length).toBeGreaterThanOrEqual(2) // still polling
+
+    hub.stopPolling(editorOwner) // last claim released
+    const callsAtStop = fetchConfig.mock.calls.length
+    await vi.advanceTimersByTimeAsync(9000)
+    expect(fetchConfig.mock.calls.length).toBe(callsAtStop)
+  })
 })
 
 describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {

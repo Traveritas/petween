@@ -629,3 +629,52 @@ TypeScript 标识符随体系同步（MotionPetConfig → PetweenConfig、create
 ### 改名落地备注(Windows 环境坑)
 
 目录改名(`dsh-motion-pet/` → `petween/`)后,dsh web 首次启动报 `ERR_MODULE_NOT_FOUND: @deepseek-ai/dsh-home-paths`:pnpm 在 Windows 上用**绝对路径 junction** 布置 node_modules,父目录改名后所有 junction 目标仍指向旧路径,全部断裂。修复:在改名后的目录里 `CI=true pnpm install` 清空重装(junction 重建;lockfile 未变,产物无需重构建)。**任何移动/改名含 pnpm node_modules 的目录后,必须重新 `pnpm install`。**
+
+## 附属插件方向评估 + 扩展服务 v1 增宽（2026-08-27）
+
+**背景**：以附属作者视角定义了六个方向（情绪气泡 / 装扮配件 / 自主行为 AI / 小跟班 / 外部事件集成 / 养成小游戏），六个子智能体逐方向对照源码评估 v1 服务完备度。结论：physics 型「驱动主宠物」类附属覆盖良好；「渲染自有实体」「感知宠物输入」「事件级联动」三类存在结构性缺口（pose 流 / 指针事件 / 动画事件缺失、externalInstances 共享中断池、motion 引擎不可作用于外部元素等），逐项记录在案。用户拍板：**pose 通道开放（不再固定 6 槽）提级为高优先级**；无需拍板的简单增量先行落地，即本轮。
+
+**本轮落地（全部纯增量，服务 version 保持 1 —— physics 以 `version !== 1` 拒载，增宽字段/方法对既有消费者结构性兼容）**：
+
+- `StageSnapshot` 增补五字段：`viewport`（物理插件曾被迫自补 getViewport）、`dragging`（手势进行中标志）、`reducedMotion`（§22 有效值，附属遵守用户无障碍偏好）、`poseKey`（当前 target 的 pose 槽，快照组装点丢弃多年）、`bodyRect`（pose `<img>` 盒的视口真值 = 位置 + 用户缩放 + §12.3 anchor 数学，运动层变换不计；命中检测不再用 `stageSize*scale` 方块近似——典型素材下误触面积 30-60%）。`PetStage` 新增 `poseLayout` getter（layoutPose 结果落字段）与 `anchor` getter（防御性拷贝）。
+- `PositionDriver.onUserDrag` 回调签名从 `() => void` 增宽为 `(phase: 'start' | 'end') => void`：v1 契约写明「挂起直至手势结束」却从不通知 end，长租约附属只能靠再次 apply 试探。零参监听器（physics 现状）仍兼容。拖拽 start/end 现在同时推送快照（dragging 是快照状态）；媒体查询变化（reduced-motion 翻转）也推送。
+- 新增三方法：`isPlaying(): { enter, external } | null`（backlog D3 落地，只读探测取代 interrupt:false null 试探，enter/external 分账）、`listAnimations(): AnimationSummary[] | null`（registry 侧可播真值：builtin + 已同步 user，含 name/kind/durationMs/namespace；E5 第 3 条落地，选 client 侧而非 host 侧因为 session registry 才是「现在可播」）、`resyncAnimations(): Promise<void>`（强制一次 hub poll 并等 updateConfig 应用完——register→play 的 3s 轮询盲区/hidden 无上界窗口按需关闭，E5 第 5 条的中期方案）。实现附注：hub 订阅从 `void this.updateConfig(next)` 改为落 `pendingUpdate` 字段（catch 后 console.error，不再产生 unhandled rejection），resync 在 poll 的同步 emit 之后 await 它，时序安全。
+
+**验证**：46 文件 / **787 用例**全绿（+18：快照增宽 4、driver 两相 1、isPlaying 3、listAnimations 2、resync 2、pet-stage poseLayout/anchor 3，及既有用例适配），双工程 typecheck 零错误，四产物 build 通过。physics 仓无需改动（其镜像类型只声明已知字段，结构化兼容）。
+
+**待拍板（记录于本轮评估，未动）**：pose 通道开放的数据模型与命名空间（建议保留 6 内置状态槽 + 开放 `user:` 任意 pose 键，状态机只认内置槽，新键仅供 flashPose / 动画 pose-swap 调用；附属 pose 图资产走附属自带还是主插件 registerAsset 需定）；`playAnimation` 返回 `{ok, reason}`（破坏性，随 v2）；host `registerAnimation` 调用方隔离；事件流 API（pose 显示事件 / 动画起止 / 用户指针点击悬停）；中断池 per-caller 分池与 `preempt:'external-only'`；外部播放的 reduced-motion 约束（现仅 gate ambient）；挂载层 API（attachStageOverlay，气泡/配件/HUD 继承式跟随）；`playAnimationOn(layers)` 外部元素动画通道（化解「Animation Middleware 只作用于主舞台」的定位冲突）。
+
+## Pose 通道开放 + 三条事件流（2026-08-27 第二批）
+
+**背景与拍板**：六方向附属评估后用户逐项拍板——pose 通道按建议方案落地（保留 6 内置状态槽 + 开放 `user:` 扩展 pose 键；附属自带图资产，主插件只认 URL；外部动画 pose-swap 复用 flash 记账）；事件流 API 本轮做；`playAnimation {ok,reason}` 攒 v2；`playAnimationOn(layers)` 排队；中断池由主插件侧出方案；attachStageOverlay 评估后定。
+
+### Pose 通道（开放扩展 pose，不再固定 6 槽）
+
+- **数据模型**：`ResolvedPose.poseKey` 从 `PoseKey` 放宽为 `string`（内置 resolver 仍只产六槽）；`createPoseResolver` 返回值同步放宽（非内置键 → null，一处修复所有 seam 消费点）。状态机/`MotionTarget`/config 的 `poses` 六槽**不动**——扩展 pose 不参与状态解析与 fallback。
+- **schema**（motion/animation-definition.ts + motion-format.md §6）：`pose-swap` 事件新增可选 `pose` 目标字段（charset 校验：内置槽名或 `<ns>:<name>`）。规则改为——transition 恰 1 个 pose-swap 且**不得**带 `pose`（进场 pose 归状态机）；**interaction 允许 pose-swap 但必须带 `pose`**（原 V1 禁令解除）；ambient 仍禁事件。编译器 `...event` 展开自动透传新字段。
+- **client 服务**：`registerPoses(ExternalPoseDefinition[]): boolean`（all-or-nothing 校验：`user:` id charset、anchor 0..1、zoom 0.2..8 与 host 校验同界；幂等覆盖；注册即 `stage.preload`；**session 内存态**——session 重建即丢，附属在快照流 null→非 null 时重注册，契约写入接口注释）；`unregisterPoses(ids)`；`flashAsset({url,anchor?,zoom?,width?,height?}, holdMs)`（一次性、不注册、不预载，首次可能加载闪白，文档注明）；`flashPose` 签名放宽 `PoseKey → string`（内置槽 fallback / 扩展表，physics 现有调用不变）。
+- **统一解析 seam**：session 私有 `resolvePoseAny(key)`（内置 resolver / externalPoses 表），director 构造 seam 从 `this.resolvePose` 换到它（MotionDirectorOptions.resolvePose 同步放宽为 string）；preview-session 的 seam 以 `(POSE_KEYS as string[]).includes` 收窄（preview 无扩展 pose）。
+- **外部播放的 pose-swap 执行**：`playExternal` 注入 onEvent——事件带 `pose` 即播放时解析（miss 静默跳过，同悬空 animationId 纪律），命中则走 `flashResolvedPose(pose, 0)`（挂 flashHold ∞）；实例 settle（finished **或** cancelled）时 `restoreFlashPose()` 对齐状态机 pose。loop 动画反复 swap 幂等、取消即恢复——打盹循环动画停下的那一刻回到状态姿势。state 优先级不变：pose-changing target 照旧清 hold。
+- **flash 记账复用**：`flashPose`/`flashAsset`/外部 pose-swap 三入口共用私有 `flashResolvedPose` 核心，与 click 交互/状态机的既有互斥（M1/M2/M3）原样继承。
+
+### 三条事件流（全部 v1 增宽，version 仍为 1）
+
+- **`subscribePose`**：显示中 pose 流（真相而非状态机 want）。落点 `PetStage.subscribePoseSwap`——`swapPose` 是唯一图片写入口，state 机/flash/外部 swap 全部经它，session 桥接到服务层；订阅即推当前值（null = 无 pose/无会话），session 拆卸推 null；listener 异常隔离。
+- **`subscribeUserPointer`**：`{kind:'click',x,y,detail}`（DragController `onClick` 改为携带坐标；detail 为自维护双击计数——400ms+25px 窗口内递增，键盘 Enter/Space 不属 pointer 流不推）+ hover enter/move/leave（img 上 mouseenter/mousemove/mouseleave；**move 经 rAF 合帧**，一帧一推末坐标，无 rAF 环境同步降级；§23 纪律）。纯观察流，不影响宠物自身拖拽/点击。
+- **`subscribeAnimation`**：director 新增 `onPlayback` 观察钩子——`{phase:'start'|'settle', source:'enter'|'interaction'|'external', definitionId, status?}`，enter（runEnter 起止）、interaction（playInteraction 经 `play(id,{},'interaction')` 归因）、external（playExternal）三源全覆盖，cancelled 也 settle（start 必有配对）。
+
+### host 侧 pack 隔离（E5-2 首步）
+
+`registerAnimation(definition, meta?: {pack?})`：带 pack 时强制 `user:<pack>-` 前缀（pack charset 同 user: 名段），使 pack 注册**结构性**碰不到用户手做动画与他人 id；无 pack 保持旧语义（兼容 physics）。E5-2 的完整解（调用方身份贯穿 client 侧）见下节方案。
+
+### 验证
+
+46 文件 / **800 用例**全绿（+13：pose 通道 5、subscribePose 2、subscribeUserPointer 3、subscribeAnimation 2、host pack 1；另改写 animation-definition 事件基数用例适配新规则），双工程 typecheck 零错误，四产物 build 通过。physics 仓零改动（flashPose 字面量调用与新签名结构兼容）。
+
+### 中断池 per-caller 方案（已定稿待实现，E5-2/D3 后续）
+
+设计：服务加 `forCaller(callerId): PetweenCallerHandle | null`（callerId 校验 `user:<pack>-` 前缀，与 host pack 约定同一命名空间）；句柄版 `playAnimation(id, {interrupt:'none'|'caller'|'all'})` **默认 'caller'**——`externalInstances` 从共享 Set 改 `Map<caller, Set>`，'caller' 只掐自己池、且**不掐状态机进场动画**（preempt external-only，解「律动掐掉 DSH 状态表达」）；'all' 保持今天的全局语义（physics 兼容路径）；flash 保持 last-wins 单槽（settle/pose 事件已可归因，tag 随 v2 再议）。实现落点：overlay-session 池改造 + 句柄门控，中等成本，**排下一轮**，与「外部播放遵守 reduced-motion（默认 respect，行为变更）」同轮落地。
+
+### attachStageOverlay 评估结论
+
+核心实现不难（PetStage stageLayer 提供受控插入点，挂 userScale 层内即继承位置/缩放/全部身体变换），但「正确」成本在契约：session 重建节点销毁的 重挂约定、pointer-events 禁止、z 序规则、dispose 传播。评估为**可做但不宜与本轮（13 文件）同叠**——排下一轮第二个，与中断池同轮收口。

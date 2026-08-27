@@ -180,6 +180,20 @@ describe('PetsStore.rename / saveSlice / delete', () => {
     expect(await store.read(preset.id)).toEqual(updated)
   })
 
+  it('saveSlice skips the disk write when the normalized content is unchanged', async () => {
+    const preset = await store.create('Kitty', makeSlice())
+    const before = await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')
+    const unchanged = await store.saveSlice(preset.id, makeSlice()) // same content
+    expect(unchanged.updatedAt).toBe(preset.updatedAt) // no bump, no write
+    expect(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')).toBe(before)
+
+    // A real content change still bumps updatedAt and persists.
+    const updated = await store.saveSlice(preset.id, makeSlice(2.5))
+    expect(updated.updatedAt > preset.updatedAt).toBe(true)
+    expect(updated.scale).toBe(2.5)
+    expect(JSON.parse(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8'))).toEqual(updated)
+  })
+
   it('saveSlice throws NOT_FOUND when the file is gone', async () => {
     const error = await store.saveSlice('pet_missing', makeSlice()).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(PetError)

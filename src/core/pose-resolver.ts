@@ -59,10 +59,18 @@ export function resolvePose(
   return null
 }
 
-/** Convenience factory: bind pose configs + an asset map into a lookup fn. */
+/**
+ * Convenience factory: bind pose configs + an asset map into a lookup fn.
+ * The returned key is string-typed (the director's play-time seam): builtin
+ * slots keep their fallback chains; any other key (an externally registered
+ * pose id) is not this resolver's business and resolves to null.
+ */
 export function createPoseResolver(
   poses: Record<PoseKey, PoseConfig>,
   assets: Record<string, AssetMeta>,
-): (requested: PoseKey) => ResolvedPose | null {
-  return (requested) => resolvePose(requested, poses, (assetId) => assets[assetId])
+): (requested: string) => ResolvedPose | null {
+  return (requested) =>
+    (POSE_KEYS as readonly string[]).includes(requested)
+      ? resolvePose(requested as PoseKey, poses, (assetId) => assets[assetId])
+      : null
 }

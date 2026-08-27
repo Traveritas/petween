@@ -2,12 +2,14 @@
  * host/service.ts — the cordis surface companion plugins consume
  * (`inject: ['petween']`, provided by src/index.ts).
  *
- * V1 is deliberately one method: registerAnimation persists an
+ * Two query-free capabilities: registerAnimation persists an
  * AnimationDefinition into the shared animation library
  * ($DSH_HOME/petween/animations/) through the same AnimationsStore the
  * editor's PUT /api/petween/animations writes — one library, one
- * validation path, one atomic-write discipline. The browser-side editor keeps
- * using HTTP; in-process host companions get the service because cross-plugin
+ * validation path, one atomic-write discipline; hasAnimation lets a
+ * companion install its factory defaults only when absent, so user edits
+ * survive companion reloads. The browser-side editor keeps using HTTP;
+ * in-process host companions get the service because cross-plugin
  * collaboration goes through cordis, not module imports.
  *
  * Consequences of delegating to AnimationsStore.save:
@@ -22,7 +24,7 @@
  *   of truth, not the companion's (agreed semantics).
  */
 import type { AnimationDefinition } from '../motion/animation-definition'
-import type { AnimationsStore } from './animations'
+import { AnimationError, type AnimationsStore } from './animations'
 
 /** The host-half service contract. Bump and widen, never mutate in place. */
 export interface PetweenHostService {
@@ -32,8 +34,14 @@ export interface PetweenHostService {
    * Rejects with AnimationError('INVALID_DEFINITION') on schema violations
    * or ids outside the `user:` namespace; resolves once the atomic write
    * completed.
+   *
+   * 2026-08-27 widening — optional pack isolation: with `meta.pack` the id
+   * must live under `user:<pack>-` (reject otherwise). That makes a
+   * pack-scoped register structurally unable to touch the user's hand-made
+   * animations or another companion's ids — the overwrite-in-place upgrade
+   * semantics then only ever replace the pack's own entries.
    */
-  registerAnimation(definition: AnimationDefinition): Promise<void>
+  registerAnimation(definition: AnimationDefinition, meta?: { pack?: string }): Promise<void>
   /**
    * Whether the library already holds `id` — companions register their
    * factory defaults only when missing, so a user's edits to a companion's
@@ -42,11 +50,28 @@ export interface PetweenHostService {
   hasAnimation(id: string): Promise<boolean>
 }
 
+/** Pack ids share the user: charset after their prefix. */
+const PACK_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
 /** Build the service over a store; src/index.ts provides the result on ctx. */
-export function createPetweenHostService(store: Pick<AnimationsStore, 'save' | 'exists'>): PetweenHostService {
+export function createPetweenHostService(
+  store: Pick<AnimationsStore, 'save' | 'exists'>,
+): PetweenHostService {
   return {
     version: 1,
-    registerAnimation: (definition) => store.save(definition),
+    registerAnimation: (definition, meta) => {
+      if (meta?.pack !== undefined) {
+        if (!PACK_RE.test(meta.pack)) {
+          return Promise.reject(new AnimationError('INVALID_DEFINITION', `invalid pack id ${JSON.stringify(meta.pack)}`))
+        }
+        if (!definition.id.startsWith(`user:${meta.pack}-`)) {
+          return Promise.reject(
+            new AnimationError('INVALID_DEFINITION', `id "${definition.id}" is outside the user:${meta.pack}- namespace`),
+          )
+        }
+      }
+      return store.save(definition)
+    },
     hasAnimation: (id) => Promise.resolve(store.exists(id)),
   }
 }

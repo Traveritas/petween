@@ -117,12 +117,20 @@ V1 支持两种事件：
 
 ```json
 { "at": 0.4, "type": "pose-swap" }
+{ "at": 0.4, "type": "pose-swap", "pose": "user:my-pack-doze" }
 { "at": 0.45, "type": "particle", "effect": "confetti" }
 ```
 
 **pose-swap**：时间线播放到 40% 时切换 Pose 图片。编译器会在事件点把时间线**切成两段**，
 Scheduler 逐段执行并 `await animation.finished`，因此换图时机与视觉时间严格一致，不会用
 `setTimeout` 近似（§10.1）。
+
+可选的 **`pose` 字段**（2026-08-27 开放）给事件命名换图目标：六个内置槽名之一
+（`idle`/`thinking`/`working`/`waiting`/`success`/`error`，走各自 fallback 链），或一个经
+`petween/client` 服务 `registerPoses` 注册的 `user:` pose id（附属插件自带图片）。目标在
+**播放时**解析：未注册的键静默跳过（与悬空 `animationId` 回落同一纪律）。enter 路径
+（transition）**忽略**该字段——进场换哪张图由状态机决定，不由动画数据决定；因此 transition
+的 pose-swap 声明 `pose` 会被校验拒绝。
 
 **particle**：在事件点发射一次 DOM 粒子爆发（纸屑/星星/微光），由 client renderer 的粒子层
 执行；`effect` 必须是以下之一：
@@ -137,11 +145,14 @@ particle 是纯视觉点缀：**reduced-motion 下不发射**（pose-swap 仍会
 `advanced.particles` 开关整体关闭。同一个 `at` 上允许多个事件（如 pose-swap 与 particle 同在
 0.45），Scheduler 按数组顺序在同一切段边界依次触发。
 
-V1 的事件数量约束（注册时强制）：
+事件数量约束（注册时强制）：
 
-- **`kind: 'transition'` 必须恰好包含 1 个 pose-swap 事件**，另允许 0..n 个 particle 事件——
-  transition 的语义就是"换一次图"，如 Comic Pop 的 `0.40`；0 个或 2 个以上 pose-swap 都会被拒绝。
-- **`interaction` 不允许 pose-swap，允许 0..n 个 particle**——交互动效不换图，但可以撒花。
+- **`kind: 'transition'` 必须恰好包含 1 个 pose-swap 事件**，且不得声明 `pose` 字段（进场
+  pose 归状态机所有）——transition 的语义就是"换一次图"，如 Comic Pop 的 `0.40`；0 个或
+  2 个以上 pose-swap 都会被拒绝。
+- **`kind: 'interaction'` 允许 0..n 个 pose-swap**，但每个**必须声明 `pose` 目标**——交互动效
+  可以换图（如打盹动画切睡眠姿势），结束后自动回到状态机当前 pose（复用 flash 记账：真实
+  状态变化随时可抢占）。另允许 0..n 个 particle。
 - **`ambient` 不允许声明任何 events**——循环动画不换图、不发射。
 - 事件在 reduced-motion 下依然保留在编译产物里：动画坍缩但**换图仍会发生**（§22）；particle
   事件是否发射由 renderer 在运行时决定。
@@ -172,9 +183,13 @@ runtime（按 track 输出独立动画），该限制会相应解除。
 
 Transition：`builtin:none` / `builtin:soft` / `builtin:comic-pop`（默认）/ `builtin:jelly` /
 `builtin:jump` / `builtin:snap` / `builtin:flip` / `builtin:celebrate`（pose-swap 同时发
-confetti 粒子）/ `builtin:deflate`。
+confetti 粒子）/ `builtin:deflate` / `builtin:activity-swap`（供「活跃内切换姿势」的 subtle
+模式内部使用，对应配置 `advanced.activityTransition`）。
 
 Ambient：`builtin:bounce` / `builtin:sway` / `builtin:breathe`。
+
+Interaction（点击互动可选的内置项，也可挂自定义 interaction 动画）：`builtin:click-pop` /
+`builtin:click-wiggle` / `builtin:click-bounce` / `builtin:click-spin`。
 
 `builtin:*` 命名空间受保护：用户不能注册同名 id，也不能 unregister。想改造内置动画时，请
 克隆一份存为 `user:<uuid>` 再修改（Preset → Customize，§8.15）。
@@ -263,8 +278,11 @@ Breathing 同时播放，时长、循环方式和参数默认值取自动画定�
 }
 ```
 
-校验规则汇总（注册时强制执行）：未知 property 拒绝；同一 property 重复 track 拒绝；`at` 必须
-0..1；每条轨道至少 1 帧；easing 必须合法；同层 track 的 easing 必须逐区间一致；repeat policy 必须
-合法（`alternate` 不允许带 events）；transition 必须恰好 1 个 pose-swap（particle 事件 0..n 允许），
-interaction 禁止 pose-swap（particle 允许），ambient 不允许任何 events；particle 的 `effect` 必须是
-`confetti` / `star-burst` / `sparkle` 之一；`durationMs` 1~60000；`id` 必须符合命名空间规范。
+校验规则汇总（注册时强制执行，与 §6 的事件规则一致）：未知 property 拒绝；同一 property 重复 track
+拒绝；同一 track 内重复 `at` 拒绝；`at` 必须 0..1；每条轨道至少 1 帧；easing 必须合法；同层 track 的
+easing 必须逐区间一致；repeat policy 必须合法（`alternate` 不允许带 events，运行时 repeat 覆盖同样受此
+约束）；`random-interval` 要求 `1 <= minDelayMs <= maxDelayMs <= 600000`；`transition` 必须恰好 1 个
+pose-swap 且不得声明 `pose`（particle 事件 0..n 允许）；`interaction` 允许 0..n 个 pose-swap 但每个必须
+声明 `pose` 目标（particle 允许），ambient 不允许任何 events、也不得使用 transition 层的轨道（避免与
+进场过渡在同一 DOM 层打架）；particle 的 `effect` 必须是 `confetti` / `star-burst` / `sparkle` 之一；
+`durationMs` 1~60000；`id` 必须符合命名空间规范。

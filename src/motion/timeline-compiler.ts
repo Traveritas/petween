@@ -6,7 +6,7 @@
  * - validation, keyframe sorting and endpoint completion (§8.4),
  * - ParameterizedValue evaluation against runtime params (§8.8),
  * - easing alias → cubic-bezier resolution (§8.7),
- * - duration clamp (transitions 80..650ms, §7.4),
+ * - duration clamp (transitions 60..2000ms, §7.4),
  * - event sorting and timeline pre-cutting into segments at event points
  *   (§8.12): boundary values are sampled exactly (easing-aware), and offsets
  *   inside each segment are re-normalized to 0..1,
@@ -19,7 +19,7 @@ import type { AnimationDefinition, RepeatPolicy, TimelineEvent } from './animati
 import { assertValidAnimationDefinition, easingAt, parseEasing, resolveEasingCss, unionTrackTimes } from './animation-definition'
 import type { MotionLayer, MotionProperty } from './motion-properties'
 import { MOTION_PROPERTIES, composeLayerCss } from './motion-properties'
-import { TRANSITION_DURATION_LIMITS } from '../core/types'
+import { TRANSITION_DURATION_LIMITS, TRANSITION_STRENGTH_LIMITS } from '../core/types'
 
 export interface CompileOptions {
   params?: { strength?: number }
@@ -27,7 +27,7 @@ export interface CompileOptions {
   durationMs?: number
   /** Overrides definition.repeat. */
   repeat?: RepeatPolicy
-  /** Overrides the default kind-based clamp (transitions: 80..650). */
+  /** Overrides the default kind-based clamp (transitions: 60..2000ms). */
   durationClamp?: readonly [number, number]
   reducedMotion?: boolean
 }
@@ -164,10 +164,13 @@ export function compileTimeline(definition: AnimationDefinition, options: Compil
   assertValidAnimationDefinition(definition)
 
   const strengthParameter = definition.parameters?.strength
+  // Undeclared parameter bounds default to the global transition limits, not
+  // the historical 1.8 constant — externally registered definitions without a
+  // `parameters` block keep the same headroom as editor-authored ones.
   const strength = clamp(
     options.params?.strength ?? strengthParameter?.default ?? 1,
-    strengthParameter?.min ?? 0,
-    strengthParameter?.max ?? 1.8,
+    strengthParameter?.min ?? TRANSITION_STRENGTH_LIMITS.min,
+    strengthParameter?.max ?? TRANSITION_STRENGTH_LIMITS.max,
   )
 
   const [minDuration, maxDuration] =
@@ -186,6 +189,15 @@ export function compileTimeline(definition: AnimationDefinition, options: Compil
 
   // Event points pre-cut the timeline (§8.12); events keep sorted order.
   const sortedEvents = [...(definition.events ?? [])].sort((a, b) => a.at - b.at)
+  // The runtime repeat override is trusted input that bypasses definition-level
+  // validation — enforce the same eventful-alternate rule here so an override
+  // cannot silently replay eventful timelines forward with direction semantics.
+  const repeat = options.repeat ?? definition.repeat
+  if (sortedEvents.length > 0 && repeat.mode === 'alternate') {
+    throw new Error(
+      `compileTimeline(${definition.id}): repeat "alternate" with events is not supported (V1 replays eventful timelines forward)`,
+    )
+  }
   const boundaries = [...new Set<number>([0, 1, ...sortedEvents.map((event) => event.at)])].sort((a, b) => a - b)
   const segments: CompiledSegment[] = []
   for (let index = 0; index < boundaries.length - 1; index += 1) {
@@ -201,7 +213,7 @@ export function compileTimeline(definition: AnimationDefinition, options: Compil
   return {
     definitionId: definition.id,
     durationMs,
-    repeat: options.repeat ?? definition.repeat,
+    repeat,
     segments,
     events,
     reducedMotion,

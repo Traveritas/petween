@@ -281,7 +281,7 @@ describe('PetweenSettings', () => {
     act(() => choose(animation, 'builtin:click-spin'))
     await saveChanges()
     expect(vi.mocked(api.patchConfig).mock.calls[0][0].interactions).toEqual({
-      click: { animation: 'builtin:click-spin', pose: null },
+      click: { animation: 'builtin:click-spin', pose: null, honorAnimationPoseSwap: false },
     })
 
     const pose = findControlRow('点击闪现姿势').querySelector('select')
@@ -289,7 +289,7 @@ describe('PetweenSettings', () => {
     act(() => choose(pose, 'success'))
     await saveChanges()
     expect(vi.mocked(api.patchConfig).mock.calls[1][0].interactions).toEqual({
-      click: { animation: 'builtin:click-spin', pose: 'success' },
+      click: { animation: 'builtin:click-spin', pose: 'success', honorAnimationPoseSwap: false },
     })
   })
 

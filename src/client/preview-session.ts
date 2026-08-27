@@ -68,8 +68,11 @@ export class PreviewSession {
       stage: options.stage,
       registry: this.registry,
       config: options.config,
-      // Indirection: updateConfig swaps the resolver on config hot-edits.
-      resolvePose: (poseKey) => this.resolvePose(poseKey),
+      // Indirection: updateConfig swaps the resolver on config hot-edits. The
+      // seam is string-keyed (external poses); the preview owns none, so any
+      // non-builtin key simply resolves to nothing.
+      resolvePose: (poseKey) =>
+        (POSE_KEYS as readonly string[]).includes(poseKey) ? this.resolvePose(poseKey as PoseKey) : null,
     })
     if (options.customs !== undefined) this.updateCustoms(options.customs)
     this.source = new ManualStateSource({

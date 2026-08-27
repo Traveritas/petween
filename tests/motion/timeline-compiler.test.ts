@@ -28,7 +28,10 @@ describe('compileTimeline — keyframe normalization', () => {
       version: 1,
       id: 'user:fade',
       name: 'Fade',
-      kind: 'ambient',
+      // Ambient definitions may not animate the transition layer (§8.5 data
+      // guard); these normalization fixtures only exercise keyframe handling,
+      // so the interaction kind carries them instead.
+      kind: 'interaction',
       durationMs: 1000,
       repeat: { mode: 'once' },
       tracks: [
@@ -52,7 +55,7 @@ describe('compileTimeline — keyframe normalization', () => {
       version: 1,
       id: 'user:eased',
       name: 'Eased',
-      kind: 'ambient',
+      kind: 'interaction',
       durationMs: 1000,
       repeat: { mode: 'once' },
       tracks: [
@@ -162,6 +165,44 @@ describe('compileTimeline — duration and reduced motion', () => {
 
   it('lets callers override the repeat policy', () => {
     expect(compileTimeline(BUILTIN_COMIC_POP, { repeat: { mode: 'loop' } }).repeat).toEqual({ mode: 'loop' })
+  })
+
+  it('rejects a repeat override that would replay an eventful timeline as "alternate"', () => {
+    // The override bypasses definition-level validation, so the eventful-
+    // alternate rule is enforced here against the EFFECTIVE policy.
+    expect(() => compileTimeline(BUILTIN_COMIC_POP, { repeat: { mode: 'alternate' } })).toThrowError(
+      /"alternate" with events/,
+    )
+  })
+
+  it('defaults undeclared strength bounds to the global transition limits (not the historical 1.8)', () => {
+    const definition: AnimationDefinition = {
+      version: 1,
+      id: 'user:no-params',
+      name: 'No Params',
+      kind: 'interaction',
+      durationMs: 200,
+      repeat: { mode: 'once' },
+      tracks: [
+        {
+          property: 'transition.scaleX',
+          keyframes: [
+            { at: 0, value: 1 },
+            { at: 1, value: { base: 1, parameter: 'strength', amount: 0.3 } },
+          ],
+        },
+      ],
+      events: [],
+    }
+    // strength 3 (the widened global max) must pass through unclamped
+    const compiled = compileTimeline(definition, { params: { strength: 3 } })
+    const layer = compiled.segments[0]?.layers.transition?.[1]
+    expect(layer).toBeDefined()
+    expect(layer?.scale).toBe('1.9 1') // scaleX from the track; scaleY defaults to 1
+    // and the cap still caps: strength 5 clamps to the same 3 output —
+    // locks the upper bound, not just the raised floor.
+    const clamped = compileTimeline(definition, { params: { strength: 5 } })
+    expect(clamped.segments[0]?.layers.transition?.[1]?.scale).toBe('1.9 1')
   })
 
   it('reduced-motion: tracks collapse to final values, duration <= 120ms, events kept (§22)', () => {

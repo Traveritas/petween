@@ -43,28 +43,35 @@ export function TransitionEditor(props: TransitionEditorProps): JSX.Element {
   const inherited = enter.preset === 'global'
 
   const customTransitions = customs.filter((definition) => definition.kind === 'transition')
-  // A custom selection is shown by its animationId; a dangling id (deleted
-  // custom) falls back to the preset display, mirroring the play-time fallback.
+  // A custom selection is shown by its animationId; a `builtin:` id echoes
+  // the preset option. A dangling user: id (the custom was deleted) gets an
+  // explicit 「（不可用）」 option instead of silently showing the fallback
+  // preset — the real config value stays visible (mirrors AmbientEditor).
   const customSelected =
     enter.animationId !== undefined && customTransitions.some((definition) => definition.id === enter.animationId)
   const builtinAnimationId =
     enter.animationId !== undefined && enter.animationId.startsWith('builtin:')
       ? enter.animationId.slice('builtin:'.length)
       : undefined
+  const builtinEchoed =
+    builtinAnimationId !== undefined && TRANSITION_PRESET_OPTIONS.some((option) => option.value === builtinAnimationId)
+  const danglingAnimationId =
+    enter.animationId !== undefined && !customSelected && !builtinEchoed ? enter.animationId : undefined
   const selectValue = customSelected
     ? (enter.animationId as string)
-    : TRANSITION_PRESET_OPTIONS.some((option) => option.value === builtinAnimationId)
+    : builtinEchoed
       ? (builtinAnimationId as TransitionPreset)
-      : enter.preset
+      : (danglingAnimationId ?? enter.preset)
 
+  const customOptions = customTransitions.map((definition) => ({ value: definition.id, label: definition.name }))
+  if (danglingAnimationId !== undefined) {
+    customOptions.push({ value: danglingAnimationId, label: `${danglingAnimationId}（不可用）` })
+  }
   const groups: Array<{ label: string; options: ReadonlyArray<{ value: string; label: string }> }> = [
     { label: '内置', options: TRANSITION_PRESET_OPTIONS },
   ]
-  if (customTransitions.length > 0) {
-    groups.push({
-      label: '自定义',
-      options: customTransitions.map((definition) => ({ value: definition.id, label: definition.name })),
-    })
+  if (customOptions.length > 0) {
+    groups.push({ label: '自定义', options: customOptions })
   }
 
   return (

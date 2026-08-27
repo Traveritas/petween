@@ -25,16 +25,25 @@ export interface DragPoint {
 export interface DragControllerOptions {
   /** The interactive pet body (the stage's pointer-events:auto layer). */
   handle: HTMLElement
-  /** Stage square side in px, for the clamp math. */
-  stageSize: number
+  /**
+   * The VISIBLE pet square (side × user scale, §27), read per clamp so a
+   * live user-scale edit changes the drag bounds with the next move — a
+   * static number here would let this.position carry values setPosition's
+   * own clamp rejects, desyncing memory from the DOM.
+   */
+  stageSize: () => number
   /** Current top-left viewport position of the stage square. */
   getPosition: () => DragPoint
   /** Dragging: apply the (clamped) position. */
   onMove: (x: number, y: number) => void
   /** Drag ended (or was cancelled) after real travel: persist this position. */
   onDragEnd: (x: number, y: number) => void
-  /** Pointer released without crossing the drag threshold. */
-  onClick: () => void
+  /**
+   * Pointer released without crossing the drag threshold. Coordinates are
+   * the release point (viewport px) — the outer layer forwards them into its
+   * pointer-event stream (click detail bookkeeping) before playing the pop.
+   */
+  onClick: (x: number, y: number) => void
   /**
    * The gesture crossed the drag threshold and became a real drag (fired
    * exactly once per gesture; a click never fires it). The overlay session
@@ -81,7 +90,7 @@ export class DragController {
 
   private clamp(point: DragPoint): DragPoint {
     const viewport = this.options.viewport?.() ?? { width: window.innerWidth, height: window.innerHeight }
-    return clampStagePosition(point.x, point.y, this.options.stageSize, viewport.width, viewport.height)
+    return clampStagePosition(point.x, point.y, this.options.stageSize(), viewport.width, viewport.height)
   }
 
   private readonly handlePointerDown = (event: Event): void => {
@@ -129,7 +138,7 @@ export class DragController {
     const wasDragging = this.dragging
     this.endGesture(pointer)
     if (wasDragging) this.options.onDragEnd(this.last.x, this.last.y)
-    else this.options.onClick()
+    else this.options.onClick(pointer.clientX as number, pointer.clientY as number)
   }
 
   private readonly handlePointerCancel = (event: Event): void => {

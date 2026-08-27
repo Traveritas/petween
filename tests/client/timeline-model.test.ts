@@ -293,7 +293,12 @@ describe('timeline-model — event ops', () => {
 describe('timeline-model — validateTimelineDraft', () => {
   it('accepts a well-formed draft of every kind', () => {
     expect(validateTimelineDraft('transition', duoTracks(), poseSwap)).toEqual([])
-    expect(validateTimelineDraft('ambient', duoTracks(), [])).toEqual([])
+    // ambient drafts may not animate the transition layer (schema rule): use
+    // an ambient-appropriate track
+    const ambientTracks = (): MotionTrack[] => [
+      { property: 'sway.rotation', keyframes: [{ at: 0, value: -4 }, { at: 1, value: 4 }] },
+    ]
+    expect(validateTimelineDraft('ambient', ambientTracks(), [])).toEqual([])
     expect(validateTimelineDraft('interaction', duoTracks(), [{ at: 0.5, type: 'particle', effect: 'confetti' }])).toEqual([])
   })
 

@@ -26,7 +26,6 @@ import { stateSlotFor } from '../core/state-machine'
 import type {
   PetweenConfig,
   MotionTarget,
-  PoseKey,
   ResolvedPose,
   StateAppearance,
   TransitionConfig,
@@ -45,8 +44,14 @@ export interface MotionDirectorOptions {
   stage: MotionStage
   registry: AnimationRegistry
   config: PetweenConfig
-  /** Pose fallback resolution (core/pose-resolver); null = no image imported. */
-  resolvePose: (poseKey: PoseKey) => ResolvedPose | null
+  /**
+   * Pose resolution (core/pose-resolver plus the session's external poses);
+   * null = no image imported. Widened from PoseKey to string (2026-08-27):
+   * interaction animations may name `user:` pose targets in their pose-swap
+   * events, resolved at play time through this seam. Builtin-slot strings
+   * keep their fallback-chain semantics.
+   */
+  resolvePose: (poseKey: string) => ResolvedPose | null
   /**
    * External pose-hold ledger (the overlay session's attachment flashPose):
    * returns the pose a hold is currently showing, or null when no hold is
@@ -56,6 +61,25 @@ export interface MotionDirectorOptions {
    * Optional: without it the restore keeps its original semantics.
    */
   getExternalPoseHold?: () => ResolvedPose | null
+  /**
+   * Playback lifecycle observer (the extension service's animation event
+   * stream): fired at the start and settle of every playback the director
+   * owns — enter transitions, click interactions, and external play() calls.
+   * Settle fires for cancelled runs too (status 'cancelled'), so companions
+   * can always pair their starts. Optional; purely observational.
+   */
+  onPlayback?: (event: DirectorPlaybackEvent) => void
+}
+
+/** Who started a playback (the animation event stream's attribution). */
+export type PlaybackSource = 'enter' | 'interaction' | 'external'
+
+export interface DirectorPlaybackEvent {
+  phase: 'start' | 'settle'
+  source: PlaybackSource
+  definitionId: string
+  /** Settle only: ran to completion vs cancelled/superseded. */
+  status?: 'finished' | 'cancelled'
 }
 
 /** A fully resolved enter-transition request (preset already dereferenced). */
@@ -265,8 +289,9 @@ export class MotionDirector {
    * executes any valid definition with no special-casing. Particle events on
    * the played definition (interactions may declare them, §8.5) are forwarded
    * to the stage's particle layer; a caller-provided onEvent still runs.
+   * The source only feeds playback attribution (the onPlayback observer).
    */
-  play(definitionId: string, options: PlayOptions = {}): TimelineInstance {
+  play(definitionId: string, options: PlayOptions = {}, source: 'external' | 'interaction' = 'external'): TimelineInstance {
     const instance = this.engine.play(definitionId, {
       ...options,
       onEvent: (event) => {
@@ -274,14 +299,29 @@ export class MotionDirector {
         options.onEvent?.(event)
       },
     })
+    // Start is announced only once the instance exists — engine.play throws
+    // synchronously on a registry miss, and an emitted start must always
+    // have the settle in the finally below to pair it.
+    this.notifyPlayback({ phase: 'start', source, definitionId })
     this.playedInstances.add(instance)
     // play() was already called by the engine; the second call returns the
     // same (never-rejecting) completion promise — used here only for cleanup.
     void instance.play().finally(() => {
       this.playedInstances.delete(instance)
+      this.notifyPlayback({
+        phase: 'settle',
+        source,
+        definitionId,
+        status: instance.status === 'finished' ? 'finished' : 'cancelled',
+      })
     })
     if (this.paused) instance.pause()
     return instance
+  }
+
+  /** The onPlayback observer fan-out (absent by default — zero overhead). */
+  private notifyPlayback(event: DirectorPlaybackEvent): void {
+    this.options.onPlayback?.(event)
   }
 
   /**
@@ -295,6 +335,30 @@ export class MotionDirector {
   interruptEnterTransition(): void {
     if (this.pendingTransition === null) return
     this.invalidateEnterTransition()
+  }
+
+  /**
+   * Land the CURRENT target after an external interrupt invalidated its
+   * in-flight enter transition (the overlay session's interrupt path): swap
+   * the stage to the target's resolved pose through the silent-swap path
+   * (same pose-ledger bookkeeping, same skip guard) and re-apply its ambient
+   * profile. This is the DIRECTOR settling after the interrupt, not the
+   * interrupted timeline swapping the pose — cancel() already guarantees the
+   * timeline can do neither (§10.2); without the settle the interrupted
+   * enter's target would simply be abandoned: stale pose on stage, ambient
+   * silent (runEnter stops it first and never restarts after a cancel), and
+   * a later same-shape target cannot heal it (§10.3 dedupe swaps nothing).
+   *
+   * Self-guarded like interruptEnterTransition: with no transition in flight
+   * it is a no-op — the silent-swap path would bump the generation for no
+   * reason and needlessly invalidate live guards (e.g. a click flash
+   * restore). Interrupt-then-settle in one tick still passes: the pending
+   * promise is cleared on a later microtask, after this call.
+   */
+  settleCurrentTarget(): void {
+    if (this.pendingTransition === null) return
+    if (this.current === null) return
+    this.swapPoseSilently(this.current)
   }
 
   /**
@@ -343,7 +407,18 @@ export class MotionDirector {
       definitionId: enter.definitionId,
       params: { strength: enter.strength },
       durationMs: enter.durationMs,
+      // Ledger write-back at swap time, not completion: an enter interrupted
+      // during its post segment has already put the new image on stage, and
+      // the silent-swap skip guard must compare against that fact.
+      onSwap: () => {
+        this.stagePoseUrl = pose.asset.url
+      },
     })
+    // Start is announced only once the instance exists: a synchronous
+    // createInstance throw (unknown definition id) must not leave an orphan
+    // start with no settle to pair it — the tracked promise below is also
+    // never installed in that case.
+    this.notifyPlayback({ phase: 'start', source: 'enter', definitionId: enter.definitionId })
     // The transition engine created AND started its instance synchronously;
     // freeze it straight away when the director is paused (§23 — the same
     // contract play() applies to its instances).
@@ -353,8 +428,17 @@ export class MotionDirector {
     // pose-swap event still carries pre-edit values. A superseded play
     // resolves false (or an unknown definition rejects): both settle waiters.
     const tracked = playing.then(
-      () => undefined,
-      () => undefined,
+      (completed) => {
+        this.notifyPlayback({
+          phase: 'settle',
+          source: 'enter',
+          definitionId: enter.definitionId,
+          status: completed ? 'finished' : 'cancelled',
+        })
+      },
+      () => {
+        this.notifyPlayback({ phase: 'settle', source: 'enter', definitionId: enter.definitionId, status: 'cancelled' })
+      },
     )
     this.pendingTransition = tracked
     void tracked.finally(() => {
@@ -363,8 +447,9 @@ export class MotionDirector {
     })
     const completed = await playing
     if (!completed) return // superseded: an interrupted transition must not restart ambient (§10.2)
-    // A completed enter always fired its pose-swap event: record what the
-    // stage shows so silent swaps can skip a redundant swap.
+    // Redundant with the swap-time ledger write in most runs, but idempotent —
+    // kept so a completed enter always converges the ledger even if a future
+    // event path skips onSwap.
     this.stagePoseUrl = pose.asset.url
     this.refreshAmbient()
   }
@@ -387,7 +472,12 @@ export class MotionDirector {
     const strength = enter.preset === 'global' ? globalTransition.strength : enter.strength
     const durationMs = enter.preset === 'global' ? globalTransition.durationMs : enter.durationMs
     const candidate = enter.animationId === undefined ? undefined : this.options.registry.get(enter.animationId)
-    const override = candidate?.kind === 'transition' ? candidate : undefined
+    // A repeating transition (loop/alternate/random-interval) never settles —
+    // the scheduler replays its (mandatory) pose-swap event forever — so an
+    // enter mounted on it would await forever: ambient stays stopped,
+    // transitionInFlight stays true, whenSettled() hangs until the next
+    // setTarget preempts. Only a 'once' candidate may drive an enter.
+    const override = candidate?.kind === 'transition' && candidate.repeat.mode === 'once' ? candidate : undefined
     return {
       definitionId: override?.id ?? transitionDefinitionId(preset),
       strength: clamp(strength, TRANSITION_STRENGTH_LIMITS.min, TRANSITION_STRENGTH_LIMITS.max),
@@ -403,10 +493,13 @@ export class MotionDirector {
    * When interactions.click.pose is set and resolves to an image, the stage
    * wears that pose for the animation's duration and returns to the CURRENT
    * target's pose once the instance finishes (await-driven, never a bare
-   * setTimeout). Preemption: a real target arriving mid-flash bumps the
-   * transition generation (runEnter/swapPoseSilently), which skips the
-   * swap-back — the new state's own path decides the pose. A newer click also
-   * supersedes an in-flight flash via interactionGeneration.
+   * setTimeout). With interactions.click.honorAnimationPoseSwap the
+   * animation's own named pose-swap events swap the stage the same way
+   * (latest swap wins; one restore at settle). Preemption: a real target
+   * arriving mid-flash bumps the transition generation
+   * (runEnter/swapPoseSilently), which skips the swap-back — the new state's
+   * own path decides the pose. A newer click also supersedes an in-flight
+   * flash via interactionGeneration.
    */
   async playInteraction(): Promise<void> {
     const click = this.options.config.interactions.click
@@ -426,9 +519,33 @@ export class MotionDirector {
       this.stagePoseUrl = flashPose.asset.url
     }
 
-    const instance = this.play(definitionId)
+    // Opt-in (interactions.click.honorAnimationPoseSwap): the animation's own
+    // named pose-swap events swap the stage for the run's duration — the same
+    // swap/restore contract as the config flash pose above (latest swap wins,
+    // one restore at the end under the same preemption guards). Off by
+    // default: a click animation authored for external play may carry swaps
+    // the click feel shouldn't perform.
+    let swappedPose: ResolvedPose | null = null
+    const instance = this.play(
+      definitionId,
+      click.honorAnimationPoseSwap
+        ? {
+            onEvent: (event) => {
+              if (event.type !== 'pose-swap' || event.pose === undefined) return
+              const pose = this.options.resolvePose(event.pose)
+              if (pose === null) return // dangling target: skip (fallback discipline)
+              swappedPose = pose
+              if (pose.asset.url !== this.stagePoseUrl) {
+                this.options.stage.swapPose(pose)
+                this.stagePoseUrl = pose.asset.url
+              }
+            },
+          }
+        : {},
+      'interaction',
+    )
     await instance.play()
-    if (flashPose === null) return // no flash requested or resolvable: nothing to restore
+    if (flashPose === null && swappedPose === null) return // nothing was swapped: nothing to restore
     if (instance.status !== 'finished') return // cancelled (dispose): leave the stage alone
     if (interactionGeneration !== this.interactionGeneration) return // a newer click owns the restore
     if (!enterGuard.isCurrent()) return // preempted by a real target

@@ -146,6 +146,13 @@ export function attachStateChannel(host: StateChannelHost, options?: StateChanne
       heartbeat: setInterval(() => write(client, HEARTBEAT_LINE), heartbeatMs),
     }
     clients.add(client)
+    // res.write() failures can also surface asynchronously as 'error' events
+    // (write-after-end on a dying socket); without a listener they would hit
+    // the process as uncaught exceptions — treat them like a dropped client.
+    client.res.on('error', () => dropClient(client))
+    // Socket-level errors deliver to the request side too (an unlistened
+    // IncomingMessage 'error' can crash a bare node:http host) — same drop.
+    req.on('error', () => dropClient(client))
     write(client, `data: ${JSON.stringify({ kind: 'snapshot', events: snapshotFor(sessionId) } satisfies StateFrame)}\n\n`)
     res.on('close', () => dropClient(client))
   }

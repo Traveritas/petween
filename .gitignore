@@ -3,3 +3,6 @@ lib/
 preview/preview.js
 preview/preview.js.map
 *.tsbuildinfo
+
+# Coverage reports (pnpm test:coverage)
+coverage/

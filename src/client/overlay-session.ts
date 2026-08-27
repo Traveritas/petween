@@ -34,7 +34,8 @@ import type {
   PositionDriver,
   StageSnapshot,
   UserPointerEvent,
-} from './extension-service'
+} from './overlay/session-surface'
+import { fanOutSafely } from './overlay/session-surface'
 import { DragController } from './overlay/drag-controller'
 import { clampStagePosition, DEFAULT_OVERLAY_MARGIN, type PetStage } from './overlay/pet-stage'
 
@@ -139,21 +140,6 @@ interface ActivePositionDriver {
 function readOverlayPosition(config: PetweenConfig): { x: number; y: number } | null {
   const { x, y } = config.overlay
   return x === null || y === null ? null : { x, y }
-}
-
-/**
- * Fan a value out to third-party listeners, isolating each one: a throwing
- * listener (a misbehaving companion) gets a console.warn and never breaks
- * the remaining listeners or the session's own flow.
- */
-function fanOutSafely<T>(listeners: ReadonlyArray<(value: T) => void>, value: T, label: string): void {
-  for (const listener of listeners) {
-    try {
-      listener(value)
-    } catch (error) {
-      console.warn(`petween: ${label} failed`, error)
-    }
-  }
 }
 
 export class OverlaySession {

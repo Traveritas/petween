@@ -18,135 +18,42 @@
  * (§2.1), so "no active session" is a normal window every API must degrade
  * through: null returns, or a null snapshot push to stage subscribers.
  */
-import type { ActivityMode, PoseAnchor, PoseKey, ResolvedPose, VisualState } from '../core/types'
-import type { AnimationKind } from '../motion/animation-definition'
+import type { ResolvedPose } from '../core/types'
 import type { TimelineInstance } from '../motion/animation-handle'
 import type { DirectorPlaybackEvent } from '../motion/motion-director'
-import type { OverlaySession } from './overlay-session'
+import {
+  fanOutSafely,
+  type AnimationSummary,
+  type ExternalPoseDefinition,
+  type PetSessionSurface,
+  type PlayAnimationOptions,
+  type PlayState,
+  type PositionDriver,
+  type StageSnapshot,
+  type UserPointerEvent,
+} from './overlay/session-surface'
 
-export interface StageSnapshot {
-  /** Viewport px; the never-dragged default corner is folded into concrete px. */
-  x: number
-  y: number
-  /** The configured user scale (global.scale). */
-  scale: number
-  /**
-   * Base stage square in px. The pet's on-screen bounding box is
-   * `stageSize * scale` — companions doing wall/edge math need both.
-   */
-  stageSize: number
-  /** Null until the session booted (the director has no target yet). */
-  visualState: VisualState | null
-  activityMode: ActivityMode | null
-  started: boolean
-  // v1 widening (2026-08-27): context every companion was re-deriving alone
-  // (physics shipped its own viewport getter; hit-testing approximated the
-  // img box with the stage square). Additive fields — version stays 1.
-  /** The viewport the position/clamp math runs against. */
-  viewport: { width: number; height: number }
-  /** True between the drag-threshold crossing and the gesture's end. */
-  dragging: boolean
-  /** The §22 effective flag (config override ∨ prefers-reduced-motion). */
-  reducedMotion: boolean
-  /**
-   * The CURRENT motion target's pose key — what the state machine wants,
-   * not necessarily the displayed image (a flashPose/click hold may own the
-   * stage, and the enter's own swap fires mid-transition). Null before boot.
-   */
-  poseKey: PoseKey | null
-  /**
-   * The resting pose <img> box in viewport px: stage position + user scale
-   * and the §12.3 anchor math applied, motion-layer transforms (sway/bounce/
-   * breathe/transition) excluded. This is the pet's real pointer hit region —
-   * the square `stageSize * scale` approximation overshoots transparent
-   * margins by a typical 30-60% on real assets. Null before the first swap.
-   */
-  bodyRect: { x: number; y: number; width: number; height: number } | null
-}
-
-export interface PositionDriver {
-  /**
-   * Apply a viewport position (through the §27 clamp, same math as a user
-   * drag). Returns false while suspended (a user drag is in flight) or after
-   * release — the caller then owns no part of the pet.
-   */
-  apply(x: number, y: number): boolean
-  /**
-   * Persist the current position immediately through the session's existing
-   * path (overlay-only config patch + hub broadcast); a pending drag debounce
-   * is superseded, not doubled.
-   */
-  commit(): Promise<void>
-  /** Hand the position back; remote overlay coordinates apply again. */
-  release(): void
-  /**
-   * A user drag gesture started OR ended against the driver's lease: 'start'
-   * suspends it (apply returns false) until the matching 'end'; both fire
-   * only for real-travel gestures — a click fires neither. The user's hand
-   * outranks the driver for the gesture's duration, no longer.
-   */
-  onUserDrag(listener: (phase: 'start' | 'end') => void): () => void
-}
-
-export interface PlayAnimationOptions {
-  /**
-   * Default true. true: preempt — invalidate the in-flight enter transition
-   * (§10.2 generation bump) and dispose instances previously played through
-   * this service. false: give up (null) when anything is playing — this
-   * service's own live instances, or an enter transition in flight.
-   */
-  interrupt?: boolean
-  /** Passed through as PlayOptions.params.strength. */
-  strength?: number
-}
-
-/** Read-only playback state, split by owner (no preemption, no null-guessing). */
-export interface PlayState {
-  /** An enter transition (state-machine ownership) is in flight. */
-  enter: boolean
-  /** Any instance played through this service is running or paused. */
-  external: boolean
-}
-
-/** A registry entry as listed for companions: playable through playAnimation. */
-export interface AnimationSummary {
-  id: string
-  name: string
-  kind: AnimationKind
-  durationMs: number
-  /** 'builtin:' ids versus everything synced from the host's library. */
-  namespace: 'builtin' | 'user'
-}
+// C1: every shared contract type moved to overlay/session-surface.ts (the
+// neutral module that broke the extension-service ⇄ overlay-session type
+// cycle). Re-exported here so companion authors and the existing tests keep
+// their single import point.
+export type {
+  AnimationSummary,
+  ExternalPoseDefinition,
+  PetSessionSurface,
+  PlayAnimationOptions,
+  PlayState,
+  PositionDriver,
+  StageSnapshot,
+  UserPointerEvent,
+} from './overlay/session-surface'
 
 /**
- * A companion-hosted pose (2026-08-27 pose channel): the companion stores
- * the image itself; the main plugin only ever sees the URL. `id` shares the
- * animation library's `user:` namespace charset (convention
- * `user:<pack>-<name>`) so it can never collide with the six builtin slots.
- * Unknown width/height degrade in the layout until the image loads.
+ * The session PetOverlay last registered (null = no live pet surface).
+ * Typed structurally (PetSessionSurface), never by class — the service must
+ * not import the session module.
  */
-export interface ExternalPoseDefinition {
-  id: string
-  url: string
-  /** Defaults to the per-pose default {0.5, 0.96} (foot-center). */
-  anchor?: PoseAnchor
-  /** Defaults to 1; same 0.2..8 bounds as the config validation. */
-  zoom?: number
-  width?: number
-  height?: number
-}
-
-/**
- * User pointer events on the pet body (click + hover). 'click' carries a
- * maintained detail count — 2 within ~400ms and 25px means a double-click.
- * Keyboard activations (Enter/Space) are not pointer events and never
- * appear here. hover-move coalesces to one event per animation frame.
- */
-export type UserPointerEvent =
-  | { kind: 'click'; x: number; y: number; detail: number }
-  | { kind: 'hover-enter'; x: number; y: number }
-  | { kind: 'hover-move'; x: number; y: number }
-  | { kind: 'hover-leave'; x: number; y: number }
+let activeSession: PetSessionSurface | null = null
 
 export interface PetweenClientService {
   /** Contract version. Bump and widen, never mutate in place. */
@@ -240,8 +147,6 @@ export interface PetweenClientService {
   subscribeAnimation(listener: (event: DirectorPlaybackEvent) => void): () => void
 }
 
-/** The session PetOverlay last registered (null = no live pet surface). */
-let activeSession: OverlaySession | null = null
 /** Its snapshot subscription, kept so a replacement can detach it. */
 let detachSession: (() => void) | null = null
 /** Its user-drag subscription, detached alongside the snapshot one. */
@@ -263,20 +168,6 @@ const animationListeners = new Set<(event: DirectorPlaybackEvent) => void>()
 
 const snapshotOf = (): StageSnapshot | null => activeSession?.getStageSnapshot() ?? null
 
-/**
- * Fan a value out to third-party listeners, isolating each one: a throwing
- * listener gets a console.warn and never breaks the others or the host flow
- * (the same discipline as the session-side notifications).
- */
-function fanOutSafely<T>(listeners: ReadonlyArray<(value: T) => void>, value: T, label: string): void {
-  for (const listener of listeners) {
-    try {
-      listener(value)
-    } catch (error) {
-      console.warn(`petween: ${label} failed`, error)
-    }
-  }
-}
 
 /** Push the current snapshot to every subscriber (listeners may unsubscribe mid-push). */
 const emitSnapshot = (): void => {
@@ -322,7 +213,7 @@ function detachAllSessionBridges(): void {
  * serialized by React, so at most one live session registers); replacing
  * detaches the previous session's subscriptions first.
  */
-export function setActivePetSession(session: OverlaySession): void {
+export function setActivePetSession(session: PetSessionSurface): void {
   detachAllSessionBridges()
   activeSession = session
   detachSession = session.subscribeSnapshot(() => emitSnapshot())
@@ -339,7 +230,7 @@ export function setActivePetSession(session: OverlaySession): void {
  * clear (an older session's teardown racing a newer mount) is ignored: only
  * the current session can take the bridge down.
  */
-export function clearActivePetSession(session: OverlaySession): void {
+export function clearActivePetSession(session: PetSessionSurface): void {
   if (activeSession !== session) return
   detachAllSessionBridges()
   activeSession = null

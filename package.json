@@ -63,7 +63,9 @@
   "scripts": {
     "build": "tsc -b && tsdown",
     "test": "vitest run",
-    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false"
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "test:coverage": "vitest run --coverage",
+    "lint": "oxlint src tests"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -78,8 +80,10 @@
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "jsdom": "^29.1.1",
     "lightningcss": "^1.32.0",
+    "oxlint": "^1.80.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",

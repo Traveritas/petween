@@ -737,7 +737,7 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 
 ## Motion Pack 地基包：B2/B10/B3/B1/B6 + C1-A 与工具链（2026-08-28）
 
-用户拍板「开始动工」后的第一个地基批次；两仓推送后实施，主仓三个提交（f99828b 收口批 → bfb3a05 地基包 → 64c5cba C1-A+工具链）。
+用户拍板「开始动工」后的第一个地基批次；两仓推送后实施，主仓三个提交（f99828b 收口批 → bfb3a05 地基包 → 795d233 C1-A+工具链；795d233 是 amend 后的最终哈希，早前笔记误引了被 amend 掉的悬空对象号，2026-08-28 评审发现后订正）。
 
 ### 共享写锁（B10 的骨架，host/storage.ts）
 
@@ -747,7 +747,7 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 
 - poseField 的 assetId 加形状校验（16 hex，与 host 生成规则一致）：strict 记 issue（400 INVALID_CONFIG），repair 降级为无图（fallback 链接管）。
 - `GET /api/petween/pets/<id>`：`readPet` 早已有、路由补上（pack 导出单读）。
-- asset/animation DELETE 的 `referencedBy` 签名从同步改为 **`Promise<boolean>`**，routes 的探测闭包在 store 串行删除段内**现场读取**最新 config+pets，不再持有请求开始时的过期快照；配合共享锁，探测时刻磁盘必然静止。
+- asset/animation DELETE 的 `referencedBy` 签名从同步改为 **`Promise<boolean>`**，routes 的探测闭包在 store 串行删除段内**现场读取**最新 config+pets，不再持有请求开始时的过期快照；配合共享锁，探测期间不会有并发写段（读不到半写/撕裂状态）。但注意 pet 镜像刻意滞后于锁释放——镜像落地前探测可能读到过期的 pet 引用，产生**假阳性 409**（安全方向，重试即愈）；这与提交说明「mirror is best-effort」的口径一致。共享锁保证的是探测不读到撕裂状态，不阻止「删除完成后才新增引用」的悬空（后者是 assetId 缺存在性校验的 B11 邻接缺口，运行时 fallback 兜底）。
 
 ### B3：config 单调 revision（乐观并发，opt-in）
 
@@ -776,3 +776,16 @@ backlog 原「PlayOptions 一行 gate 直接拒播」建议**否决**：拒播�
 ### 验证
 
 主仓 47 文件 / **843 用例**全绿（较上批 +9：meta 1 / revision 3 / pose 形状 1 / GET pet 1 / B1 2 / B6 2），双工程 typecheck 通过；physics 零改动（121 维持全绿）。
+
+## 地基包外部评审跟进批（2026-08-28 第二批）
+
+用户转来对 bfb3a05/795d233/fc3b8fd 三提交的外部评审（结论通过，3 条动工前建议 + 4 条小瑕疵），逐条核实后全部认领并落地：
+
+1. **共享锁并发交错回归测试（评审建议 1，最重要）**：`tests/host/assets.test.ts` 新增 shared WriteLock describe——asset delete 的探测闭包在锁段内被测试侧 gate 挂起，并发的 config.update（引用该资产）**必须等探测放行后才能完成**（断言 `updateFinished === false` 在真实时钟 25ms 后仍成立；退回每 store 私有链或探测移出锁段即红）。注释里写明两个陷阱：①gate 必须测试侧控制——探测等「另一个写完成」会经共享锁自等死锁（与 pet 镜像同构）；②探测闭包内做一次 `config.load()` 锁无关读，若将来读也拿锁，删除段会超时暴露（「读永不拿锁」不变量的回归防护）。
+2. **revision 写序翻转为 fail-closed（评审建议 2）**：`ConfigStore.update` 现在**先写 revision 旁车、再写 config.json**——两写之间崩溃只会产生多余的假 409（重试即愈），不再可能出现「计数落后一格 → 过期的 expectedRevision 恰好通过校验」这一 B3 要防的窗口；旁车写失败时 config 也不再出现「已落盘但客户端 500」的分裂。零行为变化（现有调用方无人发期望值），重启持久化测试无需改动。
+3. **`AnimationSummary.namespace` 放宽（评审建议 3）**：类型从 `'builtin' | 'user'` 放宽为 `string`（文档化取值 = 'builtin' 或 id 的 ns 段），`listAnimations()` 填真实 ns 段——`motion:*` 不再伪装成 'user'。纯增量兼容（两个历史取值逐字节不变）；核实 physics 零波及（其服务镜像停在旧形状无 listAnimations，设置卡走 HTTP /animations）。extension-service 测试补 `motion:wall-bounce → namespace 'motion'` 断言。
+4. **小瑕疵四连**：笔记过时提交号订正（64c5cba → 795d233，并注明订正原因）；`x-petween-expected-revision` 解析收紧为 `/^\d+$/`（'0x10'/'1e2'/'-1' 均补进 400 用例）；`ConfigStore.save()` 补文档注释声明「不 bump revision、不经镜像，业务写必须走 update()」（保持 public——config.test.ts 直调）；B10 段「探测时刻磁盘必然静止」措辞按评审修正为「探测期间无并发写段（不撕裂）+ 镜像滞后可致假阳性 409（安全方向）」。
+
+### 验证
+
+主仓 47 文件 / **844 用例**全绿（+1：共享锁交错；namespace 断言并入既有用例、'0x10' 等为既有用例扩展），双工程 typecheck 通过；physics 零改动。

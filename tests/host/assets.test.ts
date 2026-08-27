@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AssetError, AssetStore, detectImage } from '../../src/host/assets'
+import { ConfigStore } from '../../src/host/config'
+import { createWriteLock } from '../../src/host/storage'
 import { makeJpeg, makePng, makeSvg, makeWebp, makeWebpExtended, makeWebpLossless } from './fixtures'
 
 let dir: string
@@ -136,6 +138,49 @@ describe('AssetStore.delete (§19.4)', () => {
   it('reports unknown or malformed ids as NOT_FOUND', async () => {
     await expectAssetError(store.delete('0123456789abcdef', async () => false), 'NOT_FOUND')
     await expectAssetError(store.delete('..', async () => false), 'NOT_FOUND')
+  })
+})
+
+describe('shared WriteLock (B10 cross-store serialization)', () => {
+  it('a config write queued behind an in-flight delete probe cannot complete until the probe releases the lock', async () => {
+    // Regression guard for the cross-store TOCTOU fix: with ONE shared lock,
+    // the queued config update below cannot land while the delete's reference
+    // probe is gated inside the asset store's lock segment. Falling back to
+    // per-store private chains (or moving the probe out of the segment) lets
+    // the update finish mid-probe and turns this test red.
+    // The gate is TEST-controlled on purpose: having the probe await the
+    // OTHER writer would self-deadlock through the shared lock — the same
+    // trap the pet mirror hit (implementation-notes 2026-08-28). The probe's
+    // lock-free load() also pins the "reads never take the lock" invariant:
+    // a locking load would hang the delete's own segment into a timeout.
+    const lock = createWriteLock()
+    const assets = new AssetStore({ assetsDir, manifestPath, lock })
+    const config = new ConfigStore({ configPath: join(dir, 'config.json'), lock })
+    const meta = await assets.save(makePng(2, 3), 'image/png')
+
+    let releaseProbe!: () => void
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve
+    })
+    let updateFinished = false
+
+    const deletion = assets.delete(meta.id, async () => {
+      await config.load() // realistic probe shape: a lock-free fresh read
+      await probeGate
+      return true // IN_USE; the probe's verdict is irrelevant to this test
+    })
+    const update = config.update({ poses: { idle: { assetId: meta.id } } }).then(() => {
+      updateFinished = true
+    })
+
+    // Real clock: an unserialized (buggy) update would have landed by now.
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(updateFinished).toBe(false)
+
+    releaseProbe()
+    await expectAssetError(deletion, 'IN_USE')
+    await update
+    expect(updateFinished).toBe(true)
   })
 })
 

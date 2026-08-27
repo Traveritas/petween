@@ -256,12 +256,19 @@
   host/storage.ts）——跨 store 变更不再交错，TOCTOU 关闭。注意：pet 镜像
   onSaved 刻意移到锁段外执行（锁内回调 saveSlice 会等自己死锁）；镜像
   各自带 slice 载荷排队同锁，乱序完成仍收敛（镜像本就是 best-effort）。
+  **评审跟进（同日第二批）**：补并发交错回归测试（探测被测试 gate 挂起
+  期间，排队的 config 写不得完成——退回私有链/探测移出锁段即红；探测内
+  的锁无关 load() 同时钉住「读永不拿锁」不变量）；措辞修正：探测期间无
+  并发写段（不撕裂）≠ 读到最新逻辑状态——镜像滞后可致假阳性 409（安全
+  方向）；「删除后才新增引用」的悬空属 B11 邻接缺口，非本锁职责。
 - **B3** 无乐观并发 → 2026-08-28 落地：单调 revision 记在旁车文件
   `config.revision.json`（config schema 保持 client 纯净），GET/PUT /config
   响应携带；PUT 可选 `x-petween-expected-revision` 头（缺省保持 last-
   writer-wins 完全兼容；过期 → 409 REVISION_MISMATCH 带 currentRevision；
   畸形头 400）；client `patchConfig(patch, {expectedRevision})` 已通管道
-  （现有调用方未启用）。
+  （现有调用方未启用）。**评审跟进（同日第二批）**：写序定为 fail-closed
+  ——先写 revision 旁车再写 config，两写间崩溃只会多出假 409（重试即愈），
+  绝不让滞后计数放过过期的 expectedRevision；头解析收紧为纯数字。
 - **B1** AnimationDefinition 无版本 seam → 2026-08-28 落地：
   `ANIMATION_DEFINITION_VERSION` 出口；更高版本定义**明确拒绝**（PUT 400
   「written by a newer petween」/ loadAll 跳过并同文案警告，绝不静默误读）；
@@ -271,6 +278,9 @@
   放宽到**任意非 builtin 小写命名空间**端到端（store 存取/校验挂载/client
   同步，`isCustomAnimationId()` 单一语法源；文件名 `<ns>_<name>.json` 保持
   双射）；伴生插件服务**自身**仍限定 user:/user:<pack>-（能力不做策略）。
+  **评审跟进（同日第二批）**：`AnimationSummary.namespace` 从二值放宽为
+  `string`（填真实 ns 段，'builtin'/'user' 历史取值不变），pack 动画不再
+  伪装成 'user'——伴生作者不会依赖上二值语义。
   pack 导入的「id 重映射 + 引用改写」机制留待 Motion Pack 本体。
 - **A2** 「另存为新宠物」无法携带未保存修改 → 2026-08-27 晚拍板方案 A 并
   落地：`POST /api/petween/pets` 新增 `from:'draft'`（请求携带 pet slice，

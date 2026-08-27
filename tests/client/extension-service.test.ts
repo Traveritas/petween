@@ -771,7 +771,7 @@ describe('extension service — isPlaying', () => {
 describe('extension service — listAnimations', () => {
   it('null without a session; builtin presets and synced customs with full metadata', async () => {
     expect(petweenClientService.listAnimations()).toBeNull()
-    const context = setup(undefined, [makeCustom('user:spin', 320)])
+    const context = setup(undefined, [makeCustom('user:spin', 320), makeCustom('motion:wall-bounce', 300)])
     setActivePetSession(context.session)
     await boot(context)
 
@@ -787,6 +787,15 @@ describe('extension service — listAnimations', () => {
       kind: 'interaction',
       durationMs: 320,
       namespace: 'user',
+    })
+    // B6 + 2026-08-28 review: a pack-namespace custom reports its LITERAL
+    // namespace, never masquerading as 'user'.
+    expect(listed).toContainEqual({
+      id: 'motion:wall-bounce',
+      name: 'Custom motion:wall-bounce',
+      kind: 'interaction',
+      durationMs: 300,
+      namespace: 'motion',
     })
   })
 

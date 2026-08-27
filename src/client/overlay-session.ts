@@ -1021,7 +1021,11 @@ export class OverlaySession {
       name: definition.name,
       kind: definition.kind,
       durationMs: definition.durationMs,
-      namespace: definition.id.startsWith('builtin:') ? ('builtin' as const) : ('user' as const),
+      // The literal namespace segment ('builtin', 'user', 'motion', …) —
+      // widened with B6 so pack namespaces do not masquerade as 'user'.
+      namespace: definition.id.startsWith('builtin:')
+        ? 'builtin'
+        : definition.id.slice(0, definition.id.indexOf(':')),
     }))
   }
 

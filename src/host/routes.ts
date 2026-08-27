@@ -323,11 +323,11 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: Rou
     const expectedRaw = Array.isArray(expectedHeader) ? expectedHeader[0] : expectedHeader
     let expectedRevision: number | undefined
     if (expectedRaw !== undefined && expectedRaw !== '') {
-      const parsed = Number(expectedRaw)
-      if (!Number.isInteger(parsed) || parsed < 0) {
+      // Digits only — Number() alone would accept '0x10' / '1e2' / padding.
+      if (!/^\d+$/.test(expectedRaw)) {
         throw new HttpError(400, 'INVALID_REQUEST', 'x-petween-expected-revision must be a non-negative integer')
       }
-      expectedRevision = parsed
+      expectedRevision = Number(expectedRaw)
     }
     // Strict validation against the current config as base, then atomic save —
     // serialized inside updateConfig so overlapping PUTs cannot lose fields.

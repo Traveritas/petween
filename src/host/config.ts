@@ -76,11 +76,15 @@ export class ConfigStore {
     return loadConfig(await readJsonFile(this.configPath), { animationLookup: this.animationLookup })
   }
 
-  /** Atomic save (temp + fsync + rename, see host/storage.ts). */
+  /**
+   * Atomic save (temp + fsync + rename, see host/storage.ts) — WITHOUT the
+   * revision bump or the pet mirror: a direct save bypasses optimistic
+   * concurrency by design. Business writes must go through update(); this
+   * stays public for tests and one-off migration-style setup only.
+   */
   async save(config: PetweenConfig): Promise<void> {
     await writeJsonAtomic(this.configPath, config)
   }
-
   /**
    * B3: the monotonic config revision. Persisted in a sidecar file (the
    * config schema itself is client-visible and must not grow server-owned
@@ -118,9 +122,15 @@ export class ConfigStore {
         throw new RevisionMismatchError(currentRevision)
       }
       const config = validateConfigPatch(patch, await this.load(), { animationLookup: this.animationLookup })
-      await this.save(config)
       const revision = currentRevision + 1
+      // Fail-closed ordering (2026-08-28 review follow-up): the counter moves
+      // BEFORE the config write. A crash between the two writes can then only
+      // produce a spurious REVISION_MISMATCH (a client retry heals) — never a
+      // lagged counter that would let a stale expectedRevision pass, which is
+      // exactly the conflict B3 exists to flag. A failed sidecar write also
+      // leaves the config untouched on disk.
       await writeJsonAtomic(this.revisionPath, { revision })
+      await this.save(config)
       this.revisionCache = revision
       return config
     }).then(async (config) => {

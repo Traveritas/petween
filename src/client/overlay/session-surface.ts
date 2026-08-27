@@ -104,8 +104,15 @@ export interface AnimationSummary {
   name: string
   kind: AnimationKind
   durationMs: number
-  /** 'builtin:' ids versus everything synced from the host's library. */
-  namespace: 'builtin' | 'user'
+  /**
+   * The id's namespace segment: 'builtin' for builtin:* ids, otherwise the
+   * literal namespace ('user', 'motion', …). Widened from the historical
+   * 'builtin' | 'user' union (2026-08-28 review): B6 opened arbitrary pack
+   * namespaces, and silently grouping them under 'user' would have let
+   * companion authors depend on binary semantics. Additive-compatible — the
+   * two historical values are byte-for-byte unchanged.
+   */
+  namespace: string
 }
 
 /**

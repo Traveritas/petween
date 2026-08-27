@@ -192,12 +192,20 @@ describe('PUT /api/petween/config (§19.2)', () => {
     expect(staleBody.error.code).toBe('REVISION_MISMATCH')
     expect(staleBody.error.details).toEqual({ currentRevision: 2 })
     expect((await (await fetch(`${base}/api/petween/config`)).json()).config.global.scale).toBe(1.2) // untouched
-    // Malformed header is a client bug, not a conflict.
-    expect((await fetch(`${base}/api/petween/config`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-petween-expected-revision': 'soon' },
-      body: JSON.stringify({ global: { scale: 1 } }),
-    })).status).toBe(400)
+    // Malformed header is a client bug, not a conflict — '0x10'/'1e2' shapes
+    // included (digits-only parsing, 2026-08-28 review).
+    for (const bad of ['soon', '0x10', '1e2', '-1']) {
+      expect(
+        (
+          await fetch(`${base}/api/petween/config`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', 'x-petween-expected-revision': bad },
+            body: JSON.stringify({ global: { scale: 1 } }),
+          })
+        ).status,
+        bad,
+      ).toBe(400)
+    }
   })
 
   it('B3: the revision survives a host restart (persisted sidecar)', async () => {

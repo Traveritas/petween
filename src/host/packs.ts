@@ -24,8 +24,10 @@
  * - a requested id already holding IDENTICAL content → "identical", skipped
  *   (re-importing the same pack is idempotent);
  * - a requested id holding DIFFERENT content → imported under the first free
- *   `<id>-2`, `-3`, … suffix ("remapped") — never a silent overwrite, never a
- *   whole-pack rejection. Mounts are rewritten to the FINAL ids; the mapping
+ *   `<id>-2`, `-3`, … suffix ("remapped") — free means not in the library AND
+ *   not claimed by the pack itself (a pack-mate's requested id imports
+ *   verbatim, so a remap must yield to it) — never a silent overwrite, never
+ *   a whole-pack rejection. Mounts are rewritten to the FINAL ids; the mapping
  *   is reported so the caller (and the editor UI) can show what landed where.
  *
  * Mounts are carried and RESOLVED, not applied: writing config state mounts
@@ -122,7 +124,7 @@ export function validateMotionPack(raw: unknown): PackValidationResult {
   }
   if (!Array.isArray(raw.animations) || raw.animations.length === 0) {
     errors.push('"animations" must be a non-empty array')
-    return errors.length > 0 ? { ok: false, errors } : { ok: false, errors: [...errors, '"animations" must be a non-empty array'] }
+    return { ok: false, errors }
   }
   if (raw.animations.length > MAX_PACK_ANIMATIONS) {
     errors.push(`"animations" exceeds the ${MAX_PACK_ANIMATIONS}-entry limit`)
@@ -204,6 +206,11 @@ export function validateMotionPack(raw: unknown): PackValidationResult {
   return { ok: true, pack }
 }
 
+/**
+ * Byte-level equality (JSON.stringify, key order included): stable for our
+ * own export→import round-trips, while a hand-reordered pack counts as
+ * different content and remaps — deliberate, and cheap to reason about.
+ */
 function sameDefinition(a: AnimationDefinition, b: AnimationDefinition): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
@@ -221,6 +228,16 @@ export function planMotionPackImport(
   const writes: AnimationDefinition[] = []
   const entries: PackImportEntry[] = []
   const finalIdOf = new Map<string, string>()
+  // An id is TAKEN when the library holds it, the pack itself requests it, or
+  // an earlier entry of this plan already claimed it. Remaps must yield to a
+  // pack-requested id even when it is free in the library (the contract
+  // imports it verbatim) — otherwise a pack containing both `ns:x` and
+  // `ns:x-2` could plan two writes to `ns:x-2`, the second silently
+  // overwriting the first.
+  const requestedIds = new Set(pack.animations.map((definition) => definition.id))
+  const plannedIds = new Set<string>()
+  const taken = (id: string): boolean =>
+    existing.has(id) || requestedIds.has(id) || plannedIds.has(id)
   for (const definition of pack.animations) {
     const current = existing.get(definition.id)
     if (current === undefined) {
@@ -237,7 +254,7 @@ export function planMotionPackImport(
     let finalId: string | null = null
     for (let attempt = 2; attempt < 2 + MAX_REMAP_ATTEMPTS; attempt += 1) {
       const candidate = `${definition.id}-${attempt}`
-      if (!existing.has(candidate)) {
+      if (!taken(candidate)) {
         finalId = candidate
         break
       }
@@ -246,9 +263,10 @@ export function planMotionPackImport(
       // 100 collisions on one name: pathological by construction. Fall back
       // to a content-hash suffix — unique by construction.
       finalId = `${definition.id}-${Math.abs(JSON.stringify(definition).length * 31 + definition.id.length).toString(36)}`
-      while (existing.has(finalId)) finalId = `${finalId}x`
+      while (taken(finalId)) finalId = `${finalId}x`
     }
     finalIdOf.set(definition.id, finalId)
+    plannedIds.add(finalId)
     entries.push({ requestedId: definition.id, finalId, status: 'remapped' })
     writes.push({ ...definition, id: finalId })
   }

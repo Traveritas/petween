@@ -160,6 +160,34 @@ describe('planMotionPackImport', () => {
     expect(result.mounts).toEqual({ idle: { enter: 'manga:pop-2' } })
   })
 
+  it('a remap yields to ids the pack itself requests (no duplicate writes)', () => {
+    // Library: manga:pop holds DIFFERENT content; manga:pop-2 is free — but
+    // the pack requests it too. The contract imports a library-free requested
+    // id VERBATIM, so the remap must skip -2 and land on -3. (Before the
+    // taken-set fix this planned two writes to manga:pop-2 — the second
+    // silently overwriting the first, both entries reporting success.)
+    const existing = new Map<string, AnimationDefinition>([['manga:pop', enter(240)]])
+    const result = planMotionPackImport(validated([enter(500), makeDefinition('manga:pop-2')]), existing)
+    expect(result.entries).toEqual([
+      { requestedId: 'manga:pop', finalId: 'manga:pop-3', status: 'remapped' },
+      { requestedId: 'manga:pop-2', finalId: 'manga:pop-2', status: 'imported' },
+    ])
+    const writtenIds = result.writes.map((definition) => definition.id)
+    expect(new Set(writtenIds).size).toBe(writtenIds.length) // never write an id twice
+  })
+
+  it('exhausting the -N range falls back to a hash suffix that never collides', () => {
+    const existing = new Map<string, AnimationDefinition>([['manga:pop', enter(240)]])
+    for (let attempt = 2; attempt < 102; attempt += 1) {
+      existing.set(`manga:pop-${attempt}`, makeDefinition(`manga:pop-${attempt}`))
+    }
+    const result = planMotionPackImport(validated([enter(500)]), existing)
+    expect(result.entries[0]?.status).toBe('remapped')
+    const finalId = result.entries[0]?.finalId ?? ''
+    expect(existing.has(finalId)).toBe(false)
+    expect(result.writes).toHaveLength(1)
+  })
+
   it('a valid pack plans cleanly: mount warnings only fire on defensive dead paths', () => {
     // validateMotionPack rejects mounts naming non-pack animations, so the
     // planner's dangling-mount warning is defense in depth — a valid pack

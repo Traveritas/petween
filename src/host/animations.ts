@@ -161,16 +161,19 @@ export class AnimationsStore {
    * Scan the directory and load every custom animation. Corrupt JSON, schema
    * violations and non-`user:` ids (a `builtin:*` file is an anomaly) are
    * skipped with a warning — startup is never blocked by a bad file.
+   * Pre-tightening shapes that normalize cleanly are LOADED and reported in
+   * `normalized` (they are not skips; the caller must not word them as such).
    */
-  async loadAll(): Promise<{ customs: AnimationDefinition[]; warnings: string[] }> {
+  async loadAll(): Promise<{ customs: AnimationDefinition[]; warnings: string[]; normalized: string[] }> {
     let entries: string[]
     try {
       entries = await readdir(this.options.animationsDir)
     } catch {
-      return { customs: [], warnings: [] } // no directory yet = no customs
+      return { customs: [], warnings: [], normalized: [] } // no directory yet = no customs
     }
     const customs: AnimationDefinition[] = []
     const warnings: string[] = []
+    const normalized: string[] = []
     const seen = new Set<string>()
     for (const entry of entries.sort()) {
       if (!entry.endsWith('.json')) continue
@@ -188,13 +191,13 @@ export class AnimationsStore {
       } else {
         // Pre-tightening shapes get one mechanical normalization pass before
         // the skip path — dropping them would dangle every config mount.
-        const normalized = normalizeLegacyDefinition(raw)
-        if (normalized === null) {
+        const legacy = normalizeLegacyDefinition(raw)
+        if (legacy === null) {
           warnings.push(`${entry}: invalid AnimationDefinition (${result.errors.join('; ')}), skipped`)
           continue
         }
-        warnings.push(`${entry}: legacy shape auto-normalized (${result.errors.join('; ')})`)
-        definition = normalized
+        normalized.push(`${entry}: legacy shape auto-normalized (${result.errors.join('; ')})`)
+        definition = legacy
       }
       if (validateCustomAnimationId(definition.id) === null) {
         warnings.push(`${entry}: id "${definition.id}" is not a custom-namespace id, skipped`)
@@ -207,7 +210,7 @@ export class AnimationsStore {
       seen.add(definition.id)
       customs.push(definition)
     }
-    return { customs, warnings }
+    return { customs, warnings, normalized }
   }
 
   /** Validate and persist a definition atomically; invalid input throws with details. */

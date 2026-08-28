@@ -108,7 +108,7 @@ const setup = (
   mutateConfig?.(config, assets)
   const hub = new ConfigHub({
     fetchConfig: vi.fn(async () => ({ config, assets })),
-    fetchAnimations: vi.fn(async () => ({ customs: structuredClone(customs), warnings: [] })),
+    fetchAnimations: vi.fn(async () => ({ customs: structuredClone(customs), warnings: [], normalized: [] })),
   })
   hub.publish({ config, assets, customs: structuredClone(customs) }) // seeds the cache synchronously
   // Simulates the host: merge the patch onto the current config, return it.
@@ -405,6 +405,48 @@ describe('extension service — drag arbitration', () => {
 
     offDrag()
     driver.release()
+  })
+
+  it("a lease taken while the drag 'end' fans out never sees that 'end' (petween-physics flight regression)", async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    // No lease exists at gesture start. The service-level 'end' listener
+    // takes one MID-FAN-OUT — exactly how petween-physics starts its flight
+    // (velocity computed, requestPositionControl, driver.onUserDrag registered
+    // to catch a re-grab). The gesture's trailing driver-level 'end' used to
+    // reach that fresh lease too and physics's phase-agnostic listener killed
+    // the flight in the same stack that started it.
+    let flightDriver: ReturnType<typeof petweenClientService.requestPositionControl> = null
+    const flightPhases: string[] = []
+    const offService = petweenClientService.subscribeUserDrag((phase) => {
+      if (phase === 'end' && flightDriver === null) {
+        flightDriver = petweenClientService.requestPositionControl()
+        expect(flightDriver).not.toBeNull()
+        flightDriver!.onUserDrag((flightPhase) => flightPhases.push(flightPhase))
+      }
+    })
+    serviceUnsubscribers.push(offService)
+
+    const body = context.stage.interactiveElement
+    body.dispatchEvent(pointer('pointerdown', 460, 460))
+    window.dispatchEvent(pointer('pointermove', 470, 470)) // ≥4px: threshold crossed
+    window.dispatchEvent(pointer('pointerup', 470, 470)) // 'end' fans: service first, then driver-level
+
+    expect(flightDriver).not.toBeNull()
+    expect(flightPhases).toEqual([]) // fresh lease was never suspended → no trailing 'end'
+    // And the lease is fully functional (apply honored: the gesture is over).
+    expect(flightDriver!.apply(300, 300)).toBe(true)
+    expect(context.stage.element.style.left).toBe('300px')
+
+    // A later REAL grab still reaches the lease holder (the catch contract).
+    body.dispatchEvent(pointer('pointerdown', 360, 360))
+    window.dispatchEvent(pointer('pointermove', 370, 370))
+    expect(flightPhases).toEqual(['start'])
+    window.dispatchEvent(pointer('pointerup', 370, 370))
+    expect(flightPhases).toEqual(['start', 'end'])
+
+    flightDriver!.release()
   })
 })
 
@@ -1140,7 +1182,7 @@ describe('extension service — active session bridge', () => {
     }
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config, assets })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     hub.publish({ config, assets, customs: [] }) // preloaded: visible on first render
 

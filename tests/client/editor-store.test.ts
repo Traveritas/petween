@@ -58,7 +58,7 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
   let petSequence = 0
   const mocks = {
     getConfig: vi.fn(async () => ({ config: structuredClone(serverConfig), assets: {} })),
-    getAnimations: vi.fn(async () => ({ customs: structuredClone(serverCustoms), warnings: [] as string[] })),
+    getAnimations: vi.fn(async () => ({ customs: structuredClone(serverCustoms), warnings: [] as string[], normalized: [] as string[] })),
     getPets: vi.fn(async () => ({
       pets: structuredClone(serverPets),
       activePetId: serverConfig.activePetId,
@@ -531,7 +531,7 @@ describe('EditorStore — editor/overlay ownership split (P1)', () => {
     const { api } = makeApi({ patchConfig: patchConfig as EditorApi['patchConfig'] })
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: structuredClone(serverConfig), assets: {} })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     store = new EditorStore({ api, hub })
     await store.load()
@@ -602,7 +602,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
       ],
     }
     const { api, mocks } = makeApi({
-      getAnimations: vi.fn(async () => ({ customs: [custom], warnings: [] as string[] })),
+      getAnimations: vi.fn(async () => ({ customs: [custom], warnings: [] as string[], normalized: [] as string[] })),
     })
     await loadStore(api)
     store.selectState('thinking')
@@ -734,12 +734,40 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
 
   it('load carries the served customs and surfaces host scan warnings', async () => {
     const { api } = makeApi({
-      getAnimations: vi.fn(async () => ({ customs: [makeCustom('user:a')], warnings: ['broken.json: skipped'] })),
+      getAnimations: vi.fn(async () => ({
+        customs: [makeCustom('user:a')],
+        warnings: ['broken.json: skipped'],
+        normalized: [],
+      })),
     })
     await loadStore(api)
     expect(store.getSnapshot().customs.map((custom) => custom.id)).toEqual(['user:a'])
     expect(store.getSnapshot().notice?.kind).toBe('warn')
     expect(store.getSnapshot().notice?.text).toContain('1 个自定义动画文件')
+    expect(store.getSnapshot().notice?.text).toContain('已被跳过')
+  })
+
+  it('legacy-normalized animations are reported as compatibility info, never as skipped (BUG 2026-08-28)', async () => {
+    // The host normalized these files and they ARE loaded — wording them
+    // "损坏或不合法，已被跳过" made users believe working animations were lost.
+    const { api } = makeApi({
+      getAnimations: vi.fn(async () => ({
+        customs: [makeCustom('user:a'), makeCustom('user:b')],
+        warnings: [],
+        normalized: [
+          'user_a.json: legacy shape auto-normalized',
+          'user_b.json: legacy shape auto-normalized',
+        ],
+      })),
+    })
+    await loadStore(api)
+    expect(store.getSnapshot().customs).toHaveLength(2)
+    const notice = store.getSnapshot().notice
+    expect(notice?.kind).toBe('info')
+    expect(notice?.text).toContain('2 个自定义动画为旧版格式')
+    expect(notice?.text).toContain('已自动兼容并正常加载')
+    expect(notice?.text).not.toContain('已被跳过')
+    expect(notice?.text).not.toContain('损坏')
   })
 
   it('saveAnimation validates client-side: an invalid definition never hits the API', async () => {
@@ -757,7 +785,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     const { api, mocks } = makeApi()
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     store = new EditorStore({ api, hub })
     await store.load()
@@ -878,7 +906,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     const { api, mocks } = makeApi()
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     store = new EditorStore({ api, hub })
     await store.load()
@@ -909,7 +937,7 @@ describe('EditorStore — custom animations (V1.1, explicit save)', () => {
     const { api } = makeApi()
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     store = new EditorStore({ api, hub })
     await store.load()
@@ -1023,7 +1051,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
     })
     const hub = new ConfigHub({
       fetchConfig: vi.fn(async () => ({ config: createDefaultPetweenConfig(), assets: {} })),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     store = new EditorStore({ api, hub })
     await store.load()
@@ -1195,7 +1223,7 @@ describe('EditorStore — Motion Pack import/export (P2)', () => {
         mounts: {},
         warnings: [],
       })),
-      getAnimations: vi.fn(async () => ({ customs: [packCustom('manga:pop'), packCustom('manga:pop-2')], warnings: [] })),
+      getAnimations: vi.fn(async () => ({ customs: [packCustom('manga:pop'), packCustom('manga:pop-2')], warnings: [], normalized: [] })),
     })
     await loadStore(api)
     const file = new File([JSON.stringify({ format: 'motion-pack' })], 'pack.json', { type: 'application/json' })

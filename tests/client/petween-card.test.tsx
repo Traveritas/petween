@@ -71,7 +71,7 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
   }
   const api: EditorApi = {
     ...mocks,
-    getAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+    getAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
     createPet: vi.fn(async () => {
       throw new Error('not used in these tests')

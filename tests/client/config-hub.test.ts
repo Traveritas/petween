@@ -55,7 +55,7 @@ const fetcherFor = (snapshot: ConfigSnapshot) =>
 
 /** The animations endpoint companion; tests pass customs through the options. */
 const animationsFetcherFor = (customs: AnimationDefinition[] = [], warnings: string[] = []) =>
-  vi.fn(async () => ({ customs: structuredClone(customs), warnings: [...warnings] }))
+  vi.fn(async () => ({ customs: structuredClone(customs), warnings: [...warnings], normalized: [] }))
 
 const flushMicrotasks = async (): Promise<void> => {
   for (let i = 0; i < 20; i += 1) await Promise.resolve()
@@ -385,7 +385,11 @@ describe('ConfigHub — custom animations (V1.1)', () => {
   it('load() fetches config + animations in parallel and carries customs + warnings', async () => {
     const customs = [makeCustom('user:one')]
     const fetchConfig = fetcherFor(makeSnapshot())
-    const fetchAnimations = animationsFetcherFor(customs, ['broken.json: skipped'])
+    const fetchAnimations = vi.fn(async () => ({
+      customs: structuredClone(customs),
+      warnings: ['broken.json: skipped'],
+      normalized: ['legacy.json: legacy shape auto-normalized'],
+    }))
     const hub = new ConfigHub({ fetchConfig, fetchAnimations })
 
     const snapshot = await hub.load()
@@ -393,6 +397,9 @@ describe('ConfigHub — custom animations (V1.1)', () => {
     expect(fetchAnimations).toHaveBeenCalledTimes(1)
     expect(snapshot.customs).toEqual(customs)
     expect(hub.getAnimationWarnings()).toEqual(['broken.json: skipped'])
+    // The two host-side classes stay separate: normalized entries are LOADED
+    // animations, and consumers word them as compatibility info, not skips.
+    expect(hub.getAnimationNormalized()).toEqual(['legacy.json: legacy shape auto-normalized'])
   })
 
   it('a failed animations GET fails the load (and a retry can succeed)', async () => {
@@ -400,7 +407,7 @@ describe('ConfigHub — custom animations (V1.1)', () => {
     const fetchAnimations = vi
       .fn()
       .mockImplementationOnce(() => Promise.reject(new Error('animations down')))
-      .mockImplementation(async () => ({ customs: [], warnings: [] }))
+      .mockImplementation(async () => ({ customs: [], warnings: [], normalized: [] }))
     const hub = new ConfigHub({ fetchConfig, fetchAnimations })
     await expect(hub.load()).rejects.toThrow('animations down')
     await expect(hub.load()).resolves.toBeDefined()
@@ -434,7 +441,7 @@ describe('ConfigHub — custom animations (V1.1)', () => {
     await vi.advanceTimersByTimeAsync(3000) // identical → no publish
     expect(seen).toHaveLength(0)
 
-    fetchAnimations.mockImplementation(async () => ({ customs: [makeCustom('user:three')], warnings: [] }))
+    fetchAnimations.mockImplementation(async () => ({ customs: [makeCustom('user:three')], warnings: [], normalized: [] }))
     await vi.advanceTimersByTimeAsync(3000)
     expect(seen).toHaveLength(1)
     expect(seen[0].customs.map((custom) => custom.id)).toEqual(['user:three'])

@@ -71,7 +71,7 @@ const makeApi = (withImage: boolean): EditorApi => {
   }
   return {
     getConfig: vi.fn(async () => ({ config, assets })),
-    getAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+    getAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     getPets: vi.fn(async () => ({ pets: [], activePetId: null, warnings: [] })),
     createPet: vi.fn(async () => {
       throw new Error('not used in these tests')

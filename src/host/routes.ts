@@ -104,8 +104,12 @@ export interface RoutesDeps {
   resolveAssetPath(id: string): Promise<{ path: string; mimeType: string } | null>
   /** Single-file upload cap; the multipart body limit adds form overhead. */
   maxAssetBytes: number
-  /** Live directory scan: every stored custom animation plus load warnings. */
-  listAnimations(): Promise<{ customs: AnimationDefinition[]; warnings: string[] }>
+  /**
+   * Live directory scan: every stored custom animation, skip `warnings`, and
+   * `normalized` = legacy shapes mechanically repaired and LOADED (the
+   * caller's wording must not report those as skipped).
+   */
+  listAnimations(): Promise<{ customs: AnimationDefinition[]; warnings: string[]; normalized: string[] }>
   saveAnimation(definition: AnimationDefinition): Promise<void>
   /** Same async in-lock reference contract as deleteAsset. */
   deleteAnimation(id: string, referencedBy: (animationId: string) => Promise<boolean>): Promise<void>
@@ -465,8 +469,8 @@ async function handleAssets(
 async function handleAnimationsIndex(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
   // Live scan on every call: the directory is tiny, so there is no cache.
-  const { customs, warnings } = await deps.listAnimations()
-  sendJson(res, 200, { customs, warnings })
+  const { customs, warnings, normalized } = await deps.listAnimations()
+  sendJson(res, 200, { customs, warnings, normalized })
 }
 
 /** A state references an animation via its enter or custom ambient timeline. */

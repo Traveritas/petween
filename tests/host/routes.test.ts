@@ -619,7 +619,7 @@ describe('/api/petween/animations (V1.1 plan §3)', () => {
   it('GET lists nothing before any save, then the stored custom animation', async () => {
     const empty = await fetch(`${base}/api/petween/animations`)
     expect(empty.status).toBe(200)
-    expect(await empty.json()).toEqual({ customs: [], warnings: [] })
+    expect(await empty.json()).toEqual({ customs: [], warnings: [], normalized: [] })
 
     const definition = makeTransition('user:pop')
     expect((await putAnimation('user:pop', definition)).status).toBe(200)

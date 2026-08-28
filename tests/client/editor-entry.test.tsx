@@ -48,7 +48,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/petween/config') return { ok: true, json: async () => ({ config, assets }) }
-      if (url === '/api/petween/animations') return { ok: true, json: async () => ({ customs: [], warnings: [] }) }
+      if (url === '/api/petween/animations') return { ok: true, json: async () => ({ customs: [], warnings: [], normalized: [] }) }
       if (url === '/api/petween/pets') return { ok: true, json: async () => ({ pets: [], activePetId: null, warnings: [] }) }
       throw new Error(`unexpected fetch: ${url}`)
     }),

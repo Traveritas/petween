@@ -46,7 +46,7 @@ function makeDefinition(id: string, overrides: Record<string, unknown> = {}): An
 
 describe('AnimationsStore.loadAll', () => {
   it('returns empty lists when the directory does not exist', async () => {
-    expect(await store.loadAll()).toEqual({ customs: [], warnings: [] })
+    expect(await store.loadAll()).toEqual({ customs: [], warnings: [], normalized: [] })
   })
 
   it('B1: a definition from a NEWER format is skipped with the explicit reader warning', async () => {
@@ -138,9 +138,13 @@ describe('AnimationsStore.loadAll', () => {
       ),
       'utf8',
     )
-    const { customs, warnings } = await store.loadAll()
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('auto-normalized')
+    const { customs, warnings, normalized } = await store.loadAll()
+    // Repair notes live in `normalized`, NOT `warnings`: these animations are
+    // loaded and usable, and a "corrupt, skipped" wording over them made users
+    // believe working animations were lost (2026-08-28 report BUG 2).
+    expect(warnings).toEqual([])
+    expect(normalized).toHaveLength(1)
+    expect(normalized[0]).toContain('auto-normalized')
     expect(customs).toHaveLength(1)
     const definition = customs[0]
     // transition-layer track dropped (ambient owns no transition tracks)

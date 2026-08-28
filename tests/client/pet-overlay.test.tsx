@@ -43,7 +43,7 @@ const makeHub = (mutate?: (config: PetweenConfig, assets: Record<string, AssetMe
   mutate?.(config, assets)
   return new ConfigHub({
     fetchConfig: vi.fn(async () => ({ config, assets })),
-    fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+    fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
   })
 }
 
@@ -91,7 +91,7 @@ describe('PetOverlay', () => {
             resolveLoad = resolve
           }),
       ),
-      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [] })),
+      fetchAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
     })
     await render(hub)
     expect(container.querySelector(STAGE_SELECTOR)).toBeNull() // still loading

@@ -18,6 +18,7 @@ import { PetRenderer } from '../client/overlay/PetRenderer'
 import type { PetStage } from '../client/overlay/pet-stage'
 import { PreviewSession } from '../client/preview-session'
 import { STATE_LABELS } from '../client/settings/state-labels'
+import { DEMO_CUSTOM_DEFINITION_TEXT } from './demo-definition'
 
 /* ------------------------------------------------------------------ poses */
 
@@ -116,57 +117,9 @@ function createPreviewState(): { config: PetweenConfig; assets: Record<string, A
 
 /* ------------------------------------------------------- custom definition */
 
-/** The docs/motion-format.md §9 example: proof that custom definitions run. */
-const DEFAULT_CUSTOM_DEFINITION = `{
-  "version": 1,
-  "id": "user:slam-land",
-  "name": "Slam Land",
-  "kind": "transition",
-  "durationMs": 320,
-  "repeat": { "mode": "once" },
-  "tracks": [
-    {
-      "property": "transition.scaleX",
-      "keyframes": [
-        { "at": 0,    "value": 1 },
-        { "at": 0.3,  "value": { "base": 1, "parameter": "strength", "amount": 0.22 }, "easing": "anticipate" },
-        { "at": 0.55, "value": { "base": 1, "parameter": "strength", "amount": -0.14 }, "easing": "overshoot" },
-        { "at": 0.8,  "value": { "base": 1, "parameter": "strength", "amount": 0.05 } },
-        { "at": 1,    "value": 1 }
-      ]
-    },
-    {
-      "property": "transition.scaleY",
-      "keyframes": [
-        { "at": 0,    "value": 1 },
-        { "at": 0.3,  "value": { "base": 1, "parameter": "strength", "amount": -0.24 }, "easing": "anticipate" },
-        { "at": 0.55, "value": { "base": 1, "parameter": "strength", "amount": 0.18 }, "easing": "overshoot" },
-        { "at": 0.8,  "value": { "base": 1, "parameter": "strength", "amount": -0.04 } },
-        { "at": 1,    "value": 1 }
-      ]
-    },
-    {
-      "property": "transition.y",
-      "keyframes": [
-        { "at": 0,    "value": 0 },
-        { "at": 0.3,  "value": { "base": 0, "parameter": "strength", "amount": 6 }, "easing": "anticipate" },
-        { "at": 0.55, "value": { "base": 0, "parameter": "strength", "amount": -12 }, "easing": "overshoot" },
-        { "at": 1,    "value": 0 }
-      ]
-    },
-    {
-      "property": "transition.rotation",
-      "keyframes": [
-        { "at": 0,    "value": 0 },
-        { "at": 0.55, "value": { "base": 0, "parameter": "strength", "amount": -4 } },
-        { "at": 0.8,  "value": { "base": 0, "parameter": "strength", "amount": 1.5 } },
-        { "at": 1,    "value": 0 }
-      ]
-    }
-  ],
-  "events": [ { "at": 0.42, "type": "pose-swap" } ],
-  "parameters": { "strength": { "default": 1, "min": 0, "max": 1.8 } }
-}`
+/* The docs/motion-format.md §10 example lives in demo-definition.ts so the
+   sync test can import it without the whole preview UI entry. */
+const DEFAULT_CUSTOM_DEFINITION = DEMO_CUSTOM_DEFINITION_TEXT
 
 /* ------------------------------------------------------------------- UI --- */
 

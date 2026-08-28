@@ -62,6 +62,8 @@ export class ConfigHub {
   private loadPromise: Promise<ConfigSnapshot> | null = null
   /** Host-side animation scan warnings from the latest load/poll. */
   private animationWarnings: string[] = []
+  /** Legacy-animation repair notes (loaded, not skipped) from the latest fetch. */
+  private animationNormalized: string[] = []
   private polling = false
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   /** Bumped by publish(); a poll started before a local save drops its result. */
@@ -80,9 +82,10 @@ export class ConfigHub {
     if (this.snapshot !== null) return Promise.resolve(this.snapshot)
     if (this.loadPromise === null) {
       this.loadPromise = Promise.all([this.fetchConfig(), this.fetchAnimations()]).then(
-        ([{ config, assets }, { customs, warnings }]) => {
+        ([{ config, assets }, { customs, warnings, normalized }]) => {
           this.snapshot = { config, assets, customs }
           this.animationWarnings = warnings
+          this.animationNormalized = normalized
           return this.snapshot
         },
         (error: unknown) => {
@@ -98,9 +101,18 @@ export class ConfigHub {
     return this.snapshot
   }
 
-  /** Corrupt-animation-file warnings from the latest successful fetch. */
+  /** Corrupt-animation-file warnings (files skipped) from the latest successful fetch. */
   getAnimationWarnings(): string[] {
     return this.animationWarnings
+  }
+
+  /**
+   * Legacy-shape repair notes from the latest successful fetch. These
+   * animations ARE loaded and usable — consumers must word them as
+   * compatibility info, never as skips.
+   */
+  getAnimationNormalized(): string[] {
+    return this.animationNormalized
   }
 
   subscribe(listener: ConfigListener): () => void {
@@ -167,11 +179,12 @@ export class ConfigHub {
     if (this.snapshot === null) return
     const generation = this.publishGeneration
     try {
-      const [{ config, assets }, { customs, warnings }] = await Promise.all([this.fetchConfig(), this.fetchAnimations()])
+      const [{ config, assets }, { customs, warnings, normalized }] = await Promise.all([this.fetchConfig(), this.fetchAnimations()])
       // A local publish landed while this GET was in flight: its state is
       // fresher than the polled snapshot, so the poll result is dropped.
       if (generation !== this.publishGeneration) return
       this.animationWarnings = warnings
+      this.animationNormalized = normalized
       const next: ConfigSnapshot = { config, assets, customs }
       if (this.snapshot !== null && snapshotsEqual(this.snapshot, next)) return
       this.snapshot = next

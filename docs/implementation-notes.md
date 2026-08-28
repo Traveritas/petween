@@ -837,3 +837,21 @@ C1 收口（36276d8）后动工；子智能体先行侦察动画库 UI 接入点
 ### 测试与验证
 
 +19（packs 单元 9：校验四组/规划四组/导出一组；路由 5：导入落地/幂等+改号+mounts 改写/四类 400/导出与守卫/往返幂等；store 3：导入汇总含映射、失败 notice、空库 warn；UI 2：真实 file input 走通导入、导出经 anchor 下载断言文件名）。全仓 48 文件 / **863 用例**全绿；typecheck 干净；lint 基线 10 警告；coverage 90.31% statements（packs.ts 88.6%，未覆盖行为均防御性回退分支）。
+
+## Motion Pack 碰撞规划修复：pack 内改号撞车（2026-08-28 复审 follow-up）
+
+对 6370ab2 / 36276d8 两提交的外部复审发现一处已复现缺陷并当日修复。
+
+- **缺陷**：`planMotionPackImport` 的改号候选只查磁盘库（`existing.has(candidate)`），不查本包。构造包同时请求 `ns:x`（与库内异内容）和 `ns:x-2`（库内空闲）时，`ns:x` 改号到 `ns:x-2`，随后 `ns:x-2` 又按「库内空闲→原样导入」落在同一 id——`writes` 出现两条同 id 写入，`importAnimations` 顺序落盘时第二条**静默覆盖**第一条，两条 entries 均报成功，违反「绝不静默覆盖」契约（一次性用例复现：`writes: ["manga:pop-2","manga:pop-2"]`）。
+- **修复**：规划器引入占用视图 `taken = existing ∪ 本包请求 id ∪ 本计划已定 finalId`——改号候选与哈希兜底的 `x` 追加循环统一改查 `taken`。语义按契约取「改号让位」：包内同伴请求的 id 即使库内空闲也由其原样导入，改号者跳过（`ns:x` 落 `ns:x-3` 而非抢 `ns:x-2`）。顺手清掉 `validateMotionPack` 空数组分支的不可达三元，并为 `sameDefinition` 的字节级比较补意图注释。
+- **测试**：+2（pack 内撞车改号让位 + 写入 id 唯一性断言；`-2..-101` 全占后哈希兜底不落库内已有 id）。motion-format.md §11「空闲」定义同步精确化。
+
+## 测试报告三缺陷修复（2026-08-28 第二批）
+
+真机走查报告（另一线程，IAB + headless Chrome 双环境）的三个实锤缺陷核实与修复。
+
+- **physics 甩出从未生效（P1，双仓各修一半）**：拖拽结束时 `ExtensionSurface.notifyDragGesture('end')` 先扇服务级 `end`（physics `startFlight` 取租约并注册 driver 级 `onUserDrag` 抓取监听），随后同栈的 `notifyDriverDragPhase('end')` 按**扇出时刻**的 `activeDriver` 扇出——恰是刚创建的飞行租约；physics 的监听 `() => this.endFlight(false)` 忽略 phase 参数，飞行在启动同一毫秒自杀。修复：① petween 侧手势 `start` 时捕获当时的租约（`dragGestureDriver`），驱动级相位只扇给**被该手势挂起的那份租约**（手势中途新接管者没吃过 `start` 挂起，就不该吃尾随 `end`；`dispose` 同步清引用）；② physics 侧驱动级回调只认 `phase === 'start'`（尾随 `end` 是「apply 恢复生效」的恢复信号）。回归：extension-service 新用例（服务级 end 扇出中取租约者收不到尾随 end、后续真实抓取两相齐全）+ throw-controller 新用例（尾随 end 不弃飞、start 仍弃飞）。真机 e2e s3 复验：满屏弹跳→贴地滑动→落定持久化，甩后拖拽正常。
+- **「损坏或不合法，已被跳过」误报已归一化的动画（P2）**：host `loadAll()` 把「真跳过」与「legacy 形状已自动归一化（正常加载）」混在同一 `warnings`，编辑器一律渲染成损坏+跳过。修复：`loadAll()`/`GET /animations` 拆出 `normalized: string[]`；hub 分槽存取（`getAnimationNormalized()`）；编辑器 load notice 分级——跳过保持 warn「损坏或不合法，已被跳过」，归一化改 info「旧版格式，已自动兼容并正常加载（保存后更新为新格式）」，跳过优先级更高；直接 API 路径对旧 host 响应缺字段 `= []` 兜底。pets 侧全部 warning 本就是真跳过，不动。真机复验：原误报的 2 条现显示 info 兼容文案。
+- **preview 演示按钮必报校验错（P2）**：`src/preview/index.tsx` 的 `DEFAULT_CUSTOM_DEFINITION` 未随 2026-08-27「同层共享缓动」收紧更新（rotation 轨缺 0.3/0.55 缓动、y 轨缺 0.8 帧），「校验 → 注册 → 播放」开箱即坏。修复：演示定义抽到 `src/preview/demo-definition.ts`（UI 入口 re-export 使用），内容与 motion-format.md §10 逐字对齐；新增 `tests/motion/preview-demo-definition.test.ts` 锁两点——通过 validator + 与文档示例 parsed deep-equal（文档再改示例时 CI 强制同步）。真机复验：按钮输出「正在播放 user:slam-land」。
+
+测试 +6（上述回归组）；主仓 **49 文件 / 869 用例**全绿、typecheck 干净、lint 基线 10 警告不变；physics 仓 **8 文件 / 122 用例**全绿、typecheck 干净。两仓产物已重建，dsh web 已重启加载新 host 代码。报告中的 UX 项：原生对话框依赖已在 backlog C2，导出多选为既有排队项，新增「删除当前生效宠物的落点」登记为 §5 C5。

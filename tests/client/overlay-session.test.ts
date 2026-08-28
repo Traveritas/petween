@@ -83,7 +83,7 @@ const setup = (
   mutateConfig?.(config, assets)
   const hub = new ConfigHub({
     fetchConfig: vi.fn(async () => ({ config, assets })),
-    fetchAnimations: vi.fn(async () => ({ customs: structuredClone(customs), warnings: [] })),
+    fetchAnimations: vi.fn(async () => ({ customs: structuredClone(customs), warnings: [], normalized: [] })),
   })
   hub.publish({ config, assets, customs: structuredClone(customs) }) // seeds the cache synchronously
   // Simulates the host: merge the patch onto the current config, return it.

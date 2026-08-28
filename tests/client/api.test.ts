@@ -208,8 +208,12 @@ describe('client api', () => {
 })
 
 describe('client api — animations (V1.1)', () => {
-  it('getAnimations GETs /api/petween/animations and returns { customs, warnings }', async () => {
-    const payload = { customs: [makeDefinition('user:abc')], warnings: ['broken.json: skipped'] }
+  it('getAnimations GETs /api/petween/animations and returns { customs, warnings, normalized }', async () => {
+    const payload = {
+      customs: [makeDefinition('user:abc')],
+      warnings: ['broken.json: skipped'],
+      normalized: ['user_legacy.json: legacy shape auto-normalized'],
+    }
     fetchMock.mockResolvedValue(jsonResponse(200, payload))
 
     await expect(getAnimations()).resolves.toEqual(payload)

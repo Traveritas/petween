@@ -126,6 +126,14 @@ export class ExtensionSurface {
   private readonly externalInstances = new Set<TimelineInstance>()
   /** The current position-driver lease, if any. */
   private activeDriver: ActivePositionDriver | null = null
+  /**
+   * The lease the CURRENT drag gesture suspended (captured at 'start'). The
+   * gesture's driver-level phases belong to it alone: a lease created while
+   * the gesture is ending (a companion starting its flight from the drag 'end'
+   * itself) never saw the 'start' suspension and must not eat the trailing
+   * 'end' — that fan-out-time lookup was the petween-physics flight-killer.
+   */
+  private dragGestureDriver: ActivePositionDriver | null = null
   private unsubscribeTarget: (() => void) | null = null
   private unsubscribePoseSwap: (() => void) | null = null
   /** Pending flashPose restore timer, if any. */
@@ -217,6 +225,7 @@ export class ExtensionSurface {
       this.activeDriver.released = true
       this.activeDriver = null
     }
+    this.dragGestureDriver = null
     this.snapshotListeners.clear()
     this.userDragListeners.clear()
     this.poseListeners.clear()
@@ -315,13 +324,19 @@ export class ExtensionSurface {
 
   /**
    * The drag controller's threshold crossing / gesture end, fanned to BOTH
-   * drag audiences (the service-level stream and the active driver's lease
-   * listeners) plus a snapshot push (the dragging flag is snapshot state).
+   * drag audiences (the service-level stream and the gesture's suspended
+   * lease listeners) plus a snapshot push (the dragging flag is snapshot
+   * state). Driver-level phases go to the lease captured at 'start': a lease
+   * taken DURING the fan-out (the physics flight, created by a service-level
+   * 'end' listener running before notifyDriverDragPhase) is a fresh holder
+   * that was never suspended by this gesture.
    */
   notifyDragGesture(phase: 'start' | 'end'): void {
+    if (phase === 'start') this.dragGestureDriver = this.activeDriver
     this.notifyUserDrag(phase)
     this.notifyDriverDragPhase(phase)
     this.notifySnapshot()
+    if (phase === 'end') this.dragGestureDriver = null
   }
 
   /**
@@ -635,9 +650,11 @@ export class ExtensionSurface {
    * Driver-level drag phases: the lease stays held across the suspension, so
    * 'end' is the signal that apply() is honored again (the v1 contract said
    * "suspended until the gesture ends" without an end event — widened 2026-08-27).
+   * Fanned to the gesture-start lease, NOT the fan-out-time holder — a lease
+   * created between 'start' and here was never suspended by this gesture.
    */
   private notifyDriverDragPhase(phase: 'start' | 'end'): void {
-    const state = this.activeDriver
+    const state = this.dragGestureDriver
     if (state === null) return
     fanOutSafely([...state.dragListeners], phase, 'driver drag listener')
   }

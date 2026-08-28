@@ -149,7 +149,7 @@ const makeApi = (
   let serverCustoms = structuredClone(options.customs ?? [])
   const mocks = {
     getConfig: vi.fn(async () => ({ config: structuredClone(config), assets })),
-    getAnimations: vi.fn(async () => ({ customs: structuredClone(serverCustoms), warnings: [] as string[] })),
+    getAnimations: vi.fn(async () => ({ customs: structuredClone(serverCustoms), warnings: [] as string[], normalized: [] as string[] })),
     patchConfig: vi.fn(async (patch: ConfigPatch) => ({
       ...structuredClone(config),
       enabled: patch.enabled ?? config.enabled,

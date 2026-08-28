@@ -222,6 +222,7 @@ export class EditorStore {
       let assets: Record<string, AssetMeta>
       let customs: AnimationDefinition[]
       let animationWarnings: string[]
+      let animationNormalized: string[]
       let pets: PetPreset[]
       let petWarnings: string[]
       let activePetId: string | null
@@ -229,6 +230,7 @@ export class EditorStore {
         const [shared, petsResponse] = await Promise.all([this.hub.load(), this.api.getPets()])
         ;({ config, assets, customs } = shared)
         animationWarnings = this.hub.getAnimationWarnings()
+        animationNormalized = this.hub.getAnimationNormalized()
         ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
       } else {
         const [configResponse, animationsResponse, petsResponse] = await Promise.all([
@@ -237,7 +239,13 @@ export class EditorStore {
           this.api.getPets(),
         ])
         ;({ config, assets } = configResponse)
-        ;({ customs, warnings: animationWarnings } = animationsResponse)
+        // `normalized` defaults for a stale pre-2026-08-28 host response —
+        // a missing field must never brick the editor load.
+        ;({
+          customs,
+          warnings: animationWarnings,
+          normalized: animationNormalized = [],
+        } = animationsResponse)
         ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
       }
       if (this.disposed) return
@@ -251,18 +259,33 @@ export class EditorStore {
       config.activePetId = activePetId
       // Clone from the hub cache: the draft is mutated in place by edits and
       // must never alias the shared snapshot.
+      // Two distinct host-side outcomes share this load: files SKIPPED as
+      // unreadable/invalid (warn — they are gone from the library) vs legacy
+      // shapes mechanically repaired and loaded (info — they work; re-saving
+      // in the editor persists the normalized shape). Lumping them under
+      // "corrupt, skipped" made users believe working animations were lost.
       const warningParts: string[] = []
       if (animationWarnings.length > 0) warningParts.push(`${animationWarnings.length} 个自定义动画文件损坏或不合法`)
       if (petWarnings.length > 0) warningParts.push(`${petWarnings.length} 个宠物预设文件损坏或不合法`)
+      const normalizedParts: string[] = []
+      if (animationNormalized.length > 0) {
+        normalizedParts.push(
+          `${animationNormalized.length} 个自定义动画为旧版格式，已自动兼容并正常加载（保存后更新为新格式）`,
+        )
+      }
+      const skippedNotice =
+        warningParts.length > 0 ? { kind: 'warn' as const, text: `有 ${warningParts.join('；')}，已被跳过。` } : null
+      const normalizedNotice =
+        normalizedParts.length > 0 ? { kind: 'info' as const, text: `${normalizedParts.join('；')}。` } : null
       this.emit({
         status: 'ready',
         config: structuredClone(config),
         assets: { ...assets },
         customs: structuredClone(customs),
         pets: structuredClone(pets),
-        // Corrupt animation files were skipped host-side (plan §3): say so once.
-        notice:
-          warningParts.length > 0 ? { kind: 'warn', text: `有 ${warningParts.join('；')}，已被跳过。` } : null,
+        // Skips outrank compatibility info when both exist; either way say
+        // exactly what happened — never "skipped" for a loaded animation.
+        notice: skippedNotice ?? normalizedNotice,
       })
     } catch (error) {
       if (this.disposed) return

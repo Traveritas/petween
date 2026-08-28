@@ -210,10 +210,15 @@ export function deleteAsset(id: string): Promise<{ deleted: string }> {
   return request(`${ASSETS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-/** V1.1 custom animations (plan §3): everything the host scanned, plus skip warnings. */
+/**
+ * V1.1 custom animations (plan §3): everything the host scanned, plus
+ * `warnings` (files skipped as unreadable/invalid) and `normalized`
+ * (legacy shapes repaired and loaded — NOT skipped).
+ */
 export interface GetAnimationsResponse {
   customs: AnimationDefinition[]
   warnings: string[]
+  normalized: string[]
 }
 
 export function getAnimations(): Promise<GetAnimationsResponse> {

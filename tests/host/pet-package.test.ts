@@ -56,17 +56,28 @@ function ambientAnimation(id: string): AnimationDefinition {
 }
 
 /** Zip a manifest (plus optional extra files) into a package body. */
-function packageZip(manifest: unknown, extraFiles: Record<string, Buffer> = {}): Buffer {
+function packageZip(
+  manifest: unknown,
+  extraFiles: Record<string, Buffer> = {},
+  options: { level?: number } = {},
+): Buffer {
   return Buffer.from(
-    zipSync({
-      'manifest.json': strToU8(JSON.stringify(manifest)),
-      ...Object.fromEntries(Object.entries(extraFiles).map(([name, data]) => [name, new Uint8Array(data)])),
-    }),
+    zipSync(
+      {
+        'manifest.json': strToU8(JSON.stringify(manifest)),
+        ...Object.fromEntries(Object.entries(extraFiles).map(([name, data]) => [name, new Uint8Array(data)])),
+      },
+      { level: options.level },
+    ),
   )
 }
 
 /** A minimal well-formed package: one PNG pose on idle, no animations. */
-function makePackage(overrides: Record<string, unknown> = {}, extraFiles: Record<string, Buffer> = {}): Buffer {
+function makePackage(
+  overrides: Record<string, unknown> = {},
+  extraFiles: Record<string, Buffer> = {},
+  options: { level?: number } = {},
+): Buffer {
   const asset = pngAsset()
   const manifest = {
     format: 'pet-package',
@@ -78,7 +89,7 @@ function makePackage(overrides: Record<string, unknown> = {}, extraFiles: Record
     ],
     ...overrides,
   }
-  return packageZip(manifest, { [`assets/${asset.id}.png`]: asset.data, ...extraFiles })
+  return packageZip(manifest, { [`assets/${asset.id}.png`]: asset.data, ...extraFiles }, options)
 }
 
 /** Run validation expecting a PetPackageError; rethrows anything else. */
@@ -192,17 +203,21 @@ describe('validatePetPackage: zip structure', () => {
   })
 
   it('enforces the 12MB single-file cap', async () => {
-    const bomb = Buffer.alloc(12 * 1024 * 1024 + 1) // zeros: compresses tiny
-    const error = await expectInvalid(makePackage({}, { 'assets/0000000000000000.png': bomb }))
+    // level 0 (stored): the cap polices UNCOMPRESSED bytes, and deflating a
+    // 12MB bomb would itself cost seconds of test time.
+    const bomb = Buffer.alloc(12 * 1024 * 1024 + 1) // zeros: would compress tiny
+    const error = await expectInvalid(makePackage({}, { 'assets/0000000000000000.png': bomb }, { level: 0 }))
     expect(error.message).toContain('single-file limit')
   })
 
   it('enforces the 60MB decompressed total', async () => {
+    // level 0 (stored): same reason as above — the total is checked against
+    // uncompressed sizes, so building the 66MB bomb must stay near-instant.
     const files: Record<string, Buffer> = {}
     for (let index = 0; index < 6; index += 1) {
       files[`assets/${index.toString(16).padStart(16, '0')}.png`] = Buffer.alloc(11 * 1024 * 1024) // 66MB total
     }
-    const error = await expectInvalid(makePackage({}, files))
+    const error = await expectInvalid(makePackage({}, files, { level: 0 }))
     expect(error.message).toContain('decompressed total')
   })
 })

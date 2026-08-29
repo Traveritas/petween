@@ -25,9 +25,13 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 
 ## 截图
 
-| 设置编辑器 | 宠物特写 |
+独立全页编辑器（宠物预设、六状态过渡与循环动画、锚点调整、实时预览与动画库）：
+
+![编辑器](docs/images/editor.png)
+
+| 设置卡片 | 宠物特写 |
 | --- | --- |
-| ![设置编辑器](docs/images/settings.png) | ![宠物特写](docs/images/pet-closeup.png) |
+| ![设置卡片](docs/images/settings.png) | ![宠物特写](docs/images/pet-closeup.png) |
 
 示例角色为社区流行的「DeepSeek 女仆鲸鱼娘」：角色原型「溟月」由 [上善无形](https://www.bilibili.com/opus/1231977657712771073) 创作，女仆装版本由 ZipZipPipe 二次设计，依 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh) 授权使用。
 

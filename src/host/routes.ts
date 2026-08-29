@@ -412,6 +412,28 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: Rou
       }
       expectedRevision = Number(expectedRaw)
     }
+    // Bare pet-switch guard (2026-08-29): a PUT that flips activePetId
+    // without the character slice used to save the OLD pet's live data, and
+    // the onSaved mirror then wrote that data into the NEWLY active preset —
+    // a silent clobber (incident: a preset lost its poses this way). A
+    // switch through this route now carries apply semantics: the target
+    // preset's slice becomes the patch base, with caller-supplied poses /
+    // states / global.scale still winning field-by-field. Dangling ids stay
+    // tolerated (validation's documented stance): no expansion, the mirror
+    // no-ops with its existing warn.
+    if (typeof raw === 'object' && raw !== null) {
+      const targetId = (raw as Record<string, unknown>).activePetId
+      if (typeof targetId === 'string') {
+        const current = await deps.loadConfig()
+        if (targetId !== current.activePetId) {
+          try {
+            raw = expandPetSwitchPatch(raw as Record<string, unknown>, await deps.readPet(targetId))
+          } catch (error) {
+            if (!(error instanceof PetError && error.code === 'NOT_FOUND')) throw error
+          }
+        }
+      }
+    }
     // Strict validation against the current config as base, then atomic save —
     // serialized inside updateConfig so overlapping PUTs cannot lose fields.
     // Sequential on purpose: the revision read must observe THIS update's bump.
@@ -572,6 +594,29 @@ function applyPatchFor(pet: PetPreset): Record<string, unknown> {
     }),
   )
   return { activePetId: pet.id, poses: pet.poses, states, global: { scale: pet.scale } }
+}
+
+/**
+ * Pet-switch patch base (bare-switch guard): the target preset's full
+ * character slice, so the onSaved mirror can only ever write the preset's
+ * own data back into it. Caller slice fields win field-by-field; `global`
+ * merges scale-only — a caller `global` without `scale` must not resurrect
+ * the previous pet's scale through the merge-onto-current patch semantics.
+ */
+function expandPetSwitchPatch(raw: Record<string, unknown>, pet: PetPreset): Record<string, unknown> {
+  const base = applyPatchFor(pet)
+  const callerGlobal =
+    typeof raw.global === 'object' && raw.global !== null ? (raw.global as Record<string, unknown>) : undefined
+  const callerScale = callerGlobal?.scale
+  return {
+    ...raw,
+    poses: raw.poses !== undefined ? raw.poses : base.poses,
+    states: raw.states !== undefined ? raw.states : base.states,
+    global:
+      callerGlobal !== undefined
+        ? { ...callerGlobal, scale: callerScale !== undefined ? callerScale : (base.global as { scale: number }).scale }
+        : { scale: (base.global as { scale: number }).scale },
+  }
 }
 
 async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {

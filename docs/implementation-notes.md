@@ -855,3 +855,12 @@ C1 收口（36276d8）后动工；子智能体先行侦察动画库 UI 接入点
 - **preview 演示按钮必报校验错（P2）**：`src/preview/index.tsx` 的 `DEFAULT_CUSTOM_DEFINITION` 未随 2026-08-27「同层共享缓动」收紧更新（rotation 轨缺 0.3/0.55 缓动、y 轨缺 0.8 帧），「校验 → 注册 → 播放」开箱即坏。修复：演示定义抽到 `src/preview/demo-definition.ts`（UI 入口 re-export 使用），内容与 motion-format.md §10 逐字对齐；新增 `tests/motion/preview-demo-definition.test.ts` 锁两点——通过 validator + 与文档示例 parsed deep-equal（文档再改示例时 CI 强制同步）。真机复验：按钮输出「正在播放 user:slam-land」。
 
 测试 +6（上述回归组）；主仓 **49 文件 / 869 用例**全绿、typecheck 干净、lint 基线 10 警告不变；physics 仓 **8 文件 / 122 用例**全绿、typecheck 干净。两仓产物已重建，dsh web 已重启加载新 host 代码。报告中的 UX 项：原生对话框依赖已在 backlog C2，导出多选为既有排队项，新增「删除当前生效宠物的落点」登记为 §5 C5。
+
+## 裸切 activePetId 覆写防护:config PUT 切换即 apply 语义(2026-08-29)
+
+真实事故触发:自动化经 `PUT /api/petween/config` 只发 `{activePetId: <目标>}` 切换宠物,保存的是**旧宠物的活配置**,而 `ConfigStore.onSaved` 镜像随后把这份旧数据写进**新激活的预设**——目标预设的 poses/states/scale 被静默覆写(deepseek 预设的女仆六图与 states 因此丢失,靠资产库上传时间线 + 损坏前 API 输出复原六图;states 原值无留档,已重置为出厂手感)。
+
+- **根因**：镜像契约本身无错("配置权威,镜像是次要同步"),错在公开 API 允许发出**不带角色切片的切换补丁**——切换语义被拆成了"指针归 config、数据留在原地",两者在镜像视角下错位。内部调用点(`POST /pets from:'current'`、`<id>/apply`、delete→null)全部自带完整切片,不受影响。
+- **修复**(路由层,`handleConfig`):PUT 补丁中 `activePetId` 为字符串且异于当前值时,先 `readPet` 取目标预设,经 `expandPetSwitchPatch` 把预设切片展开为补丁基座——`{...applyPatchFor(pet), ...补丁}`,poses/states 缺省取预设、调用方字段逐项优先;`global` 仅合并 scale(无 scale 的调用方 global 不得经"补丁并入当前"复活旧宠器的 scale)。展开后镜像写回的必然是目标宠物自己的数据,裸切 ≡ `POST /pets/<id>/apply`。悬空 id 保持 validation 既有的容忍立场:`readPet` NOT_FOUND 不展开照常保存(镜像侧既有 warn 吞掉),其它错误照抛。
+- **测试**:+4(routes.test.ts,置于既有镜像用例之后):事故场景复现(A 活数据不得污染 B 预设、B 磁盘切片原样、A 保有切换前自己最后的数据)、调用方切片字段优先、无 scale 的 global 切换取预设 scale 而非旧值、悬空 id 容忍不展开。全仓 **49 文件 / 873 用例**全绿;typecheck 干净;lint 基线 10 警告不变。
+- **方向备注**：用户产品意图是"宠物预设为最高层容器(内含图片与 motion pack)",当前"配置权威+预设镜像"是其反面;本防护是过渡期止血,长期方案(预设权威化 + 宠物包格式 + mounts 一键应用)另行立项。真机验证:重建 + 重启 dsh web 后,裸切奶蛋↔deepseek 往返各一次,两预设磁盘切片逐字段不变。

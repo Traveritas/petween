@@ -1018,6 +1018,91 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8')).scale).toBe(2.4)
   })
 
+  // 2026-08-29 regression: a bare activePetId switch through PUT /config used
+  // to save the OLD pet's live slice, and the onSaved mirror then clobbered
+  // the NEWLY active preset with it (a real incident lost a preset's poses
+  // this way). Switching via the config route now carries apply semantics.
+  it('PUT /config with a bare activePetId switch loads the target pet slice instead of clobbering it', async () => {
+    await seedConfig(1.5, 'aaaaaaaaaaaaaaaa')
+    const { pet: petA } = (await (await postPets({ name: 'A', from: 'current' })).json()) as { pet: PetPreset }
+    // Diverge the live config from the fresh defaults (the mirror keeps A in
+    // sync with whatever is live at 2.4 / bbbb).
+    await putConfig({ global: { scale: 2.4 }, poses: { idle: { assetId: 'bbbbbbbbbbbbbbbb' } } })
+    // A second preset whose slice differs from everything live.
+    const { pet: petB } = (
+      await (
+        await postPets({
+          name: 'B',
+          from: 'draft',
+          pet: {
+            scale: 0.7,
+            poses: { idle: { assetId: 'cccccccccccccccc' } },
+            states: { success: { enter: { preset: 'jump', strength: 1.2, durationMs: 400 } } },
+          },
+        })
+      ).json()
+    ) as { pet: PetPreset }
+    // The incident's exact call: switch with a bare pointer, no slice.
+    const res = await putConfig({ activePetId: petB.id })
+    expect(res.status).toBe(200)
+    const { config } = (await res.json()) as { config: PetweenConfig }
+    expect(config.activePetId).toBe(petB.id)
+    // The live config now carries B's slice, not A's leftovers …
+    expect(config.global.scale).toBe(0.7)
+    expect(config.poses.idle.assetId).toBe('cccccccccccccccc')
+    expect(config.states.success.enter.preset).toBe('jump')
+    // … so the mirror could only write B's own data back: B keeps its slice …
+    const bDisk = JSON.parse(await readFile(join(dir, 'pets', `${petB.id}.json`), 'utf8'))
+    expect(bDisk.scale).toBe(0.7)
+    expect(bDisk.poses.idle.assetId).toBe('cccccccccccccccc')
+    expect(bDisk.states.success.enter.preset).toBe('jump')
+    // … and A keeps the last data it actually owned (2.4 / bbbb, mirrored pre-switch).
+    const aDisk = JSON.parse(await readFile(join(dir, 'pets', `${petA.id}.json`), 'utf8'))
+    expect(aDisk.scale).toBe(2.4)
+    expect(aDisk.poses.idle.assetId).toBe('bbbbbbbbbbbbbbbb')
+  })
+
+  it('a switch patch with caller slice fields wins over the preset base', async () => {
+    await seedConfig(1.5, 'aaaaaaaaaaaaaaaa')
+    await postPets({ name: 'A', from: 'current' })
+    const { pet: petB } = (
+      await (
+        await postPets({ name: 'B', from: 'draft', pet: { scale: 0.7, poses: {}, states: {} } })
+      ).json()
+    ) as { pet: PetPreset }
+    const res = await putConfig({ activePetId: petB.id, poses: { idle: { assetId: 'dddddddddddddddd' } } })
+    expect(res.status).toBe(200)
+    const { config } = (await res.json()) as { config: PetweenConfig }
+    expect(config.poses.idle.assetId).toBe('dddddddddddddddd') // caller wins
+    expect(config.global.scale).toBe(0.7) // the untouched fields still come from B
+    const bDisk = JSON.parse(await readFile(join(dir, 'pets', `${petB.id}.json`), 'utf8'))
+    expect(bDisk.poses.idle.assetId).toBe('dddddddddddddddd')
+    expect(bDisk.scale).toBe(0.7)
+  })
+
+  it('a switch patch with a scale-less global takes the preset scale, not the previous pet\'s', async () => {
+    await seedConfig(1.5, 'aaaaaaaaaaaaaaaa')
+    await postPets({ name: 'A', from: 'current' })
+    const { pet: petB } = (
+      await (await postPets({ name: 'B', from: 'draft', pet: { scale: 0.7, poses: {}, states: {} } })).json()
+    ) as { pet: PetPreset }
+    const res = await putConfig({ activePetId: petB.id, global: { successHoldMs: 3000 } })
+    expect(res.status).toBe(200)
+    const { config } = (await res.json()) as { config: PetweenConfig }
+    expect(config.global.scale).toBe(0.7) // NOT the 1.5 still on disk pre-switch
+    expect(config.global.successHoldMs).toBe(3000)
+  })
+
+  it('a switch to a dangling pet id stays tolerated: saved verbatim, no expansion', async () => {
+    await seedConfig()
+    await postPets({ name: 'Kitty', from: 'current' })
+    const res = await putConfig({ activePetId: 'pet_zzzzzzzzzzzzzz0' })
+    expect(res.status).toBe(200)
+    const { config } = (await res.json()) as { config: PetweenConfig }
+    expect(config.activePetId).toBe('pet_zzzzzzzzzzzzzz0')
+    expect(config.global.scale).toBe(1.5) // live data untouched: nothing was loaded
+  })
+
   it('DELETE /assets refuses 409 when only a non-active preset references the asset', async () => {
     const upload = await fetch(`${base}/api/petween/assets`, { method: 'POST', body: uploadBody(makePng(2, 3), 'image/png') })
     const assetId = ((await upload.json()) as { asset: { id: string } }).asset.id

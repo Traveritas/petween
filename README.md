@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风格的智能体宠物动画中间件**。
 
-*note:插件是纯vibe出来的，如有不足，欢迎来改进❤*
+*note:插件是纯vibe出来的，如有不足，欢迎改进❤*
 
 你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与循环动画（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
 

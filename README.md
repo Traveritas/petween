@@ -1,6 +1,8 @@
 # Petween
 
-DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware for Agent Pets**（前身为 `dsh-motion-pet`，1.2.0 起更名）。
+DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风格的智能体宠物动画中间件**。
+
+*note:插件是纯vibe出来的，如有不足，欢迎来改进❤*
 
 你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与循环动画（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
 
@@ -29,7 +31,7 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **Animation Middleware fo
 要求：已安装 DSH（`@deepseek-ai/dsh`，在 0.1.0-rc.7 上实测）。
 
 ```bash
-# 从 npm 安装（发布后）
+# 从 npm 安装（尚未发布！）
 dsh plugin --profile web add petween
 
 # 或从本地目录安装（开发）

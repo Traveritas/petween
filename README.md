@@ -19,6 +19,9 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 - **多宠物预设**：每只宠物独立保存姿势图片、状态动画与整体缩放，可快速切换、复制、重命名和删除
 - **Timeline Engine**：所有动画（内置与自定义）都是 `AnimationDefinition` 数据，经同一个 Timeline Compiler / Scheduler 执行（WAAPI），无专用分支——自定义动画格式见 [docs/motion-format.md](docs/motion-format.md)
 - **可视化时间轴编辑器**：管理自定义过渡/环境/互动动画，编辑轨道、关键帧、easing 与事件并循环试播
+- **点击互动与粒子特效**：点击宠物可配置为弹一下、播放动画或粒子特效，内置 `flip` 翻面
+- **动画包（Motion Pack）**：自定义动画可导出为单文件 JSON 包；导入时校验定义并自动规划 id 碰撞，见 [docs/motion-format.md](docs/motion-format.md) §11
+- **附属插件扩展服务**：host 侧 `petween` 与 client 侧 `petween/client` 两个 cordis 服务——动画库注册、舞台快照订阅、位置驱动租约、pose 通道、指针/拖拽/动画三类观察事件流，「提供能力、不做策略」；首个消费示例：[petween-physics](https://github.com/Traveritas/petween-physics)（拖拽甩出 + 碰壁反弹 + 地面滑动）
 
 ## 截图
 
@@ -26,16 +29,21 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 | --- | --- |
 | ![设置编辑器](docs/images/settings.png) | ![宠物特写](docs/images/pet-closeup.png) |
 
+示例角色为社区流行的「DeepSeek 女仆鲸鱼娘」：角色原型「溟月」由 [上善无形](https://www.bilibili.com/opus/1231977657712771073) 创作，女仆装版本由 ZipZipPipe 二次设计，依 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh) 授权使用。
+
 ## 安装
 
-要求：已安装 DSH（`@deepseek-ai/dsh`，在 0.1.0-rc.7 上实测）。
+要求：已安装 DSH（`@deepseek-ai/dsh`，在 0.1.0-rc.7 上实测）、Node ≥ 20 与 pnpm。
+
+尚未发布到 npm（`dsh plugin add petween` 暂不可用），从 GitHub 克隆安装：
 
 ```bash
-# 从 npm 安装（尚未发布！）
-dsh plugin --profile web add petween
+git clone https://github.com/Traveritas/petween.git
+cd petween
+pnpm install
+pnpm run build    # 产出 lib/（仓库不含构建产物，安装前必须构建）
 
-# 或从本地目录安装（开发）
-dsh plugin --profile web add link:/path/to/petween
+dsh plugin --profile web add link:/path/to/petween    # link: 后指向你克隆的目录
 ```
 
 重启 `dsh web` 生效。
@@ -65,7 +73,7 @@ dsh plugin --profile web remove petween     # 卸载
 
 也可以直接访问 `http://127.0.0.1:3080/petween-editor/`（端口以你的 DSH web 配置为准）。
 
-想快速试手感而不碰真实配置：构建后直接双击 `preview/index.html` 打开独立预览页（无需 DSH，需从源码构建——npm 安装包当前不包含该页），还支持贴入自定义 `AnimationDefinition` JSON 即注册即播。
+想快速试手感而不碰真实配置：构建后直接双击 `preview/index.html` 打开独立预览页（无需 DSH，随上面的克隆构建流程一并生成），还支持贴入自定义 `AnimationDefinition` JSON 即注册即播。
 
 ## 状态说明
 
@@ -98,11 +106,11 @@ pnpm run typecheck   # 双工程类型检查
 
 ## Known limitations
 
-- Motion Pack 导入导出、更多内置 ambient channel 与 Transition Matrix override 尚未实现
+- 更多内置 ambient channel 与 Transition Matrix override 尚未实现；Motion Pack 后续计划 zip 容器与编辑器多选导出
 - Agent 状态联动的「无焦点会话」聚合回退模式按优先级取最紧急会话（WAITING > ERROR > ACTIVE > SUCCESS > IDLE，终态带 TTL）；正常跟随当前会话
 - 不执行/不信任用户资产：SVG 明确拒绝，图片只做解码展示
-- 多浏览器标签同时编辑同一配置为 last-write-wins（revision/CAS 属后续项）
+- 多浏览器标签同时编辑同一配置默认 last-write-wins；写入请求携带 `x-petween-expected-revision` 头即可获得乐观并发控制（版本过期返回 409 `REVISION_MISMATCH`）
 
 ## License
 
-MIT
+MIT。例外：`docs/images/` 下的示例截图包含「DeepSeek 女仆鲸鱼娘」角色形象（原型「溟月」by 上善无形，女仆装设计 by ZipZipPipe，CC BY-NC-SA 4.0），仅作演示用途，不随本项目的 MIT 许可发布。

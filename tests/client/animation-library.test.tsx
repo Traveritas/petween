@@ -137,6 +137,8 @@ interface ApiMocks {
   patchConfig: ReturnType<typeof vi.fn>
   putAnimation: ReturnType<typeof vi.fn>
   deleteAnimation: ReturnType<typeof vi.fn>
+  importMotionPack: ReturnType<typeof vi.fn>
+  exportMotionPack: ReturnType<typeof vi.fn>
 }
 
 const makeApi = (
@@ -186,6 +188,13 @@ const makeApi = (
     renamePet: vi.fn(async () => {}),
     deletePet: vi.fn(async () => {}),
     applyPet: vi.fn(async () => structuredClone(config)),
+    exportPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    importPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    updatePetMeta: vi.fn(async () => {}),
     uploadAsset: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),

@@ -864,3 +864,25 @@ C1 收口（36276d8）后动工；子智能体先行侦察动画库 UI 接入点
 - **修复**(路由层,`handleConfig`):PUT 补丁中 `activePetId` 为字符串且异于当前值时,先 `readPet` 取目标预设,经 `expandPetSwitchPatch` 把预设切片展开为补丁基座——`{...applyPatchFor(pet), ...补丁}`,poses/states 缺省取预设、调用方字段逐项优先;`global` 仅合并 scale(无 scale 的调用方 global 不得经"补丁并入当前"复活旧宠器的 scale)。展开后镜像写回的必然是目标宠物自己的数据,裸切 ≡ `POST /pets/<id>/apply`。悬空 id 保持 validation 既有的容忍立场:`readPet` NOT_FOUND 不展开照常保存(镜像侧既有 warn 吞掉),其它错误照抛。
 - **测试**:+4(routes.test.ts,置于既有镜像用例之后):事故场景复现(A 活数据不得污染 B 预设、B 磁盘切片原样、A 保有切换前自己最后的数据)、调用方切片字段优先、无 scale 的 global 切换取预设 scale 而非旧值、悬空 id 容忍不展开。全仓 **49 文件 / 873 用例**全绿;typecheck 干净;lint 基线 10 警告不变。
 - **方向备注**：用户产品意图是"宠物预设为最高层容器(内含图片与 motion pack)",当前"配置权威+预设镜像"是其反面;本防护是过渡期止血,长期方案(预设权威化 + 宠物包格式 + mounts 一键应用)另行立项。真机验证:重建 + 重启 dsh web 后,裸切奶蛋↔deepseek 往返各一次,两预设磁盘切片逐字段不变。
+
+## mounts 一键应用 + 宠物包 v1(2026-08-29 下午,双智能体并行)
+
+用户拍板方向「宠物预设为最高层容器(内含图片与 motion pack)」的第一批落地:① mounts 一键应用(主开发直接实现);② 宠物包 zip 格式(host/client 两个子智能体按规格并行实现,规格先行作为唯一契约,集成者统一验收)。③ 预设权威化(架构翻转)按拍板暂缓。
+
+### 规格(docs/motion-format.md)
+
+§11 新增「挂载应用」小节:导入响应附带 `applyPatch`——挂载解析为最终 id 的**最小 states 补丁**(只含被挂载字段,字段级并入活配置);§12 宠物包:zip{manifest.json + assets/<16hex>.<ext>},manifest 含 pet 完整切片、资产清单(sha256 对账)、可选 motionPack(mounts 由导出端从 states 推导,与纯动画包导出不带 mounts 的规则相反)、可选 attribution;导入校验(zip-slip/炸弹上限/版本拒绝/图片 magic bytes)与原子性(创建宠物为最后一步,前置失败零写入)。
+
+### mounts 一键应用(commit 6a948f6)
+
+host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的最终 id);编辑器动画库顶部横幅展示「包名 + 槽位 + 进入/循环」逐项摘要,「应用挂载」并入**本地草稿**(走既有手动保存流,镜像随之写进当前激活宠物),「忽略」清除。+5 测试(含改号后挂载仍指正确 id、无 mounts 无 applyPatch)。
+
+### 宠物包(host: pet-package.ts 26 用例 + routes 7;client: store 9 + UI 5)
+
+- **host**:`GET /pets/<id>/export`(二进制 zip;缺资产/动画 400 EXPORT_INCOMPLETE)、`POST /pets/import`(sub==='import' 在 PET_ID_RE 前特判;fflate devDep 经 tsdown 内联验证);导入顺序 新资产→importAnimations(既有单锁段)→**建宠最后**→立即 apply,创建前失败尽力回滚(B10 新鲜引用探测);`PUT /pets/<id>` 扩展接受 `{name?, attribution?}`(缺席=保留、null=清除);PetAttribution 落 core/types.ts(client↔core 合法方向,host/pets.ts 再导出,避免双定义);API_FEATURES +`pets.packages`。错误码 PET_PACKAGE_INVALID / PACK_VERSION_NEWER / EXPORT_INCOMPLETE。
+- **client**:api 加 `requestBinary` 分支(15s 超时与错误映射共享);store `exportPetPackage`(activePetId null 拦截、pet-<名>.zip 下载)、`importPetPackage`(脏草稿 confirm 守卫 + 在途保存链等待 + load() 全量刷新 + 显式 revert 记账)、`savePetAttribution`;编辑器宠物区「导入/导出宠物包」按钮 + 「来源与署名」折叠区(四输入预填、创作者逗号互转、空表单提交为 null、「已带署名」徽标、无激活宠物禁用)。
+- **偏离记录**:①碰撞规划与落盘一体(既有 B10 事务纪律),「先行只读」降级为只读校验+尽力回滚,回滚路径有专项用例;②包外自定义动画引用→整包拒绝(自包含规则);③导入对 mounts 缺席宽容(resolved mounts 权威覆盖)。
+
+### 验收
+
+全仓 **50 文件 / 924 用例**全绿;typecheck 干净;lint 基线 10 警告;build 成功(fflate 内联)。真机走查:给女仆设真实署名(溟月/上善无形/ZipZipPipe/CC BY-NC-SA 4.0)→导出 6.7MB zip(manifest+六图)→删宠→导入→切片与署名逐字段一致、即导即用激活;资产 409 引用保护正确拦截误删(导入走全复用路径);奶蛋导出含 motionPack(两自定义动画+states 推导 mounts);编辑器新按钮与署名区预填实测通过。dsh web 已重启加载新产物。

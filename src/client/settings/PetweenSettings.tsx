@@ -20,7 +20,15 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type JSX } from 'react'
 import { createPortal } from 'react-dom'
-import type { ActivityTransition, PetweenConfig, PoseKey, TerminalHold, TransitionPreset } from '../../core/types'
+import type {
+  ActivityTransition,
+  PetAttribution,
+  PetPreset,
+  PetweenConfig,
+  PoseKey,
+  TerminalHold,
+  TransitionPreset,
+} from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { configHub } from '../config-hub'
@@ -279,12 +287,165 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           >
             删除
           </button>
+          {/* §12 宠物包: share the ACTIVE pet as a zip / adopt one from a zip. */}
+          <button
+            type="button"
+            className={styles.button}
+            disabled={active === undefined}
+            onClick={() => void store.exportPetPackage()}
+          >
+            导出宠物包
+          </button>
+          <FileImportButton
+            label="导入宠物包"
+            accept="application/zip,.zip"
+            onFile={(file) => void store.importPetPackage(file)}
+          />
         </div>
       </div>
       <p className={styles.hint}>
         点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。
       </p>
+      <AttributionSection active={active} store={store} />
     </section>
+  )
+}
+
+/** Local form shape of {@link PetAttribution} (creators held comma-joined). */
+interface AttributionForm {
+  character: string
+  creators: string
+  sourceUrl: string
+  license: string
+}
+
+const seedAttributionForm = (pet: PetPreset | undefined): AttributionForm => ({
+  character: pet?.attribution?.character ?? '',
+  creators: (pet?.attribution?.creators ?? []).join('，'),
+  sourceUrl: pet?.attribution?.sourceUrl ?? '',
+  license: pet?.attribution?.license ?? '',
+})
+
+/** Empty-in-every-field form → null (the explicit "clear credit" marker). */
+const buildAttribution = (form: AttributionForm): PetAttribution | null => {
+  const creators = form.creators
+    .split(/[,，]/)
+    .map((creator) => creator.trim())
+    .filter((creator) => creator !== '')
+  const attribution: PetAttribution = {}
+  if (form.character.trim() !== '') attribution.character = form.character.trim()
+  if (creators.length > 0) attribution.creators = creators
+  if (form.sourceUrl.trim() !== '') attribution.sourceUrl = form.sourceUrl.trim()
+  if (form.license.trim() !== '') attribution.license = form.license.trim()
+  return Object.keys(attribution).length > 0 ? attribution : null
+}
+
+/**
+ * §12 宠物包: origin & credit editor for the active preset — collapsed by
+ * default, prefilled from the preset's stored attribution. An unsaved config
+ * (no active preset) disables the fields instead of hiding the section, so
+ * the feature is discoverable before the first pet exists.
+ */
+function AttributionSection(props: { active: PetPreset | undefined; store: EditorStore }): JSX.Element {
+  const { active, store } = props
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState<AttributionForm>(() => seedAttributionForm(active))
+  // Re-seed when the active pet identity changes (switch/import); edits made
+  // in between stay untouched — a mid-typing list refresh must not clobber.
+  useEffect(() => {
+    setForm(seedAttributionForm(active))
+  }, [active?.id])
+  const setField = (field: keyof AttributionForm, value: string): void => {
+    setForm((current) => ({ ...current, [field]: value }))
+  }
+  return (
+    <div className={styles.attribution}>
+      <div className={styles.attributionHeader}>
+        <span className={styles.groupTitle}>来源与署名</span>
+        {/* §12: pets imported from a package carry their author's credit. */}
+        {active?.attribution != null ? <span className={styles.badge}>已带署名</span> : null}
+        <button
+          type="button"
+          className={styles.button}
+          aria-expanded={open}
+          onClick={() => {
+            if (!open) setForm(seedAttributionForm(active))
+            setOpen((value) => !value)
+          }}
+        >
+          {open ? '收起' : '展开'}
+        </button>
+      </div>
+      {open ? (
+        <div className={styles.attributionFields}>
+          <div className={styles.cardGrid}>
+            {/* TextField has no disabled prop; these rows mirror its markup
+                (row/label/number/unit) with the unsaved-config disable. */}
+            <label className={active === undefined ? `${styles.row} ${styles.disabled}` : styles.row}>
+              <span className={styles.label}>角色形象</span>
+              <input
+                type="text"
+                className={styles.number}
+                value={form.character}
+                placeholder="DeepSeek 女仆鲸鱼娘（溟月）"
+                disabled={active === undefined}
+                onChange={(event) => setField('character', event.target.value)}
+              />
+              <span className={styles.unit} />
+            </label>
+            <label className={active === undefined ? `${styles.row} ${styles.disabled}` : styles.row}>
+              <span className={styles.label}>创作者</span>
+              <input
+                type="text"
+                className={styles.number}
+                value={form.creators}
+                placeholder="上善无形（原型）， ZipZipPipe（女仆装）"
+                disabled={active === undefined}
+                onChange={(event) => setField('creators', event.target.value)}
+              />
+              <span className={styles.unit} />
+            </label>
+            <label className={active === undefined ? `${styles.row} ${styles.disabled}` : styles.row}>
+              <span className={styles.label}>来源链接</span>
+              <input
+                type="text"
+                className={styles.number}
+                value={form.sourceUrl}
+                placeholder="https://…"
+                disabled={active === undefined}
+                onChange={(event) => setField('sourceUrl', event.target.value)}
+              />
+              <span className={styles.unit} />
+            </label>
+            <label className={active === undefined ? `${styles.row} ${styles.disabled}` : styles.row}>
+              <span className={styles.label}>许可</span>
+              <input
+                type="text"
+                className={styles.number}
+                value={form.license}
+                placeholder="CC BY-NC-SA 4.0"
+                disabled={active === undefined}
+                onChange={(event) => setField('license', event.target.value)}
+              />
+              <span className={styles.unit} />
+            </label>
+          </div>
+          <p className={styles.hint}>
+            {active === undefined
+              ? '当前是未保存配置，选中一只宠物后才能编辑署名。'
+              : '署名保存在宠物预设上，导出宠物包时会一并带上，方便分享时注明出处。'}
+          </p>
+          <button
+            type="button"
+            className={styles.button}
+            disabled={active === undefined}
+            onClick={() => void store.savePetAttribution(buildAttribution(form))}
+          >
+            保存署名
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

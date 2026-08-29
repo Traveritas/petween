@@ -20,7 +20,8 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 - **Timeline Engine**：所有动画（内置与自定义）都是 `AnimationDefinition` 数据，经同一个 Timeline Compiler / Scheduler 执行（WAAPI），无专用分支——自定义动画格式见 [docs/motion-format.md](docs/motion-format.md)
 - **可视化时间轴编辑器**：管理自定义过渡/环境/互动动画，编辑轨道、关键帧、easing 与事件并循环试播
 - **点击互动与粒子特效**：点击宠物可配置为弹一下、播放动画或粒子特效，内置 `flip` 翻面
-- **动画包（Motion Pack）**：自定义动画可导出为单文件 JSON 包；导入时校验定义并自动规划 id 碰撞，见 [docs/motion-format.md](docs/motion-format.md) §11
+- **动画包（Motion Pack）**：自定义动画可导出为单文件 JSON 包；导入时校验定义并自动规划 id 碰撞，包内的挂载建议（mounts）可在动画库一键应用到当前宠物，见 [docs/motion-format.md](docs/motion-format.md) §11
+- **宠物包（Pet Package）**：一只宠物连同图片、设定与她挂的动画打成 zip 分享；导入时图片按内容哈希去重、动画碰撞改号、一步建宠并切换，附署名（角色/创作者/来源/许可）随包传播，见 [docs/motion-format.md](docs/motion-format.md) §12
 - **附属插件扩展服务**：host 侧 `petween` 与 client 侧 `petween/client` 两个 cordis 服务——动画库注册、舞台快照订阅、位置驱动租约、pose 通道、指针/拖拽/动画三类观察事件流，「提供能力、不做策略」；首个消费示例：[petween-physics](https://github.com/Traveritas/petween-physics)（拖拽甩出 + 碰壁反弹 + 地面滑动）
 
 ## 截图

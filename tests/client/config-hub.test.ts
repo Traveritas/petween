@@ -281,6 +281,13 @@ describe('ConfigHub ↔ EditorStore (M3 shared config)', () => {
     exportMotionPack: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
+        exportPetPackage: vi.fn(async () => {
+          throw new Error('not used')
+        }),
+        importPetPackage: vi.fn(async () => {
+          throw new Error('not used')
+        }),
+        updatePetMeta: vi.fn(),
         uploadAsset: vi.fn(),
         deleteAsset: vi.fn(),
       },

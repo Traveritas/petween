@@ -12,23 +12,30 @@
  * - PUT    /api/petween/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
  * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
  * - GET/POST /api/petween/pets and GET/PUT/DELETE/apply subpaths (V1.1 presets)
+ * - GET    /api/petween/pets/<id>/export → application/zip (§12 pet package)
+ * - POST   /api/petween/pets/import      → { pet, config, report } | 400 PACK_INVALID (§12)
+ * - PUT    /api/petween/pets/<id>        → { pet } (partial {name?, attribution?})
  * - GET    /api/petween/meta           → capability discovery (B2)
  * - POST   /api/petween/packs/import   → { entries, mounts, warnings } | 400 PACK_INVALID (P2)
  * - GET    /api/petween/packs/export?ids= → pack manifest (P2)
  */
-import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../core/types'
+import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 
 const CONFIG_URL = '/api/petween/config'
 const ASSETS_URL = '/api/petween/assets'
 const ANIMATIONS_URL = '/api/petween/animations'
 const PETS_URL = '/api/petween/pets'
+const PET_IMPORT_URL = '/api/petween/pets/import'
 const META_URL = '/api/petween/meta'
 const PACK_IMPORT_URL = '/api/petween/packs/import'
 const PACK_EXPORT_URL = '/api/petween/packs/export'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
 export const EDITOR_PAGE_URL = '/petween-editor/'
+
+/** §12 宠物包: the shared credit type lives with PetPreset in core/types. */
+export type { PetAttribution } from '../core/types'
 
 export class ApiError extends Error {
   override readonly name = 'ApiError'
@@ -104,7 +111,13 @@ async function parseError(response: Response): Promise<ApiError> {
  */
 const REQUEST_TIMEOUT_MS = 15_000
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * Shared transport (timeout + error mapping) for every endpoint; the callers
+ * decide how to read the body. `request` parses JSON; `requestBinary` is the
+ * §12 pet-package export path, whose body is a zip the JSON parse must never
+ * touch.
+ */
+async function sendRequest(url: string, init?: RequestInit): Promise<Response> {
   // The raced timeout reject stays as a belt-and-braces prompt even where a
   // fetch implementation ignores the abort signal.
   const controller = new AbortController()
@@ -132,7 +145,18 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     clearTimeout(timeoutId)
   }
   if (!response.ok) throw await parseError(response)
+  return response
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await sendRequest(url, init)
   return (await response.json()) as T
+}
+
+/** Binary twin of {@link request} — the §12 pet-package export (zip body). */
+async function requestBinary(url: string, init?: RequestInit): Promise<ArrayBuffer> {
+  const response = await sendRequest(url, init)
+  return await response.arrayBuffer()
 }
 
 export function getConfig(): Promise<GetConfigResponse> {
@@ -342,4 +366,49 @@ export function deletePet(id: string): Promise<{ deleted: string }> {
 
 export function applyPet(id: string): Promise<{ config: PetweenConfig }> {
   return request(`${PETS_URL}/${encodeURIComponent(id)}/apply`, { method: 'POST' })
+}
+
+// --- Pet Package (§12) ------------------------------------------------------
+
+/** §12 宠物包 import report: asset dedup, animation collision outcomes, mounts. */
+export interface PetPackageImportReport {
+  assetsAdded: string[]
+  assetsReused: string[]
+  entries: PackImportEntry[]
+  /** Mounts resolved to FINAL ids (already rewritten into the new pet's states). */
+  mounts: Record<string, { enter?: string; ambient?: string }>
+  warnings: string[]
+}
+
+/** §12 宠物包 import: the host creates AND activates the new pet atomically. */
+export interface PetPackageImportResponse {
+  pet: PetPreset
+  config: PetweenConfig
+  report: PetPackageImportReport
+}
+
+/** Export one pet as a shareable zip (binary body — the only non-JSON GET). */
+export function exportPetPackage(id: string): Promise<ArrayBuffer> {
+  return requestBinary(`${PETS_URL}/${encodeURIComponent(id)}/export`)
+}
+
+/** Import a pet package zip (≤48MB host-side); creates and activates the pet. */
+export function importPetPackage(data: ArrayBuffer): Promise<PetPackageImportResponse> {
+  return request(PET_IMPORT_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/zip' },
+    body: data,
+  })
+}
+
+/** Rename and/or re-credit a stored preset (partial body; null clears credit). */
+export function updatePetMeta(
+  id: string,
+  body: { name?: string; attribution?: PetAttribution | null },
+): Promise<{ pet: PetPreset }> {
+  return request(`${PETS_URL}/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }

@@ -14,7 +14,7 @@
  * saveAnimation/deleteAnimation hit the API immediately and broadcast the
  * customs list through the hub; they never touch the config draft.
  */
-import type { AssetMeta, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
+import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
@@ -26,13 +26,16 @@ import {
   deleteAsset as httpDeleteAsset,
   deletePet as httpDeletePet,
   exportMotionPack as httpExportMotionPack,
+  exportPetPackage as httpExportPetPackage,
   getAnimations as httpGetAnimations,
   getConfig as httpGetConfig,
   getPets as httpGetPets,
   importMotionPack as httpImportMotionPack,
+  importPetPackage as httpImportPetPackage,
   patchConfig as httpPatchConfig,
   putAnimation as httpPutAnimation,
   renamePet as httpRenamePet,
+  updatePetMeta as httpUpdatePetMeta,
   uploadAsset as httpUploadAsset,
   ApiError,
   type ConfigPatch,
@@ -41,6 +44,7 @@ import {
   type GetPetsResponse,
   type MotionPack,
   type PackImportResponse,
+  type PetPackageImportResponse,
   type UploadedAsset,
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
@@ -72,6 +76,12 @@ export interface EditorApi {
   importMotionPack(packJson: string): Promise<PackImportResponse>
   /** P2 Motion Pack: the ids to export, the manifest back. */
   exportMotionPack(ids: string[]): Promise<MotionPack>
+  /** §12 宠物包: the active preset id as a binary zip body. */
+  exportPetPackage(id: string): Promise<ArrayBuffer>
+  /** §12 宠物包: zip bytes in; the host creates AND activates the new pet. */
+  importPetPackage(data: ArrayBuffer): Promise<PetPackageImportResponse>
+  /** §12 宠物包: rename/re-credit a stored preset (null attribution clears). */
+  updatePetMeta(id: string, body: { name?: string; attribution?: PetAttribution | null }): Promise<void>
   uploadAsset(file: File): Promise<UploadedAsset>
   deleteAsset(id: string): Promise<void>
 }
@@ -98,6 +108,11 @@ const httpEditorApi: EditorApi = {
   },
   importMotionPack: (packJson) => httpImportMotionPack(packJson),
   exportMotionPack: (ids) => httpExportMotionPack(ids),
+  exportPetPackage: (id) => httpExportPetPackage(id),
+  importPetPackage: (data) => httpImportPetPackage(data),
+  updatePetMeta: async (id, body) => {
+    await httpUpdatePetMeta(id, body)
+  },
   uploadAsset: async (file) => (await httpUploadAsset(file)).asset,
   deleteAsset: async (id) => {
     await httpDeleteAsset(id)
@@ -681,6 +696,141 @@ export class EditorStore {
       URL.revokeObjectURL(url)
     }
     this.emit({ notice: { kind: 'info', text: `已导出动画包「${pack.name}」（${ids.length} 个动画）。` } })
+    return true
+  }
+
+  // --- §12 宠物包 (pet package) ---------------------------------------------
+
+  /**
+   * §12 宠物包 export: the ACTIVE preset as a zip download. Only a stored
+   * pet can be exported — an unsaved config has no preset to package, so the
+   * guard is the same "select a pet first" warn as the other identity ops.
+   * The zip reflects the SAVED preset (a dirty draft is not packaged).
+   */
+  async exportPetPackage(): Promise<boolean> {
+    if (this.disposed || this.snapshot.status !== 'ready') return false
+    const activePetId = this.snapshot.config?.activePetId ?? null
+    if (activePetId === null) {
+      this.emit({ notice: { kind: 'warn', text: '当前是未保存配置，选中一只宠物后再导出。' } })
+      return false
+    }
+    let data: ArrayBuffer
+    try {
+      data = await this.api.exportPetPackage(activePetId)
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导出宠物包失败：${describeError(error)}` } })
+      return false
+    }
+    if (this.disposed) return true
+    if (typeof URL?.createObjectURL !== 'function' || typeof document === 'undefined') {
+      this.emit({ notice: { kind: 'warn', text: '当前环境不支持自动下载，宠物包已生成但未能保存。' } })
+      return false
+    }
+    const petName = this.snapshot.pets.find((pet) => pet.id === activePetId)?.name ?? activePetId
+    // Filesystem-hostile characters in a free-form pet name must not reach
+    // anchor.download; strip them (the display name itself is untouched).
+    // \p{Cc} covers the C0/C1 control characters without spelling them out.
+    const fileName = `pet-${petName.replace(/[\\/:*?"<>|\p{Cc}]/gu, '').trim() || activePetId}.zip`
+    const blob = new Blob([data], { type: 'application/zip' })
+    const url = URL.createObjectURL(blob)
+    try {
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      anchor.click()
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    this.emit({ notice: { kind: 'info', text: `已导出宠物包「${petName}」。` } })
+    return true
+  }
+
+  /**
+   * §12 宠物包 import: hand the chosen zip to the host (it owns validation,
+   * dedup and the collision policy), then FULLY reload — the import creates
+   * AND activates a new pet, so config/assets/customs/pets all move at once.
+   * Importing replaces the working config: a dirty draft is never dropped
+   * implicitly, so it asks first (the same never-drop-a-draft discipline as
+   * pet switching, expressed as an explicit discard confirm because the file
+   * picker already committed the user to the import intent). Any queued save
+   * settles first — an in-flight PUT writing the old draft into the NEW
+   * active pet's mirror after the reload would silently clobber it.
+   */
+  async importPetPackage(file: File): Promise<boolean> {
+    if (this.disposed || this.snapshot.status !== 'ready') return false
+    if (this.dirty && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      if (!window.confirm('导入宠物包会创建并切换到新宠物，当前未保存的修改将被丢弃。要继续吗？')) return false
+    }
+    await this.saveChain
+    if (this.disposed) return false
+    let data: ArrayBuffer
+    try {
+      data = await file.arrayBuffer()
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `读取宠物包文件失败：${describeError(error)}` } })
+      return false
+    }
+    let result: PetPackageImportResponse
+    try {
+      result = await this.api.importPetPackage(data)
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导入宠物包失败：${describeError(error)}` } })
+      return false
+    }
+    if (this.disposed) return true
+    await this.load()
+    if (this.disposed) return true
+    // load() never resets the draft bookkeeping (it was written for the
+    // initial mount); the import IS the discard of the previous draft, so
+    // finish the revert explicitly like revertConfig does.
+    this.dirty = false
+    this.pendingAssetDeletes.clear()
+    const { report } = result
+    const imported = report.entries.filter((entry) => entry.status === 'imported').length
+    const identical = report.entries.filter((entry) => entry.status === 'identical').length
+    const remapped = report.entries.filter((entry) => entry.status === 'remapped')
+    const parts = [
+      `已导入宠物「${result.pet.name}」并切换：图片 新增${report.assetsAdded.length}/复用${report.assetsReused.length}`,
+    ]
+    if (report.entries.length > 0) {
+      parts.push(`动画 新增${imported}/相同${identical}/改号${remapped.length}`)
+      if (remapped.length > 0) {
+        parts.push(`改号映射 ${remapped.map((entry) => `${entry.requestedId} → ${entry.finalId}`).join('，')}`)
+      }
+    }
+    this.emit({
+      saveState: 'idle',
+      pendingMounts: null,
+      notice: {
+        kind: remapped.length > 0 || report.warnings.length > 0 ? 'warn' : 'info',
+        text: [...parts, ...report.warnings].join('；'),
+      },
+    })
+    return true
+  }
+
+  /**
+   * §12 宠物包: save credit metadata onto the ACTIVE preset. Attribution is
+   * preset metadata, not config-draft state — it neither reads nor writes the
+   * draft, so (unlike rename of the active pet) a dirty draft does not gate
+   * it. An unsaved config has no preset to credit: same warn as export.
+   */
+  async savePetAttribution(attribution: PetAttribution | null): Promise<boolean> {
+    if (this.disposed || this.snapshot.status !== 'ready') return false
+    const activePetId = this.snapshot.config?.activePetId ?? null
+    if (activePetId === null) {
+      this.emit({ notice: { kind: 'warn', text: '当前是未保存配置，选中一只宠物后再保存署名。' } })
+      return false
+    }
+    try {
+      await this.api.updatePetMeta(activePetId, { attribution })
+    } catch (error) {
+      if (!this.disposed) this.emit({ notice: { kind: 'error', text: `署名保存失败：${describeError(error)}` } })
+      return false
+    }
+    if (this.disposed) return true
+    await this.refreshPetsSafely()
+    this.emit({ notice: { kind: 'info', text: '署名已保存。' } })
     return true
   }
 

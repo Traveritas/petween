@@ -8,7 +8,7 @@
  * fetch involved.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigPatch, type UploadedAsset } from '../../src/client/api'
+import { ApiError, type ConfigPatch, type PetPackageImportResponse, type UploadedAsset } from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
 import {
   EditorStore,
@@ -16,7 +16,7 @@ import {
   type EditorApi,
 } from '../../src/client/stores/editor-store'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../../src/core/types'
+import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 
 interface ApiMocks {
@@ -33,6 +33,9 @@ interface ApiMocks {
   deleteAnimation: ReturnType<typeof vi.fn>
   importMotionPack: ReturnType<typeof vi.fn>
   exportMotionPack: ReturnType<typeof vi.fn>
+  exportPetPackage: ReturnType<typeof vi.fn>
+  importPetPackage: ReturnType<typeof vi.fn>
+  updatePetMeta: ReturnType<typeof vi.fn>
   uploadAsset: ReturnType<typeof vi.fn>
   deleteAsset: ReturnType<typeof vi.fn>
 }
@@ -141,6 +144,23 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
       namespace: 'user',
       animations: [],
     })),
+    exportPetPackage: vi.fn(async () => new ArrayBuffer(8)),
+    importPetPackage: vi.fn(async (): Promise<PetPackageImportResponse> => {
+      throw new Error('pet package import must be mocked per test')
+    }),
+    updatePetMeta: vi.fn(async (id: string, body: { name?: string; attribution?: PetAttribution | null }) => {
+      let updated: PetPreset | undefined
+      serverPets = serverPets.map((pet) => {
+        if (pet.id !== id) return pet
+        updated = { ...pet }
+        if (body.name !== undefined) updated.name = body.name
+        if (body.attribution === null) delete updated.attribution
+        else if (body.attribution !== undefined) updated.attribution = body.attribution
+        return updated
+      })
+      if (updated === undefined) throw new Error('unknown pet')
+      return { pet: structuredClone(updated) }
+    }),
     deleteAnimation: vi.fn(async (id: string) => {
       serverCustoms = serverCustoms.filter((custom) => custom.id !== id)
     }),
@@ -1304,6 +1324,242 @@ describe('EditorStore — Motion Pack import/export (P2)', () => {
     await loadStore(api)
     expect(await store.exportPack()).toBe(false)
     expect(mocks.exportMotionPack).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn' })
+  })
+})
+
+describe('EditorStore — pet package import/export (§12)', () => {
+  const preset = (id: string, name: string, scale = 1): PetPreset => {
+    const config = createDefaultPetweenConfig()
+    return {
+      id,
+      name,
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      scale,
+      poses: structuredClone(config.poses),
+      states: structuredClone(config.states),
+    }
+  }
+
+  it('exportPetPackage refuses an unsaved config with a warn notice', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+    expect(await store.exportPetPackage()).toBe(false)
+    expect(mocks.exportPetPackage).not.toHaveBeenCalled()
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn' })
+    expect(store.getSnapshot().notice?.text).toContain('选中一只宠物')
+  })
+
+  it('exportPetPackage downloads the active pet as pet-<name>.zip', async () => {
+    const pet = preset('pet_a', '蓝猫')
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [structuredClone(pet)], activePetId: pet.id, warnings: [] })),
+      exportPetPackage: vi.fn(async () => new ArrayBuffer(8)),
+    })
+    await loadStore(api)
+    // Node test env: the store's download guards probe URL.createObjectURL
+    // and document, both absent — stub minimal stand-ins like the UI tests do.
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+    const downloads: string[] = []
+    const anchor = {
+      href: '',
+      download: '',
+      click(this: { download: string }): void {
+        downloads.push(this.download)
+      },
+    }
+    vi.stubGlobal('document', { createElement: () => anchor })
+    try {
+      expect(await store.exportPetPackage()).toBe(true)
+      expect(mocks.exportPetPackage).toHaveBeenCalledWith('pet_a')
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      expect(downloads).toEqual(['pet-蓝猫.zip'])
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+      expect(store.getSnapshot().notice).toMatchObject({ kind: 'info', text: '已导出宠物包「蓝猫」。' })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('exportPetPackage surfaces a host rejection as an error notice', async () => {
+    const pet = preset('pet_a', '蓝猫')
+    const { api } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [structuredClone(pet)], activePetId: pet.id, warnings: [] })),
+      exportPetPackage: vi.fn(async () => {
+        throw new ApiError(400, 'PET_INCOMPLETE', 'pose asset aaaa1111bbbb2222 is missing')
+      }),
+    })
+    await loadStore(api)
+    expect(await store.exportPetPackage()).toBe(false)
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'error' })
+    expect(store.getSnapshot().notice?.text).toContain('导出宠物包失败')
+  })
+
+  it('importPetPackage sends the zip bytes, fully reloads and summarizes the report', async () => {
+    const importedPet: PetPreset = {
+      ...preset('pet_new', '鲸鱼娘'),
+      attribution: { character: 'DeepSeek 女仆鲸鱼娘（溟月）', license: 'CC BY-NC-SA 4.0' },
+    }
+    const switched = createDefaultPetweenConfig()
+    switched.activePetId = 'pet_new'
+    let imported = false
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () =>
+        imported
+          ? { pets: [structuredClone(importedPet)], activePetId: importedPet.id, warnings: [] }
+          : { pets: [], activePetId: null, warnings: [] },
+      ),
+      getConfig: vi.fn(async () => ({
+        config: structuredClone(imported ? switched : createDefaultPetweenConfig()),
+        assets: {},
+      })),
+      importPetPackage: vi.fn(async (): Promise<PetPackageImportResponse> => {
+        imported = true
+        return {
+          pet: structuredClone(importedPet),
+          config: structuredClone(switched),
+          report: {
+            assetsAdded: ['aaaa1111bbbb2222', 'cccc3333dddd4444'],
+            assetsReused: ['eeee5555ffff6666'],
+            entries: [
+              { requestedId: 'manga:pop', finalId: 'manga:pop', status: 'imported' as const },
+              { requestedId: 'manga:sway', finalId: 'manga:sway', status: 'identical' as const },
+              { requestedId: 'manga:y', finalId: 'manga:y-2', status: 'remapped' as const },
+            ],
+            mounts: { idle: { ambient: 'manga:sway' } },
+            warnings: ['1 个未被引用的图片清单条目已忽略'],
+          },
+        }
+      }),
+    })
+    await loadStore(api)
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'pet.zip', { type: 'application/zip' })
+    expect(await store.importPetPackage(file)).toBe(true)
+    expect(mocks.importPetPackage).toHaveBeenCalledTimes(1)
+    expect(new Uint8Array(mocks.importPetPackage.mock.calls[0]![0] as ArrayBuffer)).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
+    )
+    // The store reloaded EVERYTHING (config + customs + pets), not a partial refresh.
+    expect(mocks.getConfig).toHaveBeenCalledTimes(2)
+    expect(mocks.getAnimations).toHaveBeenCalledTimes(2)
+    expect(mocks.getPets).toHaveBeenCalledTimes(2)
+    const snap = store.getSnapshot()
+    expect(snap.config?.activePetId).toBe('pet_new')
+    expect(snap.pets.map((candidate) => candidate.name)).toEqual(['鲸鱼娘'])
+    expect(snap.pets[0]?.attribution?.character).toBe('DeepSeek 女仆鲸鱼娘（溟月）')
+    const notice = snap.notice
+    expect(notice).toBeDefined()
+    expect(notice?.kind).toBe('warn') // a remap and a warning are worth attention
+    expect(notice?.text).toContain('已导入宠物「鲸鱼娘」并切换')
+    expect(notice?.text).toContain('图片 新增2/复用1')
+    expect(notice?.text).toContain('动画 新增1/相同1/改号1')
+    expect(notice?.text).toContain('manga:y → manga:y-2')
+    expect(notice?.text).toContain('未被引用的图片清单条目')
+  })
+
+  it('importPetPackage rejects a bad package with an error notice and no reload', async () => {
+    const { api, mocks } = makeApi({
+      importPetPackage: vi.fn(async () => {
+        throw new ApiError(400, 'PACK_INVALID', 'zip entry count exceeds 64')
+      }),
+    })
+    await loadStore(api)
+    const file = new File([new Uint8Array([1])], 'pet.zip', { type: 'application/zip' })
+    expect(await store.importPetPackage(file)).toBe(false)
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'error' })
+    expect(store.getSnapshot().notice?.text).toContain('导入宠物包失败')
+    expect(mocks.getConfig).toHaveBeenCalledTimes(1) // no reload after a failure
+  })
+
+  it('importPetPackage asks before discarding a dirty draft; declining aborts before any request', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 2
+    })
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('window', { confirm })
+    try {
+      expect(await store.importPetPackage(new File([new Uint8Array([1])], 'p.zip'))).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.importPetPackage).not.toHaveBeenCalled()
+    expect(mocks.getConfig).toHaveBeenCalledTimes(1) // no reload happened
+    // The declined import leaves the dirty draft exactly as it was.
+    expect(store.getSnapshot().config?.global.scale).toBe(2)
+    expect(store.getSnapshot().saveState).toBe('dirty')
+  })
+
+  it('importPetPackage proceeds after the discard confirm and lands clean', async () => {
+    const importedPet = preset('pet_new', '鲸鱼娘')
+    const switched = createDefaultPetweenConfig()
+    switched.activePetId = 'pet_new'
+    let imported = false
+    const { api } = makeApi({
+      getPets: vi.fn(async () =>
+        imported
+          ? { pets: [structuredClone(importedPet)], activePetId: importedPet.id, warnings: [] }
+          : { pets: [], activePetId: null, warnings: [] },
+      ),
+      getConfig: vi.fn(async () => ({
+        config: structuredClone(imported ? switched : createDefaultPetweenConfig()),
+        assets: {},
+      })),
+      importPetPackage: vi.fn(async (): Promise<PetPackageImportResponse> => {
+        imported = true
+        return {
+          pet: structuredClone(importedPet),
+          config: structuredClone(switched),
+          report: { assetsAdded: [], assetsReused: [], entries: [], mounts: {}, warnings: [] },
+        }
+      }),
+    })
+    await loadStore(api)
+    store.updateConfig((draft) => {
+      draft.global.scale = 2
+    })
+    vi.stubGlobal('window', { confirm: vi.fn(() => true) })
+    try {
+      expect(await store.importPetPackage(new File([new Uint8Array([1])], 'p.zip'))).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const snap = store.getSnapshot()
+    // The import IS the discard: the draft bookkeeping resets with the reload.
+    expect(snap.saveState).toBe('idle')
+    expect(snap.config?.activePetId).toBe('pet_new')
+    expect(snap.config?.global.scale).toBe(1) // the discarded edit is gone
+    expect(snap.notice?.text).toContain('已导入宠物「鲸鱼娘」并切换')
+    expect(snap.notice?.text).not.toContain('动画') // no animations in the package
+  })
+
+  it('savePetAttribution writes credit onto the active pet and refreshes the list', async () => {
+    const pet = preset('pet_a', '蓝猫')
+    const attribution: PetAttribution = { character: '溟月', creators: ['上善无形'], license: 'CC0' }
+    let pets = [structuredClone(pet)]
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: structuredClone(pets), activePetId: pet.id, warnings: [] })),
+      updatePetMeta: vi.fn(async () => {
+        pets = [{ ...pet, attribution: structuredClone(attribution) }]
+      }),
+    })
+    await loadStore(api)
+    expect(await store.savePetAttribution(attribution)).toBe(true)
+    expect(mocks.updatePetMeta).toHaveBeenCalledWith('pet_a', { attribution })
+    expect(store.getSnapshot().pets[0]?.attribution).toEqual(attribution)
+    expect(store.getSnapshot().notice?.text).toContain('署名已保存')
+  })
+
+  it('savePetAttribution refuses an unsaved config', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+    expect(await store.savePetAttribution(null)).toBe(false)
+    expect(mocks.updatePetMeta).not.toHaveBeenCalled()
     expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn' })
   })
 })

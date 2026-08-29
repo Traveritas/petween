@@ -90,6 +90,13 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
     exportMotionPack: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
+    exportPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    importPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    updatePetMeta: vi.fn(async () => {}),
     uploadAsset: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),

@@ -60,6 +60,42 @@
   flex-wrap: wrap;
 }
 
+/* §12 宠物包: origin & credit block under the pet toolbar — collapsed by
+   default, one badge when the preset carries imported credit. */
+.attribution {
+  margin-top: 8px;
+}
+
+.attributionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attributionHeader .groupTitle {
+  margin-bottom: 0;
+}
+
+.badge {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l1, #d4d9e3);
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  white-space: nowrap;
+}
+
+.attributionFields {
+  border: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+
+.attributionFields .hint {
+  margin: 4px 0;
+}
+
 /* Fallback host for the SaveIndicator when no portal target is provided. */
 .saveRow {
   display: flex;

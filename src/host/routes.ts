@@ -17,7 +17,11 @@
  *                                  current | blank | draft — draft carries
  *                                  the slice itself and never touches the
  *                                  active pet, A2)
- * - prefix `/api/petween/pets`     GET / PUT / DELETE `<id>` subpath, POST `<id>/apply` (V1.1)
+ * - prefix `/api/petween/pets`     GET / PUT / DELETE `<id>` subpath (PUT
+ *                                  accepts `{name?, attribution?}` with
+ *                                  partial attribution semantics), POST
+ *                                  `<id>/apply` (V1.1), POST `import` +
+ *                                  GET `<id>/export` (Pet Package zip, §12)
  * - prefix `/petween-assets`       GET / HEAD `<id>` subpath (static)
  *
  * The `/api` prefix belongs to the connection gateway, but exact routes win
@@ -35,11 +39,21 @@ import { ANIMATION_KINDS, type AnimationDefinition } from '../motion/animation-d
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { PetError, petSliceFromConfig, validatePetId, type PetPreset } from './pets'
+import { PetError, petSliceFromConfig, validatePetId, type PetAttribution, type PetPreset } from './pets'
+import {
+  buildPetPackageExport,
+  buildPetPackageZip,
+  finalIdMapOf,
+  PetPackageError,
+  PET_PACKAGE_BODY_LIMIT,
+  rewritePetSliceAnimations,
+  validatePetPackage,
+} from './pet-package'
 import {
   buildMotionPackExport,
   validateMotionPack,
   type PackImportPlan,
+  type PackImportEntry,
   type PackMounts,
   type ValidatedMotionPack,
 } from './packs'
@@ -76,6 +90,7 @@ const API_FEATURES: readonly string[] = [
   'packs', // P2 Motion Pack: POST /packs/import + GET /packs/export
   'pets', // V1.1 pet presets incl. GET /pets/<id> (B10)
   'pets.draft', // A2: POST /pets from:'draft' forks a client slice
+  'pets.packages', // §12 Pet Package: POST /pets/import + GET /pets/<id>/export
   'events.sse', // /api/petween/events state stream (M4)
   'meta', // this endpoint
 ]
@@ -123,9 +138,17 @@ export interface RoutesDeps {
   importPack(pack: ValidatedMotionPack): Promise<PackImportPlan>
   /** Pet presets (V1.1): live directory scan plus identity/slice mutations. */
   listPets(): Promise<{ pets: PetPreset[]; warnings: string[] }>
-  createPet(name: unknown, slice: unknown): Promise<PetPreset>
+  /**
+   * Create a preset; the optional attribution (pet-package import, §12) is
+   * written into the SAME atomic record as the rest of the pet.
+   */
+  createPet(name: unknown, slice: unknown, attribution?: PetAttribution): Promise<PetPreset>
   readPet(id: string): Promise<PetPreset>
-  renamePet(id: string, name: unknown): Promise<PetPreset>
+  /**
+   * PUT /pets/&lt;id&gt; meta updates: rename and/or attribution with partial
+   * semantics (`attribution: null` clears the whole block).
+   */
+  updatePetMeta(id: string, changes: { name?: unknown; attribution?: null | Record<string, unknown> }): Promise<PetPreset>
   deletePet(id: string): Promise<void>
 }
 
@@ -221,6 +244,13 @@ function mapError(res: ServerResponse, error: unknown): void {
         sendError(res, 400, 'INVALID_PRESET', error.message)
         return
     }
+  }
+  if (error instanceof PetPackageError) {
+    // §12 import/export failures: manifest/zip problems and incomplete
+    // exports are client errors; the newer-version seam is its own code so
+    // clients can prompt for an upgrade instead of showing field noise.
+    sendError(res, 400, error.code, error.message, error.details)
+    return
   }
   sendError(res, 500, 'INTERNAL', 'internal error')
 }
@@ -704,6 +734,104 @@ async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: 
   throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET or POST')
 }
 
+/**
+ * §12 Pet Package import: POST /api/petween/pets/import with the zip body.
+ * Validation is fully read-only (host/pet-package.ts); writes then follow the
+ * fixed order assets → animations (the existing one-lock pack transaction) →
+ * pet creation LAST → immediate apply. A failure before creation rolls the
+ * fresh writes back best-effort — only ids that were free moments ago are
+ * removed, with the same fresh-state reference probes as the DELETE routes
+ * (B10), so a concurrent consumer that started reusing them keeps them.
+ */
+async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
+  if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected POST')
+  const body = await readBody(req, PET_PACKAGE_BODY_LIMIT)
+  const plan = await validatePetPackage(body)
+  const library = await deps.listAssets()
+  const assetsAdded: string[] = []
+  const assetsReused: string[] = []
+  const importedAnimationIds: string[] = []
+  let entries: PackImportEntry[] = []
+  let mounts: PackMounts = {}
+  try {
+    for (const asset of plan.assets) {
+      if (library[asset.id] !== undefined) {
+        assetsReused.push(asset.id) // content-addressed reuse: no second copy
+        continue
+      }
+      // The store re-runs the asset-side validation inside its lock and
+      // dedupes by content hash, so a concurrent import cannot duplicate it.
+      await deps.saveAsset(asset.data, asset.mimeType)
+      assetsAdded.push(asset.id)
+    }
+    if (plan.motionPack !== undefined) {
+      const packPlan = await deps.importPack(plan.motionPack)
+      entries = packPlan.entries
+      mounts = packPlan.mounts
+      plan.warnings.push(...packPlan.warnings)
+      importedAnimationIds.push(...packPlan.writes.map((definition) => definition.id))
+    }
+  } catch (error) {
+    for (const id of importedAnimationIds) {
+      await deps
+        .deleteAnimation(id, async (animationId) => {
+          const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+          return animationReferencedAnywhere(config, pets, animationId)
+        })
+        .catch(() => undefined)
+    }
+    for (const id of assetsAdded) {
+      await deps
+        .deleteAsset(id, async (assetId) => {
+          const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
+          return (
+            POSE_KEYS.some((key) => config.poses[key]?.assetId === assetId) ||
+            pets.some((pet) => POSE_KEYS.some((key) => pet.poses[key]?.assetId === assetId))
+          )
+        })
+        .catch(() => undefined)
+    }
+    throw error
+  }
+  // Creation is the last write: the slice's animation references point at
+  // the FINAL ids, attribution rides in the same atomic record.
+  const slice = rewritePetSliceAnimations(plan.pet, finalIdMapOf(entries), mounts)
+  const pet = await deps.createPet(plan.name, slice, plan.attribution)
+  const config = await deps.updateConfig(applyPatchFor(pet))
+  sendJson(res, 200, {
+    pet,
+    config,
+    report: { assetsAdded, assetsReused, entries, mounts, warnings: plan.warnings },
+  })
+}
+
+/**
+ * §12 Pet Package export: GET /api/petween/pets/<id>/export → the zip bytes
+ * (binary — sendJson never applies here). The manifest is complete or the
+ * request fails: EXPORT_INCOMPLETE names the missing assets/animations.
+ */
+async function handlePetPackageExport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps, id: string): Promise<void> {
+  if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
+  const pet = await deps.readPet(id) // NOT_FOUND for unknown ids
+  const [assets, { customs }] = await Promise.all([deps.listAssets(), deps.listAnimations()])
+  const manifest = buildPetPackageExport(pet, { assets, animations: customs })
+  const assetData: Record<string, Buffer> = {}
+  for (const entry of manifest.assets) {
+    const resolved = await deps.resolveAssetPath(entry.id)
+    let data: Buffer | null = null
+    if (resolved !== null) data = await readFile(resolved.path).catch(() => null)
+    if (data === null) throw new PetPackageError('EXPORT_INCOMPLETE', `asset file missing: ${entry.id}`, [entry.id])
+    assetData[entry.id] = data
+  }
+  const zipped = buildPetPackageZip(manifest, assetData)
+  res.writeHead(200, {
+    'content-type': 'application/zip',
+    'content-length': zipped.byteLength,
+    'x-content-type-options': 'nosniff',
+  })
+  res.end(zipped)
+}
+
 async function handlePets(
   req: IncomingMessage,
   res: ServerResponse,
@@ -716,6 +844,18 @@ async function handlePets(
   }
   const sub = safeDecode(pathname.slice(PETS_PATH.length + 1))
   if (sub === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+  // §12 Pet Package import lives under the pets prefix but is not a pet id;
+  // it must be picked off before PET_ID_RE rejects it as unknown.
+  if (sub === 'import') {
+    await handlePetPackageImport(req, res, deps)
+    return
+  }
+  if (sub.endsWith('/export')) {
+    const id = validatePetId(sub.slice(0, -'/export'.length))
+    if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
+    await handlePetPackageExport(req, res, deps, id)
+    return
+  }
   if (sub.endsWith('/apply')) {
     const id = validatePetId(sub.slice(0, -'/apply'.length))
     if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
@@ -742,9 +882,19 @@ async function handlePets(
     } catch {
       throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
     }
-    const name = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).name : undefined
-    // Name validation happens in the store (INVALID_PRESET → 400).
-    const pet = await deps.renamePet(id, name)
+    const source = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    // `{name?, attribution?}`: absent fields keep their current value;
+    // `attribution: null` clears the whole block, an object updates it
+    // field-by-field (partial semantics live in the store). Name and
+    // attribution validation both surface as INVALID_PRESET.
+    const attribution = source.attribution
+    if (attribution !== undefined && attribution !== null && (typeof attribution !== 'object' || Array.isArray(attribution))) {
+      throw new HttpError(400, 'INVALID_REQUEST', '"attribution" must be an object or null')
+    }
+    const pet = await deps.updatePetMeta(id, {
+      ...(source.name === undefined ? {} : { name: source.name }),
+      ...(attribution === undefined ? {} : { attribution: attribution as null | Record<string, unknown> }),
+    })
     sendJson(res, 200, { pet })
     return
   }

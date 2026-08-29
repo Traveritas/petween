@@ -6,11 +6,13 @@
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { PetweenConfig } from '../../src/core/types'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
@@ -67,9 +69,9 @@ beforeEach(async () => {
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
     importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
-    createPet: (name, slice) => petsStore.create(name, slice),
+    createPet: (name, slice, attribution) => petsStore.create(name, slice, attribution),
     readPet: (id) => petsStore.read(id),
-    renamePet: (id, name) => petsStore.rename(id, name),
+    updatePetMeta: (id, changes) => petsStore.updateMeta(id, changes),
     deletePet: (id) => petsStore.delete(id),
   }
   const routes: WebRoute[] = []
@@ -135,7 +137,7 @@ describe('GET /api/petween/meta (B2 capability discovery)', () => {
     expect(body.apiVersion).toBe(1)
     expect(body.configVersion).toBe(1)
     expect(body.revision).toBe(0) // fresh install
-    for (const feature of ['config', 'config.revision', 'assets', 'animations', 'pets', 'pets.draft', 'meta']) {
+    for (const feature of ['config', 'config.revision', 'assets', 'animations', 'pets', 'pets.draft', 'pets.packages', 'meta']) {
       expect(body.features).toContain(feature)
     }
     expect((await fetch(`${base}/api/petween/meta`, { method: 'POST' })).status).toBe(405)
@@ -1158,6 +1160,278 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     const kitty = listed.pets.find((candidate: PetPreset) => candidate.name === 'Kitty')
     await fetch(`${base}/api/petween/pets/${kitty.id}`, { method: 'DELETE' })
     expect((await fetch(`${base}/api/petween/assets/${assetId}`, { method: 'DELETE' })).status).toBe(200)
+  })
+})
+
+describe('/api/petween/pets import/export (Pet Package §12)', () => {
+  const putJson = (url: string, body: unknown): Promise<Response> =>
+    fetch(`${base}${url}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+  const makeTransition = (id: string, durationMs = 240): AnimationDefinition => ({
+    version: 1,
+    id,
+    name: `Anim ${id}`,
+    kind: 'transition',
+    durationMs,
+    repeat: { mode: 'once' },
+    tracks: [{ property: 'transition.scaleX', keyframes: [{ at: 0, value: 1 }, { at: 1, value: 1 }] }],
+    events: [{ at: 0.5, type: 'pose-swap' }],
+  })
+
+  const makeAmbient = (id: string): AnimationDefinition => ({
+    version: 1,
+    id,
+    name: `Anim ${id}`,
+    kind: 'ambient',
+    durationMs: 900,
+    repeat: { mode: 'loop' },
+    tracks: [{ property: 'sway.rotation', keyframes: [{ at: 0, value: -2 }, { at: 1, value: 2 }] }],
+  })
+
+  async function uploadPng(width: number, height: number): Promise<string> {
+    const res = await fetch(`${base}/api/petween/assets`, {
+      method: 'POST',
+      body: uploadBody(makePng(width, height), 'image/png'),
+    })
+    expect(res.status).toBe(200)
+    return ((await res.json()) as { asset: { id: string } }).asset.id
+  }
+
+  /**
+   * Seed a share-worthy active pet: two poses on real assets, a custom enter
+   * on idle and a custom ambient on thinking, saved as a preset carrying an
+   * attribution block.
+   */
+  async function seedShareablePet(): Promise<{ pet: PetPreset; idleId: string; thinkId: string }> {
+    const idleId = await uploadPng(2, 3)
+    const thinkId = await uploadPng(4, 5)
+    for (const definition of [makeTransition('user:pop'), makeAmbient('user:float')]) {
+      const res = await fetch(`${base}/api/petween/animations/${definition.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(definition),
+      })
+      expect(res.status).toBe(200)
+    }
+    const config = createDefaultPetweenConfig()
+    config.poses.idle.assetId = idleId
+    config.poses.thinking.assetId = thinkId
+    config.states.idle.enter.animationId = 'user:pop'
+    config.states.thinking.ambient.customAnimationId = 'user:float'
+    expect((await putJson('/api/petween/config', config)).status).toBe(200)
+    const saved = await fetch(`${base}/api/petween/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Share Me', from: 'current' }),
+    })
+    expect(saved.status).toBe(200)
+    const { pet } = (await saved.json()) as { pet: PetPreset }
+    const attribution = { character: '溟月', creators: ['上善无形'], license: 'CC BY-NC-SA 4.0' }
+    const meta = await putJson(`/api/petween/pets/${pet.id}`, { attribution })
+    expect(meta.status).toBe(200)
+    return { pet: ((await meta.json()) as { pet: PetPreset }).pet, idleId, thinkId }
+  }
+
+  const exportZip = async (id: string): Promise<Buffer> => {
+    const res = await fetch(`${base}/api/petween/pets/${id}/export`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/zip')
+    expect(Number(res.headers.get('content-length'))).toBeGreaterThan(0)
+    return Buffer.from(await res.arrayBuffer())
+  }
+
+  const postImport = (body: Buffer): Promise<Response> =>
+    fetch(`${base}/api/petween/pets/import`, { method: 'POST', body: new Uint8Array(body) })
+
+  it('GET <id>/export streams a complete zip: manifest, both assets, derived mounts, attribution', async () => {
+    const { pet, idleId, thinkId } = await seedShareablePet()
+    const zip = unzipSync(new Uint8Array(await exportZip(pet.id)))
+    expect(Object.keys(zip).sort()).toEqual([`assets/${idleId}.png`, `assets/${thinkId}.png`, 'manifest.json'].sort())
+    const manifest = JSON.parse(strFromU8(zip['manifest.json'] as Uint8Array)) as Record<string, any>
+    expect(manifest).toMatchObject({ format: 'pet-package', version: 1, name: 'Share Me' })
+    expect(manifest.pet.scale).toBe(pet.scale)
+    expect(manifest.pet.poses.idle.assetId).toBe(idleId)
+    expect(manifest.assets.map((entry: { id: string }) => entry.id).sort()).toEqual([idleId, thinkId].sort())
+    expect(manifest.motionPack.namespace).toBe('mixed')
+    expect(manifest.motionPack.mounts).toEqual({ idle: { enter: 'user:pop' }, thinking: { ambient: 'user:float' } })
+    expect(manifest.attribution).toEqual({ character: '溟月', creators: ['上善无形'], license: 'CC BY-NC-SA 4.0' })
+    // The shipped bytes really hash to the content-addressed id.
+    const sha = createHash('sha256').update(Buffer.from(zip[`assets/${idleId}.png`] as Uint8Array)).digest('hex')
+    expect(sha.startsWith(idleId)).toBe(true)
+  })
+
+  it('export → import round trip: identical slice, attribution carried, assets reused, pet activated', async () => {
+    const { pet, idleId, thinkId } = await seedShareablePet()
+    const res = await postImport(await exportZip(pet.id))
+    expect(res.status).toBe(200)
+    const { pet: imported, config, report } = (await res.json()) as {
+      pet: PetPreset
+      config: PetweenConfig
+      report: Record<string, unknown>
+    }
+    expect(imported.id).not.toBe(pet.id)
+    expect(imported.name).toBe('Share Me')
+    expect(imported.scale).toBe(pet.scale)
+    expect(imported.poses).toEqual(pet.poses)
+    expect(imported.states).toEqual(pet.states)
+    expect(imported.attribution).toEqual(pet.attribution)
+    // Import即用: the new pet is active and its slice is live.
+    expect(config.activePetId).toBe(imported.id)
+    expect(config.poses.idle.assetId).toBe(idleId)
+    expect(config.states.thinking.ambient.customAnimationId).toBe('user:float')
+    // The verbatim client report contract.
+    expect(report).toEqual({
+      assetsAdded: [],
+      assetsReused: [idleId, thinkId],
+      entries: [
+        { requestedId: 'user:pop', finalId: 'user:pop', status: 'identical' },
+        { requestedId: 'user:float', finalId: 'user:float', status: 'identical' },
+      ],
+      mounts: { idle: { enter: 'user:pop' }, thinking: { ambient: 'user:float' } },
+      warnings: [],
+    })
+    const listed = (await (await fetch(`${base}/api/petween/pets`)).json()) as {
+      pets: PetPreset[]
+      activePetId: string
+    }
+    expect(listed.pets.map((candidate) => candidate.name)).toEqual(['Share Me', 'Share Me'])
+    expect(listed.activePetId).toBe(imported.id)
+  })
+
+  it('an animation collision remaps: final ids land in the new pet, the mounts report and the applied config', async () => {
+    const { pet } = await seedShareablePet()
+    const bytes = await exportZip(pet.id)
+    // Claim user:pop with DIFFERENT content before importing the package.
+    const claim = await fetch(`${base}/api/petween/animations/user:pop`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(makeTransition('user:pop', 500)),
+    })
+    expect(claim.status).toBe(200)
+    const res = await postImport(bytes)
+    expect(res.status).toBe(200)
+    const { pet: imported, config, report } = (await res.json()) as {
+      pet: PetPreset
+      config: PetweenConfig
+      report: { entries: unknown[]; mounts: Record<string, unknown> }
+    }
+    expect(report.entries).toEqual([
+      { requestedId: 'user:pop', finalId: 'user:pop-2', status: 'remapped' },
+      { requestedId: 'user:float', finalId: 'user:float', status: 'identical' },
+    ])
+    expect(report.mounts).toEqual({ idle: { enter: 'user:pop-2' }, thinking: { ambient: 'user:float' } })
+    expect(imported.states.idle.enter.animationId).toBe('user:pop-2')
+    expect(config.states.idle.enter.animationId).toBe('user:pop-2')
+    const { customs } = (await (await fetch(`${base}/api/petween/animations`)).json()) as {
+      customs: AnimationDefinition[]
+    }
+    expect(customs.map((definition) => definition.id).sort()).toEqual(['user:float', 'user:pop', 'user:pop-2'])
+  })
+
+  it('a structurally invalid package is a 400 and nothing is written', async () => {
+    const snapshot = async (): Promise<Record<string, string[]>> => {
+      const responses = await Promise.all([
+        fetch(`${base}/api/petween/animations`),
+        fetch(`${base}/api/petween/pets`),
+        fetch(`${base}/api/petween/config`),
+      ])
+      const [animations, pets, config] = (await Promise.all(responses.map((response) => response.json()))) as unknown as [
+        { customs: AnimationDefinition[] },
+        { pets: PetPreset[] },
+        { assets: Record<string, unknown> },
+      ]
+      return {
+        animationIds: animations.customs.map((definition) => definition.id).sort(),
+        petIds: pets.pets.map((candidate) => candidate.id).sort(),
+        assetIds: Object.keys(config.assets).sort(),
+      }
+    }
+    const before = await snapshot()
+    const evil = Buffer.from(
+      zipSync({
+        'manifest.json': strToU8(JSON.stringify({ format: 'pet-package', version: 1, name: 'Evil', pet: {}, assets: [] })),
+        '../evil.png': new Uint8Array(makePng()),
+      }),
+    )
+    const res = await postImport(evil)
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PET_PACKAGE_INVALID')
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it('a failure after the asset writes rolls the fresh assets back (no orphans, no half pet)', async () => {
+    const png = makePng(6, 7)
+    const sha256 = createHash('sha256').update(png).digest('hex')
+    const id = sha256.slice(0, 16)
+    // user:0draft passes package validation but is the store's reserved id:
+    // the asset saves first, then the animation transaction throws.
+    const manifest = {
+      format: 'pet-package',
+      version: 1,
+      name: 'Bad',
+      pet: { scale: 1, poses: { idle: { assetId: id } }, states: { idle: { enter: { animationId: 'user:0draft' } } } },
+      assets: [{ id, sha256, file: `assets/${id}.png`, mimeType: 'image/png', width: 6, height: 7 }],
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Bad 动画',
+        namespace: 'user',
+        animations: [makeTransition('user:0draft')],
+        mounts: { idle: { enter: 'user:0draft' } },
+      },
+    }
+    const bytes = Buffer.from(
+      zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), [`assets/${id}.png`]: new Uint8Array(png) }),
+    )
+    const res = await postImport(bytes)
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_ANIMATION')
+    const { assets } = (await (await fetch(`${base}/api/petween/config`)).json()) as { assets: Record<string, unknown> }
+    expect(assets[id]).toBeUndefined()
+    const { pets } = (await (await fetch(`${base}/api/petween/pets`)).json()) as { pets: PetPreset[] }
+    expect(pets).toEqual([])
+  })
+
+  it('PUT /pets/<id> updates attribution field-by-field, clears with null; renames keep it', async () => {
+    const blank = await fetch(`${base}/api/petween/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Meta', from: 'blank' }),
+    })
+    const { pet } = (await blank.json()) as { pet: PetPreset }
+    expect((await putJson(`/api/petween/pets/${pet.id}`, { attribution: { character: '溟月' } })).status).toBe(200)
+    const partial = (await (await putJson(`/api/petween/pets/${pet.id}`, { attribution: { creators: ['上善无形'] } })).json()) as {
+      pet: PetPreset
+    }
+    expect(partial.pet.attribution).toEqual({ character: '溟月', creators: ['上善无形'] })
+    const fieldCleared = (await (await putJson(`/api/petween/pets/${pet.id}`, { attribution: { character: null } })).json()) as {
+      pet: PetPreset
+    }
+    expect(fieldCleared.pet.attribution).toEqual({ creators: ['上善无形'] })
+    const renamed = (await (await putJson(`/api/petween/pets/${pet.id}`, { name: 'Renamed' })).json()) as { pet: PetPreset }
+    expect(renamed.pet.name).toBe('Renamed')
+    expect(renamed.pet.attribution).toEqual({ creators: ['上善无形'] })
+    const cleared = (await (await putJson(`/api/petween/pets/${pet.id}`, { attribution: null })).json()) as { pet: PetPreset }
+    expect(cleared.pet.attribution).toBeUndefined()
+    // Invalid shapes are 400s and change nothing.
+    expect((await putJson(`/api/petween/pets/${pet.id}`, { attribution: { creators: 'nope' } })).status).toBe(400)
+    expect((await putJson(`/api/petween/pets/${pet.id}`, { attribution: 'nope' })).status).toBe(400)
+    // A config save mirrors the slice WITHOUT dropping the stored attribution
+    // (the attribution lives on the record, the mirror only rewrites slices).
+    await putJson(`/api/petween/pets/${pet.id}`, { attribution: { license: 'MIT' } })
+    await putJson('/api/petween/config', { global: { scale: 2 } })
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(onDisk.attribution).toEqual({ license: 'MIT' })
+    expect(onDisk.scale).toBe(2)
+  })
+
+  it('export 404s unknown pets; import/export method and body guards hold', async () => {
+    expect((await fetch(`${base}/api/petween/pets/pet_missing/export`)).status).toBe(404)
+    expect((await fetch(`${base}/api/petween/pets/import`, { method: 'GET' })).status).toBe(405)
+    expect((await fetch(`${base}/api/petween/pets/pet_x/export`, { method: 'POST' })).status).toBe(405)
+    const notZip = await postImport(Buffer.from('not a zip at all'))
+    expect(notZip.status).toBe(400)
+    expect(((await notZip.json()) as { error: { code: string } }).error.code).toBe('PET_PACKAGE_INVALID')
   })
 })
 

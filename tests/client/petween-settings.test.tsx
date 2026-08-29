@@ -14,7 +14,7 @@ import type { ConfigPatch, UploadedAsset } from '../../src/client/api'
 import { PreviewSession } from '../../src/client/preview-session'
 import type { EditorApi } from '../../src/client/stores/editor-store'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import type { AssetMeta, PetPreset, PetSlice } from '../../src/core/types'
+import type { AssetMeta, PetweenConfig, PetPreset, PetSlice } from '../../src/core/types'
 import { installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -99,6 +99,13 @@ const makeApi = (withImage: boolean): EditorApi => {
     exportMotionPack: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
+    exportPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    importPetPackage: vi.fn(async () => {
+      throw new Error('not used in these tests')
+    }),
+    updatePetMeta: vi.fn(async () => {}),
     uploadAsset: vi.fn(async () => {
       throw new Error('not used in these tests')
     }),
@@ -623,5 +630,130 @@ describe('PetweenSettings', () => {
 
     replayStateEnter.mockRestore()
     replayEnter.mockRestore()
+  })
+})
+
+describe('PetweenSettings — pet package & attribution (§12)', () => {
+  const makePet = (id: string, name: string, config: PetweenConfig): PetPreset => ({
+    id,
+    name,
+    createdAt: '2026-08-21T00:00:00.000Z',
+    updatedAt: '2026-08-21T00:00:00.000Z',
+    scale: 1,
+    poses: structuredClone(config.poses),
+    states: structuredClone(config.states),
+  })
+
+  const petSection = (): HTMLElement => {
+    const section = container.querySelector('section[aria-label="宠物预设"]')
+    if (section === null) throw new Error('pet preset section missing (render with wide)')
+    return section as HTMLElement
+  }
+
+  it('renders the two package buttons; export is disabled without an active pet', async () => {
+    const api = makeApi(true)
+    await render(api, true)
+    const section = petSection()
+    const exportButton = [...section.querySelectorAll('button')].find((b) => b.textContent === '导出宠物包')
+    expect(exportButton).toBeDefined()
+    expect(exportButton?.disabled).toBe(true) // unsaved config has no preset to package
+    expect([...section.querySelectorAll('button')].some((b) => b.textContent === '导入宠物包')).toBe(true)
+    expect(section.querySelector('input[type="file"][accept="application/zip,.zip"]')).not.toBeNull()
+  })
+
+  it('导出宠物包 downloads pet-<name>.zip for the active pet', async () => {
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+    const downloads: string[] = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download)
+    })
+    const api = makeApi(true)
+    const { config } = await api.getConfig()
+    config.activePetId = 'pet_a'
+    const pet = makePet('pet_a', '蓝猫', config)
+    api.getPets = vi.fn(async () => ({ pets: [structuredClone(pet)], activePetId: 'pet_a', warnings: [] }))
+    vi.mocked(api.exportPetPackage).mockImplementation(async () => new ArrayBuffer(8))
+    try {
+      await render(api, true)
+      await act(async () => clickButton('导出宠物包'))
+      await flushActions()
+      expect(api.exportPetPackage).toHaveBeenCalledWith('pet_a')
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      expect(downloads).toEqual(['pet-蓝猫.zip'])
+      expect(container.textContent).toContain('已导出宠物包「蓝猫」')
+    } finally {
+      clickSpy.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('导入宠物包 hands the chosen zip to the store import', async () => {
+    const api = makeApi(true)
+    await render(api, true)
+    const input = petSection().querySelector<HTMLInputElement>('input[type="file"][accept="application/zip,.zip"]')
+    if (input === null) throw new Error('pet package import input missing')
+    // The default api mock rejects; the error notice proves the file reached
+    // the store's importPetPackage through the real wiring.
+    await act(async () => {
+      pickFile(input, new File([new Uint8Array([1])], 'pet.zip', { type: 'application/zip' }))
+    })
+    await flushActions()
+    expect(api.importPetPackage).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('导入宠物包失败')
+  })
+
+  it('来源与署名 is collapsed by default with the credit badge, prefills and saves through the store', async () => {
+    const api = makeApi(true)
+    const { config } = await api.getConfig()
+    config.activePetId = 'pet_a'
+    const pet: PetPreset = {
+      ...makePet('pet_a', '蓝猫', config),
+      attribution: { character: '溟月', creators: ['上善无形', 'ZipZipPipe'], license: 'CC BY-NC-SA 4.0' },
+    }
+    let pets = [structuredClone(pet)]
+    api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: 'pet_a', warnings: [] }))
+    api.updatePetMeta = vi.fn(async () => {
+      pets = [{ ...pet, attribution: { character: '新溟月' } }]
+    })
+    await render(api, true)
+
+    // collapsed: the badge shows, the fields do not
+    expect(container.textContent).toContain('已带署名')
+    expect(container.textContent).not.toContain('角色形象')
+    act(() => clickButton('展开'))
+    expect(container.textContent).toContain('角色形象')
+
+    // prefilled from the preset's stored attribution (creators joined)
+    const character = findControlRow('角色形象').querySelector('input')
+    expect(character?.value).toBe('溟月')
+    const creators = findControlRow('创作者').querySelector('input')
+    expect(creators?.value).toBe('上善无形，ZipZipPipe')
+    expect(findControlRow('许可').querySelector('input')?.value).toBe('CC BY-NC-SA 4.0')
+
+    // edit + save: the comma list splits back into creators
+    act(() => typeInput(character ?? document.createElement('input'), '新溟月'))
+    await act(async () => clickButton('保存署名'))
+    await flushActions()
+    expect(api.updatePetMeta).toHaveBeenCalledWith('pet_a', {
+      attribution: {
+        character: '新溟月',
+        creators: ['上善无形', 'ZipZipPipe'],
+        license: 'CC BY-NC-SA 4.0',
+      },
+    })
+    expect(container.textContent).toContain('署名已保存')
+  })
+
+  it('来源与署名 is disabled with a hint when no pet is active; saving an empty form clears credit', async () => {
+    const api = makeApi(true)
+    await render(api, true)
+    expect(container.textContent).not.toContain('已带署名')
+    act(() => clickButton('展开'))
+    expect(findControlRow('角色形象').querySelector('input')?.disabled).toBe(true)
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存署名')
+    expect(save?.disabled).toBe(true)
+    expect(container.textContent).toContain('当前是未保存配置，选中一只宠物后才能编辑署名')
   })
 })

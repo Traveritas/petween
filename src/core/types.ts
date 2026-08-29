@@ -198,12 +198,25 @@ export interface PetSlice {
   states: Record<PoseKey, StateAppearance>
 }
 
+/**
+ * §12 宠物包: optional origin/credit metadata stored on a preset. Travels
+ * inside exported pet packages verbatim so credit survives sharing.
+ */
+export interface PetAttribution {
+  character?: string
+  creators?: string[]
+  sourceUrl?: string
+  license?: string
+}
+
 /** A stored pet preset: the character slice plus identity and timestamps. */
 export interface PetPreset extends PetSlice {
   id: string
   name: string
   createdAt: string
   updatedAt: string
+  /** §12 宠物包: absent = no credit recorded (never required by validation). */
+  attribution?: PetAttribution
 }
 
 export type MotionTargetReason =

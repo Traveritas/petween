@@ -1,5 +1,7 @@
 # DSH Motion Pet — 完整项目开发文档
 
+> **⚠️ 历史存档（改名前快照）**：本文是 v0.2 交接规格的原文存档，写作时项目暂定名 `dsh-motion-pet`。项目已于 **v1.2.0（2026-08-26）全局更名为 Petween**：包名 / cordis 服务名 / HTTP 路由（`/api/petween/*`、`/petween-assets/*`）/ CSS 前缀 / 本地数据目录（`$DSH_HOME/petween/`）均已更新，文中出现的旧名均指同一事物。旧名 → 新名对照见 [implementation-notes.md](implementation-notes.md) 的改名对照表；现行对外契约以 [README](../README.md) 与 [motion-format.md](motion-format.md) 为准。
+
 > 文档版本：v0.2  
 > 日期：2026-08-18  
 > 项目暂定名：`dsh-motion-pet`  

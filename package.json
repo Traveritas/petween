@@ -9,6 +9,9 @@
     "url": "https://github.com/Traveritas/petween.git"
   },
   "homepage": "https://github.com/Traveritas/petween",
+  "bugs": {
+    "url": "https://github.com/Traveritas/petween/issues"
+  },
   "keywords": [
     "dsh",
     "deepseek-harness",

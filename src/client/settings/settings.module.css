@@ -492,6 +492,24 @@
   margin-bottom: 6px;
 }
 
+/* §11 挂载应用: the pending-mounts banner above the library toolbar. */
+.mountBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--petween-border, #d0d4dc);
+  border-radius: 8px;
+  background: var(--petween-banner-bg, #f3f5f9);
+}
+
+.mountBannerText {
+  flex: 1 1 auto;
+  min-width: 200px;
+}
+
 .animationList {
   display: flex;
   flex-direction: column;

@@ -258,6 +258,12 @@ export interface PackImportResponse {
   /** Mounts resolved to FINAL ids — applying them stays the caller's choice. */
   mounts: Record<string, { enter?: string; ambient?: string }>
   warnings: string[]
+  /**
+   * §11 挂载应用: present only when the pack carries mounts. A minimal
+   * states patch (only the mounted fields, FINAL ids) — the editor merges
+   * it into its draft on confirmation; a raw consumer may PUT it as-is.
+   */
+  applyPatch?: { states: Record<string, { enter?: { animationId: string }; ambient?: { customAnimationId: string } }> }
 }
 
 /** The export/import manifest (v1: single-file JSON, definitions inline). */

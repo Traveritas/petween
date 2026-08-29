@@ -127,10 +127,22 @@ export interface EditorSnapshot {
   loadError: string | null
   saveError: string | null
   notice: EditorNotice | null
+  /** §11 挂载应用: mounts from the last imported pack, awaiting confirmation. */
+  pendingMounts: PendingMountApply | null
   /** UX-3: the pose slot whose image upload is in flight (one at a time). */
   importing: PoseKey | null
   /** Bumped only when config/assets content changes — drives the Live Preview sync. */
   configRevision: number
+}
+
+/**
+ * §11 挂载应用: what an imported pack wants mounted, kept until the user
+ * applies it into the draft or dismisses it. A newer import replaces it.
+ */
+export interface PendingMountApply {
+  packName: string
+  mounts: Record<string, { enter?: string; ambient?: string }>
+  applyPatch: NonNullable<PackImportResponse['applyPatch']>
 }
 
 export interface EditorStoreOptions {
@@ -194,6 +206,7 @@ export class EditorStore {
       loadError: null,
       saveError: null,
       notice: null,
+      pendingMounts: null,
       importing: null,
       configRevision: 0,
     }
@@ -582,13 +595,55 @@ export class EditorStore {
     if (remapped.length > 0) {
       parts.push(`${remapped.length} 因重名改号（${remapped.map((entry) => `${entry.requestedId} → ${entry.finalId}`).join('，')}）`)
     }
+    // §11 挂载应用: keep the pack's mounts pending — the library banner offers
+    // one-click apply into the draft. A newer import replaces the previous one.
+    const pendingMounts: PendingMountApply | null =
+      result.applyPatch !== undefined && Object.keys(result.mounts).length > 0
+        ? { packName: result.name, mounts: result.mounts, applyPatch: result.applyPatch }
+        : null
+    if (pendingMounts !== null) parts.push('包带挂载建议，可在动画库顶部一键应用到草稿')
     this.emit({
       notice: {
         kind: remapped.length > 0 || result.warnings.length > 0 ? 'warn' : 'info',
         text: [...parts, ...result.warnings].join('；'),
       },
+      ...(pendingMounts !== null ? { pendingMounts } : {}),
     })
     return true
+  }
+
+  /**
+   * §11 挂载应用: merge the pending mounts into the local draft (only the
+   * mounted fields; everything else keeps the draft's values). The editor's
+   * manual-save flow then persists them — the mirror writes them into the
+   * ACTIVE pet on save, which is "apply the pack onto the current pet".
+   */
+  applyPendingMounts(): void {
+    const pending = this.snapshot.pendingMounts
+    const draft = this.snapshot.config
+    if (pending === null || draft === null || this.disposed) return
+    for (const [slot, fields] of Object.entries(pending.applyPatch.states)) {
+      const state = draft.states[slot as PoseKey]
+      if (state === undefined) continue
+      if (fields.enter?.animationId !== undefined) state.enter.animationId = fields.enter.animationId
+      if (fields.ambient?.customAnimationId !== undefined) {
+        state.ambient.customAnimationId = fields.ambient.customAnimationId
+      }
+    }
+    this.dirty = true
+    this.emit({
+      pendingMounts: null,
+      configRevision: this.snapshot.configRevision + 1,
+      saveState: this.saveInFlight ? 'saving' : 'dirty',
+      saveError: null,
+      notice: { kind: 'info', text: '挂载已并入当前草稿，点击「保存修改」后生效。' },
+    })
+  }
+
+  /** §11 挂载应用: drop the pending mounts without touching the draft. */
+  dismissPendingMounts(): void {
+    if (this.snapshot.pendingMounts === null || this.disposed) return
+    this.emit({ pendingMounts: null })
   }
 
   /**

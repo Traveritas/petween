@@ -441,6 +441,47 @@ describe('/api/petween/packs (P2 Motion Pack)', () => {
     expect((await listedIds()).sort()).toEqual(['manga:pop', 'manga:pop-2'])
   })
 
+  it('a pack with mounts also returns an applyPatch with FINAL ids; PUTting it mounts the animations', async () => {
+    const enter = { ...packAnimation('manga:pop'), kind: 'transition', events: [{ at: 0.5, type: 'pose-swap' }] }
+    const ambient = {
+      ...packAnimation('manga:sway'),
+      kind: 'ambient',
+      repeat: { mode: 'loop' },
+      tracks: [{ property: 'sway.rotation', keyframes: [{ at: 0, value: 0 }, { at: 1, value: 3 }] }],
+    }
+    // Claim manga:pop with different content first, so the mounted enter id remaps.
+    await postImport(packBody({ animations: [{ ...enter, durationMs: 240 }] }))
+    const body = await (
+      await postImport(
+        packBody({
+          animations: [enter, ambient],
+          mounts: { idle: { enter: 'manga:pop' }, thinking: { ambient: 'manga:sway' } },
+        }),
+      )
+    ).json()
+    // enter remapped, ambient imported as-is → the patch carries the FINAL ids only.
+    expect(body.applyPatch).toEqual({
+      states: {
+        idle: { enter: { animationId: 'manga:pop-2' } },
+        thinking: { ambient: { customAnimationId: 'manga:sway' } },
+      },
+    })
+    // The patch is a plain config states patch: PUT mounts both animations
+    // onto the live config (the mirror then writes the active pet — §11).
+    const applied = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body.applyPatch),
+    })
+    expect(applied.status).toBe(200)
+    const { config } = (await applied.json()) as { config: PetweenConfig }
+    expect(config.states.idle.enter.animationId).toBe('manga:pop-2')
+    expect(config.states.thinking.ambient.customAnimationId).toBe('manga:sway')
+    // A mounts-free import carries no applyPatch at all.
+    const bare = await (await postImport(packBody({ animations: [ambient] }))).json()
+    expect(bare.applyPatch).toBeUndefined()
+  })
+
   it('rejects malformed packs with 400 PACK_INVALID and nothing is written', async () => {
     for (const broken of [
       packBody({ format: 'nope' }),

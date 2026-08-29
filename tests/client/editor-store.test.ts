@@ -1248,6 +1248,57 @@ describe('EditorStore — Motion Pack import/export (P2)', () => {
     expect(store.getSnapshot().customs).toEqual([])
   })
 
+  it('importPack with mounts keeps them pending; applyPendingMounts merges the draft and clears', async () => {
+    const applyPatch = { states: { idle: { ambient: { customAnimationId: 'manga:sway' } } } }
+    const { api } = makeApi({
+      importMotionPack: vi.fn(async () => ({
+        name: '挂载包',
+        namespace: 'manga',
+        entries: [{ requestedId: 'manga:sway', finalId: 'manga:sway', status: 'imported' as const }],
+        mounts: { idle: { ambient: 'manga:sway' } },
+        warnings: [],
+        applyPatch,
+      })),
+      getAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
+    })
+    await loadStore(api)
+    expect(await store.importPack(new File(['{}'], 'p.json'))).toBe(true)
+    expect(store.getSnapshot().pendingMounts).toEqual({
+      packName: '挂载包',
+      mounts: { idle: { ambient: 'manga:sway' } },
+      applyPatch,
+    })
+    expect(store.getSnapshot().notice?.text).toContain('挂载建议')
+
+    store.applyPendingMounts()
+    const snap = store.getSnapshot()
+    expect(snap.pendingMounts).toBeNull()
+    expect(snap.config?.states.idle.ambient.customAnimationId).toBe('manga:sway')
+    expect(snap.saveState).toBe('dirty') // §11: applied into the DRAFT, saved explicitly
+    expect(snap.notice?.text).toContain('保存修改')
+  })
+
+  it('dismissPendingMounts drops the banner without touching the draft', async () => {
+    const { api } = makeApi({
+      importMotionPack: vi.fn(async () => ({
+        name: '挂载包',
+        namespace: 'manga',
+        entries: [],
+        mounts: { idle: { ambient: 'manga:sway' } },
+        warnings: [],
+        applyPatch: { states: { idle: { ambient: { customAnimationId: 'manga:sway' } } } },
+      })),
+      getAnimations: vi.fn(async () => ({ customs: [], warnings: [], normalized: [] })),
+    })
+    await loadStore(api)
+    await store.importPack(new File(['{}'], 'p.json'))
+    expect(store.getSnapshot().pendingMounts).not.toBeNull()
+    store.dismissPendingMounts()
+    expect(store.getSnapshot().pendingMounts).toBeNull()
+    expect(store.getSnapshot().config?.states.idle.ambient.customAnimationId).toBeUndefined()
+    expect(store.getSnapshot().saveState).toBe('idle')
+  })
+
   it('exportPack without customs is a no-op warning', async () => {
     const { api, mocks } = makeApi()
     await loadStore(api)

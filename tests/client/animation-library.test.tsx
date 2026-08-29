@@ -927,6 +927,34 @@ describe('AnimationLibrary — Motion Pack buttons (P2)', () => {
     expect(container.textContent).toContain('导入动画包失败')
   })
 
+  it('导入带挂载的包后出现横幅；「应用挂载」并入草稿并清掉横幅', async () => {
+    const { api, mocks } = makeApi()
+    mocks.importMotionPack.mockImplementation(async () => ({
+      name: '挂载包',
+      namespace: 'manga',
+      entries: [{ requestedId: 'manga:sway', finalId: 'manga:sway', status: 'imported' as const }],
+      mounts: { idle: { ambient: 'manga:sway' } },
+      warnings: [],
+      applyPatch: { states: { idle: { ambient: { customAnimationId: 'manga:sway' } } } },
+    }))
+    await render(api, true)
+    const input = librarySection().querySelector<HTMLInputElement>('input[type="file"][accept="application/json,.json"]')
+    if (input === null) throw new Error('pack import file input missing')
+    const file = new File(['{}'], 'pack.json', { type: 'application/json' })
+    Object.defineProperty(input, 'files', { value: [file] })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    // The banner lists the pack name, the state slot (Chinese label) and both actions.
+    expect(container.textContent).toContain('挂载建议')
+    expect(librarySection().textContent).toContain('待机')
+    await act(async () => {
+      libraryButton('应用挂载').click()
+    })
+    expect(container.textContent).not.toContain('挂载建议')
+    expect(container.textContent).toContain('挂载已并入当前草稿')
+  })
+
   it('导出动画包 downloads a manifest for every custom animation', async () => {
     const createObjectURL = vi.fn(() => 'blob:mock')
     const revokeObjectURL = vi.fn()

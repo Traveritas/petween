@@ -40,6 +40,7 @@ import {
   buildMotionPackExport,
   validateMotionPack,
   type PackImportPlan,
+  type PackMounts,
   type ValidatedMotionPack,
 } from './packs'
 import { ConfigValidationError, validateAssetId, validateConfigPatch } from './validation'
@@ -339,13 +340,34 @@ async function handlePackImport(req: IncomingMessage, res: ServerResponse, deps:
     throw new HttpError(400, 'PACK_INVALID', 'invalid Motion Pack', validation.errors)
   }
   const plan = await deps.importPack(validation.pack)
+  const mounts = plan.mounts
+  const mountedSlots = Object.keys(mounts)
   sendJson(res, 200, {
     name: validation.pack.name,
     namespace: validation.pack.namespace,
     entries: plan.entries,
-    mounts: plan.mounts,
+    mounts,
     warnings: plan.warnings,
+    // Minimal states patch with the mounts resolved to FINAL ids (§11 挂载
+    // 应用): applying stays the caller's choice — the editor merges it into
+    // its draft on confirmation; a raw API consumer can PUT it as-is.
+    ...(mountedSlots.length > 0 ? { applyPatch: { states: mountsStatesPatch(mounts) } } : {}),
   })
+}
+
+/**
+ * §11 挂载应用: the minimal per-slot states patch — only the mounted fields,
+ * everything else falls back to the live config through patch semantics.
+ */
+function mountsStatesPatch(mounts: PackMounts): Record<string, Record<string, unknown>> {
+  const states: Record<string, Record<string, unknown>> = {}
+  for (const [slot, mount] of Object.entries(mounts)) {
+    const state: Record<string, unknown> = {}
+    if (mount.enter !== undefined) state.enter = { animationId: mount.enter }
+    if (mount.ambient !== undefined) state.ambient = { customAnimationId: mount.ambient }
+    states[slot] = state
+  }
+  return states
 }
 
 /**

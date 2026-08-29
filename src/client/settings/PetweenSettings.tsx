@@ -688,6 +688,7 @@ export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
           config={config}
           assets={snapshot.assets}
           configRevision={snapshot.configRevision}
+          pendingMounts={snapshot.pendingMounts}
         />
       ) : null}
     </div>

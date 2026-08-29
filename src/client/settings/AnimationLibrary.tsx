@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { BUILTIN_AMBIENT_DEFINITIONS } from '../../core/ambient-presets'
 import { BUILTIN_INTERACTION_DEFINITIONS, BUILTIN_TRANSITION_DEFINITIONS } from '../../core/transition-presets'
-import type { AssetMeta, PetweenConfig } from '../../core/types'
+import type { AssetMeta, PetweenConfig, PoseKey } from '../../core/types'
 import type {
   AnimationDefinition,
   AnimationKind,
@@ -34,8 +34,9 @@ import { addTrack, validateTimelineDraft } from '../timeline/timeline-model'
 import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
 import { PreviewSession } from '../preview-session'
-import type { EditorStore } from '../stores/editor-store'
+import type { EditorStore, PendingMountApply } from '../stores/editor-store'
 import { FileImportButton, NumberField, SelectRow, Slider, Toggle } from './controls'
+import { STATE_LABELS } from './StateList'
 import styles from './settings.module.css'
 
 /** Every built-in definition, mirroring what the sessions register. */
@@ -175,10 +176,12 @@ export interface AnimationLibraryProps {
   config: PetweenConfig
   assets: Record<string, AssetMeta>
   configRevision: number
+  /** §11 挂载应用: the last import's pending mounts, applied via the banner. */
+  pendingMounts: PendingMountApply | null
 }
 
 export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
-  const { store, customs, config, assets, configRevision } = props
+  const { store, customs, config, assets, configRevision, pendingMounts } = props
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<DraftState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -470,6 +473,28 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
       <h2 className={styles.sectionTitle}>动画库</h2>
       <div className={styles.animationLibrary}>
         <div>
+          {pendingMounts !== null ? (
+            <div className={styles.mountBanner} role="status">
+              <span className={styles.mountBannerText}>
+                「{pendingMounts.packName}」带有挂载建议：
+                {Object.entries(pendingMounts.mounts)
+                  .map(([slot, mount]) => {
+                    const parts: string[] = []
+                    if (mount.enter !== undefined) parts.push('进入动画')
+                    if (mount.ambient !== undefined) parts.push('循环动画')
+                    return `${STATE_LABELS[slot as PoseKey]}${parts.join(' + ')}`
+                  })
+                  .join('、')}
+                ，应用后会并入草稿。
+              </span>
+              <button type="button" className={styles.button} onClick={() => store.applyPendingMounts()}>
+                应用挂载
+              </button>
+              <button type="button" className={styles.button} onClick={() => store.dismissPendingMounts()}>
+                忽略
+              </button>
+            </div>
+          ) : null}
           <div className={styles.animationNewRow}>
             <button type="button" className={styles.button} disabled={busy} onClick={() => void handleNew()}>
               ＋ 新建空白

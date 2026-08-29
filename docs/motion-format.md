@@ -331,3 +331,51 @@ pose-swap 且不得声明 `pose`（particle 事件 0..n 允许）；`interaction
 `namespace` 为该命名空间，跨命名空间时为 `mixed`；导出**不携带 mounts**
 （挂载是包作者的意图，不是用户当前的配置状态）。导出的包再导入应当全部
 `identical`（幂等往返）。
+
+### 挂载应用（applyPatch，2026-08-29）
+
+导入响应在带有 mounts 时附带 `applyPatch`：一个**最小 states 补丁**（`{states: {<槽位>: {enter: {animationId}, ambient: {customAnimationId}}}}`，只含挂载覆盖的字段，id 已解析为碰撞规划后的**最终 id**）。它不是导入的一部分——客户端把它留给用户确认；PUT `/api/petween/config` 时按字段级补丁语义并入当前活配置（未涉及字段回落当前值），镜像随之写进**当前激活宠物**。这就是「把动画包装到当前宠物身上」的标准路径。
+
+## 12. 宠物包：Pet Package（v1）
+
+一个可分享的完整宠物——图片 + 设定 + 动画，zip 容器（图片是二进制，单 JSON 需 base64 膨胀 33%，不取）。
+
+### 结构
+
+```text
+pet-package.zip
+├── manifest.json
+└── assets/<assetId>.<png|webp|jpeg>
+```
+
+```json
+{
+  "format": "pet-package",
+  "version": 1,
+  "name": "≤120 字符",
+  "pet": { "scale": 1.1, "poses": { "……六个槽位……": {完整 PoseConfig} }, "states": { "……六个状态……": {完整 StateAppearance} } },
+  "assets": [ { "id": "16-hex", "sha256": "64-hex", "file": "assets/<id>.<ext>", "mimeType": "image/png", "width": 1254, "height": 1254 } ],
+  "motionPack": { "format": "motion-pack", "version": 1, "name": "…", "namespace": "mixed", "animations": [ "……§11 内联定义……" ], "mounts": { "idle": { "ambient": "ns:x" } } },
+  "attribution": { "character": "DeepSeek 女仆鲸鱼娘（溟月）", "creators": ["上善无形（原型）", "ZipZipPipe（女仆装）"], "sourceUrl": "https://…", "license": "CC BY-NC-SA 4.0" }
+}
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `pet` | 完整角色切片（scale/poses/states），同 §11 `applyPatchFor` 的权威语义：states 中缺席的动画引用按 null 清空。 |
+| `assets` | `id` 为内容 sha256 前 16 hex（与资产库同一命名法，天然去重）；`poses` 引用的每个 assetId 必须在清单内且文件存在于包中；未被引用的清单条目冗余，导入忽略并 warning。 |
+| `motionPack` | 可选。完整 §11 Motion Pack v1 对象。**与纯动画包导出相反，宠物包的 mounts 必须携带**——导出时从 `pet.states` 的动画引用推导（`enter.animationId`→`mounts.<槽>.enter`，`ambient.customAnimationId`→`mounts.<槽>.ambient`；`builtin:*` 不入包），导入时经碰撞规划改号后重写进新宠物的 states。 |
+| `attribution` | 可选。角色形象署名/来源/许可，导出端从宠物预设的 attribution 字段带入，导入端原样存到新建宠物上；编辑器宠物区可编辑。分享传播时署名随包走。 |
+
+### 校验（导入拒绝，逐字段错误）
+
+zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路径白名单（`manifest.json` 或 `assets/<16hex>.<ext>`，拒绝穿越/绝对路径/反斜杠）；图片走资产侧同一套校验（magic bytes 与 MIME 一致、尺寸 ≤ 4096、拒绝 SVG），sha256 与清单一致；`version > 1` 明确拒绝并提示升级插件（B2 seam 同款规则）。
+
+### 导入语义（原子性）
+
+全部校验与碰撞规划**先行只读**，随后才落盘：图片按内容哈希幂等入库（已有同内容资产直接复用原 id）→ 动画走 §11 既有三选一规划（单锁段事务）→ **宠物创建是最后一步**（states 引用改写为最终 id，attribution 原样带入）。创建前任何失败不留任何写入；创建后失败最多留下可清理的未引用资产/动画，绝无「半只宠物」。导入即用：创建后立即 apply 切换为激活宠物，响应携带完整报告（资产 新增/复用、动画 新增/相同/改号、挂载映射、新宠物与配置）。
+
+### HTTP
+
+- `GET /api/petween/pets/<id>/export` → `application/zip`
+- `POST /api/petween/pets/import`（body 为 zip 二进制，≤ 48MB）→ `{ pet, config, report }`

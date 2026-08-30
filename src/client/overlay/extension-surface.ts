@@ -347,7 +347,10 @@ export class ExtensionSurface {
   subscribePose(listener: (pose: ResolvedPose) => void): () => void {
     this.poseListeners.add(listener)
     const current = this.host.stage.currentPose
-    if (current !== null) listener(current)
+    // The immediate push gets the same isolation as the fan-out path: a
+    // throwing listener must not break its own subscription registration (or
+    // the service bridge setting up above it).
+    if (current !== null) fanOutSafely([listener], current, 'pose listener')
     return () => {
       this.poseListeners.delete(listener)
     }

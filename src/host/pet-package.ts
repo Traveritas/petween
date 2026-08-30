@@ -285,7 +285,7 @@ export async function validatePetPackage(body: Buffer): Promise<PetPackageImport
   if (raw.format !== 'pet-package') errors.push('"format" must be "pet-package"')
   if (raw.version !== 1) {
     if (typeof raw.version === 'number' && raw.version > 1) {
-      // B2 seam: never silently misread a newer package.
+      // B1 seam: never silently misread a newer package.
       throw new PetPackageError(
         'PACK_VERSION_NEWER',
         `"version" ${raw.version} was written by a newer petween (this build reads version 1); upgrade the plugin or re-export the package at version 1`,
@@ -411,6 +411,36 @@ export async function validatePetPackage(body: Buffer): Promise<PetPackageImport
       'states reference custom animations not carried by the package (a package must be self-contained)',
       missingAnimations,
     )
+  }
+
+  // Kind discipline at the mount interface — the same rule packs.ts applies
+  // to mounts and the config walker's animationLookup applies to config PUTs:
+  // an enter mount needs a transition, an ambient mount an ambient. The slice
+  // validation above runs WITHOUT a lookup (the library is not consulted at
+  // this stage), so a hand-written manifest could otherwise mount e.g. an
+  // ambient on `enter`: createPet's repair would persist it, and every later
+  // config save would strictly reject the mount — an unfixable dead pet.
+  const packKinds = new Map((motionPack?.animations ?? []).map((definition) => [definition.id, definition.kind]))
+  const kindErrors: string[] = []
+  for (const key of POSE_KEYS) {
+    const state = pet.states[key]
+    const enterId = state.enter.animationId
+    if (enterId !== undefined && !enterId.startsWith('builtin:')) {
+      const kind = packKinds.get(enterId)
+      if (kind !== undefined && kind !== 'transition') {
+        kindErrors.push(`states.${key}.enter.animationId: "${enterId}" is ${kind}, needs transition`)
+      }
+    }
+    const ambientId = state.ambient.customAnimationId
+    if (ambientId !== undefined) {
+      const kind = packKinds.get(ambientId)
+      if (kind !== undefined && kind !== 'ambient') {
+        kindErrors.push(`states.${key}.ambient.customAnimationId: "${ambientId}" is ${kind}, needs ambient`)
+      }
+    }
+  }
+  if (kindErrors.length > 0) {
+    throw new PetPackageError('PET_PACKAGE_INVALID', 'state animation mounts must match the animation kind', kindErrors)
   }
 
   return { name, pet, ...(attribution === undefined ? {} : { attribution }), ...(motionPack === undefined ? {} : { motionPack }), assets, warnings }

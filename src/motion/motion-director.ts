@@ -487,8 +487,9 @@ export class MotionDirector {
 
   /**
    * §28 click interaction. Plays the configured interaction animation through
-   * the zero-branch play() path — an unknown id or a non-interaction kind
-   * falls back to builtin:click-pop (the host validates shape only).
+   * the zero-branch play() path — an unknown id, a non-interaction kind, or a
+   * repeating definition falls back to builtin:click-pop (the host validates
+   * shape only).
    *
    * When interactions.click.pose is set and resolves to an image, the stage
    * wears that pose for the animation's duration and returns to the CURRENT
@@ -504,7 +505,14 @@ export class MotionDirector {
   async playInteraction(): Promise<void> {
     const click = this.options.config.interactions.click
     const configured = this.options.registry.get(click.animation)
-    const definitionId = configured !== undefined && configured.kind === 'interaction' ? configured.id : BUILTIN_CLICK_POP.id
+    // Same once-only discipline as resolveEnter: a repeating interaction
+    // (loop/alternate/random-interval) never settles, so the await below
+    // would hang forever — the flash pose never restores and the instance
+    // never leaves playedInstances. Only a 'once' candidate may play.
+    const definitionId =
+      configured !== undefined && configured.kind === 'interaction' && configured.repeat.mode === 'once'
+        ? configured.id
+        : BUILTIN_CLICK_POP.id
 
     const interactionGeneration = ++this.interactionGeneration
     // §10.2 guard over the transition generation: a real target arriving

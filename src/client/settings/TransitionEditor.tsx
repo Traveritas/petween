@@ -11,6 +11,7 @@
 import type { JSX } from 'react'
 import type { PetweenConfig, PoseKey, TransitionPreset } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
+import { isCustomAnimationId } from '../../motion/animation-definition'
 import type { EditorStore } from '../stores/editor-store'
 import { GroupedSelectRow, Slider } from './controls'
 import styles from './settings.module.css'
@@ -84,7 +85,9 @@ export function TransitionEditor(props: TransitionEditorProps): JSX.Element {
         onChange={(value) =>
           store.updateConfig((draft) => {
             const draftEnter = draft.states[state].enter
-            if (value.startsWith('user:')) {
+            // B6: any non-builtin namespace id (user: or a Motion Pack's own)
+            // mounts by animationId; everything else is a preset name.
+            if (isCustomAnimationId(value)) {
               // §8.14: the preset stays as the fallback for a dangling id.
               draftEnter.animationId = value
             } else {

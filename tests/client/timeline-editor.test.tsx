@@ -12,7 +12,7 @@
  */
 import { act, useState, type JSX } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TimelineEditor } from '../../src/client/timeline/TimelineEditor'
 import { validateTimelineDraft } from '../../src/client/timeline/timeline-model'
 import type { AnimationKind, MotionTrack, TimelineEvent } from '../../src/motion/animation-definition'
@@ -280,6 +280,27 @@ describe('TimelineEditor — keyframe dragging', () => {
     move(-100)
     up(-100)
     expect(changes.map((change) => change.tracks[0].keyframes[0].at)).toEqual([1, 0])
+  })
+
+  it('unmounting mid-drag cancels the gesture: the window listeners leave with the lane', async () => {
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    const { changes } = await mount('transition', linearTracks(), poseSwap())
+    stubRect(lane('transition.scaleY'), 0, 200)
+    const diamond = keyframeDiamonds('transition.scaleY')[0]
+    down(diamond, 0)
+    move(30)
+    expect(changes).toHaveLength(1) // the drag is live
+
+    act(() => root.unmount())
+    mounted = false
+    const removedTypes = removeSpy.mock.calls.map(([type]) => type)
+    expect(removedTypes).toContain('pointermove')
+    expect(removedTypes).toContain('pointerup')
+    expect(removedTypes).toContain('pointercancel')
+
+    move(60) // no listener survives: no more drags, and the release is no click either
+    up(60)
+    expect(changes).toHaveLength(1)
   })
 
   it('rejects drops onto an occupied time: the diamond keeps its last legal slot', async () => {

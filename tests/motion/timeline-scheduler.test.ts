@@ -88,6 +88,46 @@ describe('timeline scheduler — segments and events', () => {
     expect(instance.status).toBe('cancelled')
   })
 
+  it('a throwing onEvent listener is isolated: the run still completes and settles', async () => {
+    const { engine, events } = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const instance = engine.createInstance('builtin:comic-pop', {
+      onEvent: (event) => {
+        events.push(event)
+        throw new Error('listener boom')
+      },
+    })
+    const done = instance.play()
+    harness.finishPending() // pre segment → pose-swap fires, the listener throws
+    await flushScheduler()
+    expect(events).toHaveLength(1) // the event still fired
+    harness.finishPending() // post segment
+    await flushScheduler()
+    await done
+    expect(instance.status).toBe('finished')
+    expect(warn).toHaveBeenCalledOnce()
+    warn.mockRestore()
+  })
+
+  it('an onEvent listener may cancel the run: no further segment animations are created', async () => {
+    const { engine, events } = setup()
+    const instance = engine.createInstance('builtin:comic-pop', {
+      onEvent: (event) => {
+        events.push(event)
+        instance.cancel()
+      },
+    })
+    const done = instance.play()
+    harness.finishPending() // pre segment completes → the pose-swap listener cancels the run
+    await flushScheduler()
+    await done
+    expect(events).toHaveLength(1)
+    // the post segment never started: only the pre segment animation exists
+    expect(harness.animations).toHaveLength(1)
+    expect(harness.animations[0].playState).toBe('idle')
+    expect(instance.status).toBe('cancelled')
+  })
+
   it('an event at 0 fires before any animation (builtin:none needs no tracks)', async () => {
     const { engine, events } = setup()
     const instance = engine.createInstance('builtin:none', { onEvent: (event) => events.push(event) })

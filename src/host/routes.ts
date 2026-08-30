@@ -35,7 +35,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { AssetMeta, PetweenConfig, PoseKey } from '../core/types'
 import { POSE_KEYS } from '../core/types'
-import { ANIMATION_KINDS, type AnimationDefinition } from '../motion/animation-definition'
+import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '../motion/animation-definition'
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
@@ -110,7 +110,12 @@ export interface RoutesDeps {
   /** B3: the current monotonic config revision (bumped once per update). */
   configRevision(): Promise<number>
   listAssets(): Promise<Record<string, AssetMeta>>
-  saveAsset(buffer: Buffer, declaredMime: string | undefined): Promise<AssetMeta>
+  /**
+   * `created` reports whether THIS call wrote a new asset (content-hash dedup
+   * returns the existing entry with created:false) — rollback paths must only
+   * undo what they actually created.
+   */
+  saveAsset(buffer: Buffer, declaredMime: string | undefined): Promise<AssetMeta & { created: boolean }>
   /**
    * The reference probe is async and runs inside the store's serialized
    * delete: implementations load the FRESHEST config/preset state at check
@@ -126,7 +131,17 @@ export interface RoutesDeps {
    * caller's wording must not report those as skipped).
    */
   listAnimations(): Promise<{ customs: AnimationDefinition[]; warnings: string[]; normalized: string[] }>
-  saveAnimation(definition: AnimationDefinition): Promise<void>
+  /**
+   * The optional `guard` runs inside the store's serialized save, just before
+   * the write, with the FRESHEST stored kind of the same id (undefined = not
+   * stored): the kind-change 409 probe lives there so a concurrent referencing
+   * save cannot slip between probe and write (B10, same contract as the async
+   * reference probes on the delete paths).
+   */
+  saveAnimation(
+    definition: AnimationDefinition,
+    guard?: (existingKind: AnimationKind | undefined) => Promise<void>,
+  ): Promise<void>
   /** Same async in-lock reference contract as deleteAsset. */
   deleteAnimation(id: string, referencedBy: (animationId: string) => Promise<boolean>): Promise<void>
   /**
@@ -409,10 +424,16 @@ function mountsStatesPatch(mounts: PackMounts): Record<string, Record<string, un
 async function handlePackExport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
   const query = new URL(req.url ?? '/', 'http://localhost').searchParams
-  const ids = (query.get('ids') ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0)
+  // Dedupe: a repeated id would otherwise emit the same definition twice,
+  // and re-importing such a pack is rejected by the duplicate-id check.
+  const ids = [
+    ...new Set(
+      (query.get('ids') ?? '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ]
   if (ids.length === 0) {
     throw new HttpError(400, 'PACK_EXPORT_EMPTY', 'expected a non-empty ?ids= list')
   }
@@ -598,19 +619,20 @@ async function handleAnimations(
     // the preset mirror writes the loss into every referencing preset. Same
     // reference judgement as DELETE, same 409 ANIMATION_IN_USE body. Only a
     // well-formed kind participates: a garbage kind must surface as the
-    // store's 400 INVALID_DEFINITION, not as a kind-change 409.
+    // store's 400 INVALID_DEFINITION, not as a kind-change 409. The probe
+    // runs INSIDE the store's serialized save (guard callback) against the
+    // freshest state — a lock-free pre-check could be overtaken by a
+    // concurrent config PUT mounting the animation in between (B10).
     const incoming = raw as AnimationDefinition
     const kindUsable = typeof incoming.kind === 'string' && ANIMATION_KINDS.includes(incoming.kind)
-    const { customs } = await deps.listAnimations()
-    const existing = customs.find((definition) => definition.id === id)
-    if (kindUsable && existing !== undefined && existing.kind !== incoming.kind) {
+    // Full schema + user-namespace validation happens in the store (after the guard).
+    await deps.saveAnimation(incoming, async (existingKind) => {
+      if (!kindUsable || existingKind === undefined || existingKind === incoming.kind) return
       const [config, { pets }] = await Promise.all([deps.loadConfig(), deps.listPets()])
       if (animationReferencedAnywhere(config, pets, id)) {
         throw new AnimationError('IN_USE', '动画仍被挂载引用，不能变更类型；请先解除引用，或另存为新动画')
       }
-    }
-    // Full schema + user-namespace validation happens in the store.
-    await deps.saveAnimation(incoming)
+    })
     sendJson(res, 200, { animation: raw })
     return
   }
@@ -738,8 +760,8 @@ async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: 
  * §12 Pet Package import: POST /api/petween/pets/import with the zip body.
  * Validation is fully read-only (host/pet-package.ts); writes then follow the
  * fixed order assets → animations (the existing one-lock pack transaction) →
- * pet creation LAST → immediate apply. A failure before creation rolls the
- * fresh writes back best-effort — only ids that were free moments ago are
+ * pet creation LAST → immediate apply. Any failure along the way rolls the
+ * fresh writes back best-effort — only ids this call actually created are
  * removed, with the same fresh-state reference probes as the DELETE routes
  * (B10), so a concurrent consumer that started reusing them keeps them.
  */
@@ -753,25 +775,17 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
   const importedAnimationIds: string[] = []
   let entries: PackImportEntry[] = []
   let mounts: PackMounts = {}
-  try {
-    for (const asset of plan.assets) {
-      if (library[asset.id] !== undefined) {
-        assetsReused.push(asset.id) // content-addressed reuse: no second copy
-        continue
-      }
-      // The store re-runs the asset-side validation inside its lock and
-      // dedupes by content hash, so a concurrent import cannot duplicate it.
-      await deps.saveAsset(asset.data, asset.mimeType)
-      assetsAdded.push(asset.id)
-    }
-    if (plan.motionPack !== undefined) {
-      const packPlan = await deps.importPack(plan.motionPack)
-      entries = packPlan.entries
-      mounts = packPlan.mounts
-      plan.warnings.push(...packPlan.warnings)
-      importedAnimationIds.push(...packPlan.writes.map((definition) => definition.id))
-    }
-  } catch (error) {
+  /**
+   * Best-effort undo of everything this import persisted — only what THIS
+   * call created (created:true assets, this transaction's animation writes,
+   * and a created pet last). The reference probes load the freshest state
+   * inside the store locks (B10), so a concurrent consumer that started
+   * reusing an id keeps it.
+   */
+  const rollback = async (petId?: string): Promise<void> => {
+    // The pet goes first: until it is deleted its own slice still references
+    // the fresh animations/assets, and the probes below would spare them.
+    if (petId !== undefined) await deps.deletePet(petId).catch(() => undefined)
     for (const id of importedAnimationIds) {
       await deps
         .deleteAnimation(id, async (animationId) => {
@@ -791,13 +805,52 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
         })
         .catch(() => undefined)
     }
+  }
+  try {
+    for (const asset of plan.assets) {
+      if (library[asset.id] !== undefined) {
+        assetsReused.push(asset.id) // content-addressed reuse: no second copy
+        continue
+      }
+      // The store re-runs the asset-side validation inside its lock and
+      // dedupes by content hash — a concurrent import of the same bytes lands
+      // here as created:false, and the rollback must NOT delete that shared
+      // entry from under the other importer.
+      const saved = await deps.saveAsset(asset.data, asset.mimeType)
+      if (saved.created) assetsAdded.push(asset.id)
+      else assetsReused.push(asset.id)
+    }
+    if (plan.motionPack !== undefined) {
+      const packPlan = await deps.importPack(plan.motionPack)
+      entries = packPlan.entries
+      mounts = packPlan.mounts
+      plan.warnings.push(...packPlan.warnings)
+      importedAnimationIds.push(...packPlan.writes.map((definition) => definition.id))
+    }
+  } catch (error) {
+    await rollback()
     throw error
   }
   // Creation is the last write: the slice's animation references point at
-  // the FINAL ids, attribution rides in the same atomic record.
+  // the FINAL ids, attribution rides in the same atomic record. Creation and
+  // the immediate apply sit inside the rollback scope too (defense in depth:
+  // validation already guarantees the apply passes strict re-validation, but
+  // a dead half-imported pet must never survive a disk/config failure).
   const slice = rewritePetSliceAnimations(plan.pet, finalIdMapOf(entries), mounts)
-  const pet = await deps.createPet(plan.name, slice, plan.attribution)
-  const config = await deps.updateConfig(applyPatchFor(pet))
+  let pet: PetPreset
+  try {
+    pet = await deps.createPet(plan.name, slice, plan.attribution)
+  } catch (error) {
+    await rollback()
+    throw error
+  }
+  let config: PetweenConfig
+  try {
+    config = await deps.updateConfig(applyPatchFor(pet))
+  } catch (error) {
+    await rollback(pet.id)
+    throw error
+  }
   sendJson(res, 200, {
     pet,
     config,
@@ -948,12 +1001,22 @@ type Handler = (req: IncomingMessage, res: ServerResponse, pathname: string) => 
  * cross-origin with side effects landing even though the response is blocked.
  * Non-browser clients (no Sec-Fetch-Site / Origin metadata — curl, the future
  * CLI) stay allowed; GETs/HEADs are read-only and never guarded.
+ *
+ * Sec-Fetch-Site handling: `cross-site` rejects outright; `same-origin` and
+ * `none` (direct navigation) pass; `same-site` is NOT enough on its own —
+ * it spans origins (e.g. another localhost port), so those requests fall
+ * through to the Origin ↔ Host comparison below (a missing Origin still
+ * means a non-browser client and passes).
  */
 function rejectsCrossOriginWrite(req: IncomingMessage): boolean {
   const method = (req.method ?? 'GET').toUpperCase()
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false
   const site = req.headers['sec-fetch-site']
-  if (typeof site === 'string') return site === 'cross-site'
+  if (typeof site === 'string') {
+    if (site === 'cross-site') return true
+    if (site === 'same-origin' || site === 'none') return false
+    // 'same-site' (or an unrecognized value): verify the origin below.
+  }
   const origin = req.headers.origin
   if (typeof origin === 'string') {
     try {

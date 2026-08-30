@@ -84,6 +84,15 @@ describe('validateMotionPack', () => {
     expect(validateMotionPack(makePack({ namespace: MIXED_NAMESPACE })).ok).toBe(true)
   })
 
+  it('rejects the reserved client preview draft id (user:0draft) up front', () => {
+    // The id is a legal custom-namespace shape, so without this guard it
+    // passed pack validation and only the store's write path refused — after
+    // earlier writes of the same import had already landed on disk.
+    const result = validateMotionPack(makePack({ namespace: 'user', animations: [makeDefinition('user:0draft')] }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.join(' ')).toContain('user:0draft')
+  })
+
   it('validates mounts: known slots, pack-internal ids, kind discipline', () => {
     const enter = {
       ...makeDefinition('manga:enter'),
@@ -196,6 +205,31 @@ describe('planMotionPackImport', () => {
     const result = planMotionPackImport(validated([enter(240)], { idle: { enter: 'manga:pop' } }), existing)
     expect(result.warnings).toEqual([])
     expect(result.entries).toHaveLength(1)
+  })
+
+  it('re-importing a conflicting pack reuses the identical -N copy instead of piling up another', () => {
+    // First import: manga:pop is taken by DIFFERENT content → remapped to -2.
+    const first = planMotionPackImport(validated([enter(500)]), new Map([['manga:pop', enter(240)]]))
+    expect(first.entries[0]).toEqual({ requestedId: 'manga:pop', finalId: 'manga:pop-2', status: 'remapped' })
+    // Second import of the same conflicting pack: the library now holds the
+    // identical -2 copy — report identical, plan no write (no -3 pile-up).
+    const existing = new Map<string, AnimationDefinition>([
+      ['manga:pop', enter(240)],
+      ['manga:pop-2', enter(500)],
+    ])
+    const second = planMotionPackImport(validated([enter(500)]), existing)
+    expect(second.entries[0]).toEqual({ requestedId: 'manga:pop', finalId: 'manga:pop-2', status: 'identical' })
+    expect(second.writes).toHaveLength(0)
+  })
+
+  it('a taken -N suffix holding DIFFERENT content still advances to the next free suffix', () => {
+    const existing = new Map<string, AnimationDefinition>([
+      ['manga:pop', enter(240)],
+      ['manga:pop-2', enter(300)],
+    ])
+    const result = planMotionPackImport(validated([enter(500)]), existing)
+    expect(result.entries[0]).toEqual({ requestedId: 'manga:pop', finalId: 'manga:pop-3', status: 'remapped' })
+    expect(result.writes[0]?.id).toBe('manga:pop-3')
   })
 })
 

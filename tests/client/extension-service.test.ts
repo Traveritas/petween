@@ -1316,6 +1316,35 @@ describe('extension service — subscribePose', () => {
     await vi.advanceTimersByTimeAsync(300)
     expect(seen[seen.length - 1]).toBe('idle')
   })
+
+  it('a throwing listener is isolated: the subscription registers and later pushes still land', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    await boot(context)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Direct surface consumer: the immediate push must not let a listener
+    // throw back through subscribePose and lose the unsubscribe handle.
+    let throwerCalls = 0
+    serviceUnsubscribers.push(
+      context.session.subscribePose(() => {
+        throwerCalls += 1
+        throw new Error('companion exploded')
+      }),
+    )
+    expect(throwerCalls).toBe(1) // the current pose arrived…
+    expect(warn).toHaveBeenCalledTimes(1) // …and the throw was isolated
+
+    const seen: Array<string | null> = []
+    serviceUnsubscribers.push(context.session.subscribePose((pose) => seen.push(pose.poseKey)))
+    expect(seen).toEqual(['idle']) // a later subscriber still gets the immediate push
+
+    // …and a runtime swap reaches the healthy listener past the thrower.
+    expect(petweenClientService.flashPose('success', 300)).toBe(true)
+    expect(seen[seen.length - 1]).toBe('success')
+    expect(throwerCalls).toBe(2)
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('extension service — subscribeUserPointer', () => {

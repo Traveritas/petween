@@ -27,7 +27,7 @@
 | 字段 | 说明 |
 | --- | --- |
 | `version` | 固定为 `1`。更高版本的定义来自更新版本的 petween——宿主会**明确拒绝**（不静默跳过、不误读），错误信息会指明「由更新的 petween 写出」。 |
-| `id` | 必须是 `<命名空间>:<名称>`：`builtin:` 保留给内置动画（注册会被拒绝）。自定义命名空间为**任意小写字母/数字/`-` 串**（如 `user:`、`motion:`），名称段允许字母数字、`-`、`_`。编辑器手作动画默认 `user:`；Motion Pack 会使用自己的命名空间前缀（见 §11）。 |
+| `id` | 必须是 `<命名空间>:<名称>`：`builtin:` 保留给内置动画（注册会被拒绝）。自定义命名空间为**小写字母开头的小写字母/数字/`-` 串**（如 `user:`、`motion:`）；名称段**以字母或数字开头**，其后允许字母数字、`-`、`_`。编辑器手作动画默认 `user:`；Motion Pack 会使用自己的命名空间前缀（见 §11）。 |
 | `name` | 展示名称。 |
 | `kind` | `transition`（进入过渡）/ `ambient`（循环动画）/ `interaction`（交互动效）。`transition` 的 duration 会被 clamp 到 60~2000ms。 |
 | `durationMs` | 基准时长（1~60000ms）。关键帧时间是归一化的，改 duration 不影响比例。 |
@@ -107,7 +107,9 @@ strength 超出 `parameters.strength` 声明的 `min`/`max` 会被 clamp。目�
 { "mode": "random-interval", "minDelayMs": 800, "maxDelayMs": 1300 }
 ```
 
-- `once`：播放一次。所有内置 transition 都是 once。
+- `once`：播放一次。所有内置 transition 都是 once。**once / interaction 定义的末帧
+  应回归属性默认值**：Scheduler 在时间线收尾时会 cancel 段动画（`fill:'forwards'`
+  不保留），末帧非默认值的定义在最后一帧会被直接抹回默认值，看起来就像"没写完"。
 - `loop` / `alternate`：**无 events** 的定义会编译成单条 `iterations: Infinity` 的 WAAPI
   动画（compositor 友好，`alternate` 映射为 `direction: 'alternate'`）；有 events 的定义由
   Scheduler 逐段正向重跑。因此 **`alternate` + events 被拒绝**（V1）——Scheduler 对有事件的
@@ -369,11 +371,11 @@ pet-package.zip
 
 ### 校验（导入拒绝，逐字段错误）
 
-zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路径白名单（`manifest.json` 或 `assets/<16hex>.<ext>`，拒绝穿越/绝对路径/反斜杠）；图片走资产侧同一套校验（magic bytes 与 MIME 一致、尺寸 ≤ 4096、拒绝 SVG），sha256 与清单一致；`version > 1` 明确拒绝并提示升级插件（B2 seam 同款规则）。
+zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路径白名单（`manifest.json` 或 `assets/<16hex>.<ext>`，拒绝穿越/绝对路径/反斜杠）；图片走资产侧同一套校验（magic bytes 与 MIME 一致、尺寸 ≤ 4096、拒绝 SVG），sha256 与清单一致；`version > 1` 明确拒绝并提示升级插件（B1 seam 同款规则）。states 引用的包内动画另做 kind 交叉检查（enter 必须 transition、ambient 必须 ambient），同样拒绝在任何落盘之前。
 
 ### 导入语义（原子性）
 
-全部校验与碰撞规划**先行只读**，随后才落盘：图片按内容哈希幂等入库（已有同内容资产直接复用原 id）→ 动画走 §11 既有三选一规划（单锁段事务）→ **宠物创建是最后一步**（states 引用改写为最终 id，attribution 原样带入）。创建前任何失败不留任何写入；创建后失败最多留下可清理的未引用资产/动画，绝无「半只宠物」。导入即用：创建后立即 apply 切换为激活宠物，响应携带完整报告（资产 新增/复用、动画 新增/相同/改号、挂载映射、新宠物与配置）。
+全部校验（含 states 引用的 kind 交叉检查）与碰撞规划**先行只读**，随后才落盘：图片按内容哈希幂等入库（已有同内容资产直接复用原 id）→ 动画走 §11 既有三选一规划（单锁段事务）→ **宠物创建是最后一步**（states 引用改写为最终 id，attribution 原样带入）→ 创建后立即 apply。任何一步失败（含建宠与 apply）都会**尽力回滚**本次写入：先删宠物文件，再按引用探针回滚动画与资产，且只删除本次真正新建的资产（去重复用的共享资产不动）。回滚自身再失败时最多留下可清理的未引用资产/动画，绝无「半只宠物」被激活。导入即用：apply 切换为激活宠物，响应携带完整报告（资产 新增/复用、动画 新增/相同/改号、挂载映射、新宠物与配置）。
 
 ### HTTP
 

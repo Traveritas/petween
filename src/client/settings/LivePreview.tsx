@@ -41,7 +41,9 @@ export function LivePreview(props: LivePreviewProps): JSX.Element {
   // Push every draft edit into the live session. config/assets identities
   // only change together with configRevision, so the revision covers them.
   useEffect(() => {
-    void sessionRef.current?.updateConfig(config, assets)
+    void sessionRef.current?.updateConfig(config, assets).catch((error: unknown) => {
+      console.warn('petween: live preview config sync failed', error)
+    })
   }, [config, assets, configRevision, sessionRef])
 
   return (

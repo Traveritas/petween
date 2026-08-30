@@ -95,8 +95,12 @@ export class ConfigStore {
     if (this.revisionCache !== null) return this.revisionCache
     const raw = await readJsonFile<{ revision?: unknown }>(this.revisionPath)
     const revision = typeof raw?.revision === 'number' && Number.isInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0
-    this.revisionCache = revision
-    return revision
+    // Monotonic merge, never a plain overwrite: the routes read the revision
+    // OUTSIDE the write lock, so this read can interleave with an update()'s
+    // bump — adopting an older file value here would roll the cache back and
+    // let a stale expectedRevision pass the B3 conflict check.
+    this.revisionCache = Math.max(revision, this.revisionCache ?? 0)
+    return this.revisionCache
   }
 
   /**

@@ -29,6 +29,20 @@
 > 经外部评审跟进加固**（§9 存档）；**C1-B/C 会话拆分主体同日完成**（§9
 > 存档）——overlay-session 1160→624 行，扩展面独立成 ExtensionSurface，
 > 双会话共享 session-core。Motion Pack 本体开工。
+>
+> **2026-08-30 整体评审收口**（7 子智能体分维 + 4 组并行修复，详见
+> implementation-notes 同日条目）：12 项 P1 全部修复——含 HEAD typecheck
+> 阻断、revision 缓存锁外回退、宠物包 kind 检查缺失与回滚扩围、kind-change
+> 探测入锁、reduced-motion 坍缩乱序取值、playInteraction repeat 守卫、
+> Live Preview 草稿别名致热更新失效、B6 消费端 user: 硬编码两处、
+> importAnimations 孤儿与保留 id、physics 卡片兜底草稿覆写；P2 批次
+> （CORS same-site 收紧、pack 导出除重、-N 堆积、回滚误删共享资产、
+> subscribePose 隔离、pointer-gesture 卸载清理等）同批落地。主插件
+> 51 文件 / 950 用例、physics 9 文件 / 135 用例全绿。三个新增拍板项
+> 同日拍板：G1 once 末帧语义**维持现状**（§8；文档约定已写入
+> motion-format.md §5）、G2 getMeta 死代码**删除**（已落地）、
+> G3 physics slide interrupt**做成配置项**（已落地）；排队小项若干
+> （§6 B11）。
 
 ---
 
@@ -52,7 +66,9 @@
 - 建议：面向第三方客户端二选一——`extensions`/`x-*` 保留袋，或 PUT 响应带
   `stripped` 列表。开放第三方客户端前拍板。
 
-（A2 / A5 / E3 三个原【待拍板】项已于 2026-08-27 晚拍板并落地，见 §9 存档。）
+（A2 / A5 / E3 三个原【待拍板】项已于 2026-08-27 晚拍板并落地，见 §9 存档。
+G1 / G2 / G3 已于 2026-08-30 同日拍板：G1 维持现状关闭（§8），G2 删除落地、
+G3 配置化落地（implementation-notes 同日条目）。）
 
 ---
 
@@ -152,7 +168,11 @@
   useMemo、子卡片 React.memo。
 - 拖动位置持久化失败只有 console.error，用户无感知丢失重启即回弹；可把
   最近保存状态放进 StageSnapshot 让有界面的附属卡片代为展示。
-- keyframe/event marker 的 React key 用索引+at 组合而非稳定 id。
+- ~~keyframe/event marker 的 React key 用索引+at 组合而非稳定 id~~
+  【2026-08-30 核实：登记描述与代码不符】实际代码是**纯 `key={index}`**
+  且为有意的正确选择（TrackLane.tsx 注释有论证：at 入 key 会因微调
+  remount 导致焦点掉 `<body>`、键盘 ←→ 微调失效）。对就地 move 语义的
+  TrackLane/EventTrack 而言纯索引正确，此子项撤销，勿按原文执行。
 - api.ts request() 无调用方 signal 透传（在途请求不能随组件取消）。
 - settings brand 色 fallback hex 有四种、NoticeBar 单槽位不支持排队提示。
 
@@ -212,9 +232,21 @@
 - 错误文案直接透传 host 英文信息 → 面向用户中文化。
 - 资产总量记账依赖 assets.json：清单损坏后计数清零、旧文件成孤儿游离在
   60MB 红线之外 → 启动/定期扫描孤儿文件计入或 GC【2026-08-27 五维评审新增】。
-- 目录迁移 copy 分支的并发盲区：B 进程停滞期间 A 完成迁移后，B 的
-  rmSync 可能误删 A 的成果（数据兜底成立，仅一次性回退窗口）→ copy 先落
-  唯一临时目录再 rename【2026-08-27 五维评审新增】。
+- 目录迁移 copy 分支的并发盲区：~~B 进程停滞期间 A 完成迁移后，B 的
+  rmSync 可能误删 A 的成果~~【2026-08-30 核实：登记描述为旧代码】
+  migrate.ts 已加双重 existsSync 复查，残余窗口收窄为微秒级 TOCTOU，
+  以及「copy 失败 + 清理失败 → 半成品 target 被后续启动当作完整数据、
+  legacy 永远不再重试」——真正解法不变：copy 先落唯一临时目录再 rename
+  【2026-08-27 五维评审新增，2026-08-30 描述同步；physics 仓同款冗余
+  检查已删并指向本条】。
+- `routes.ts`（1030+ 行）把配置领域逻辑（`applyPatchFor`/
+  `expandPetSwitchPatch`/`mountsStatesPatch`）留在 HTTP 编排层；其属主是
+  pets/config 模块。`editor-store.ts`（1132 行）同待拆【2026-08-30 新增】。
+- 校验常量双源硬编码：`MAX_ASSET_BYTES`（host/assets.ts 与
+  client/stores/editor-store.ts）与 MIME 白名单散见四处（core/types.ts、
+  pet-package.ts、editor-store.ts、controls.tsx）——任一侧调整不同步即
+  「客户端放行、host 拒绝」体验断裂 → 收进 core 共享模块或经 meta
+  features 下发【2026-08-30 新增】。
 
 ---
 
@@ -225,6 +257,10 @@
 - 慢保存 + 再次编辑时响应按完成顺序回写本地快照，旧数据可盖回新数据；
   host 侧 writeChain 已按会话串行，磁盘无损，主要污染 `hub.getConfig()`。
 - 建议：client 侧加 latest-wins 串行队列。
+
+（G3 slide interrupt 配置化已于 2026-08-30 拍板并落地为扁平字段
+`slideInterrupt`（默认 true 保持现状），卡片带开关；见 implementation-notes
+同日条目。）
 
 （E1 的跨仓对齐与 C4 镜像升级已于 2026-08-27 收口，E3 同晚落地，见 §9。）
 
@@ -239,6 +275,10 @@
   即可；真要修在 persistPosition 加单调 writeSeq。
 - **E4** 改名无旧服务名 alias——已决策 README 配套矩阵；对外发布且有真实
   旧版用户再议。
+- **G1** once 时间线末帧语义——用户拍板「维持现状」（2026-08-30）：
+  scheduler 收尾 cancel 段动画、末帧不保留；内置动画全部回归默认值故无
+  感知。内容侧约定「once / interaction 定义的末帧应回归属性默认值」已
+  写入 motion-format.md §5。重开条件：出现真实需要末帧滞留的自定义内容。
 
 ---
 

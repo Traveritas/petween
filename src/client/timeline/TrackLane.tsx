@@ -10,7 +10,7 @@
  * one 0.01 grid step, Delete removes. `touch-action: none` keeps touch
  * presses on a diamond from scrolling the page instead of dragging.
  */
-import { useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { MotionTrack } from '../../motion/animation-definition'
 import { motionPropertyDisplayName } from './display-labels'
 import { beginPointerGesture } from './pointer-gesture'
@@ -31,6 +31,12 @@ export interface TrackLaneProps {
 export function TrackLane(props: TrackLaneProps): JSX.Element {
   const { track } = props
   const laneRef = useRef<HTMLDivElement | null>(null)
+  /** The in-flight gesture's cancel handle — the lane hosts one at a time. */
+  const gestureCancelRef = useRef<(() => void) | null>(null)
+
+  // A gesture only self-cleans on move/up/cancel: a mid-press unmount would
+  // leak its window listeners (and keep retiming a dead lane) otherwise.
+  useEffect(() => () => gestureCancelRef.current?.(), [])
 
   const atFromClientX = (clientX: number): number | null => {
     const rect = laneRef.current?.getBoundingClientRect()
@@ -46,7 +52,8 @@ export function TrackLane(props: TrackLaneProps): JSX.Element {
 
   const handleKeyframeDown = (keyframeIndex: number) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.stopPropagation()
-    beginPointerGesture(event, {
+    gestureCancelRef.current?.() // a fresh press supersedes a gesture still open
+    gestureCancelRef.current = beginPointerGesture(event, {
       onClick: () => props.onSelectKeyframe(keyframeIndex),
       onDrag: (clientX) => {
         const at = atFromClientX(clientX)

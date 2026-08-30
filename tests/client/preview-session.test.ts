@@ -451,7 +451,10 @@ describe('PreviewSession — custom animation sync and 试播 (V1.1)', () => {
     // the scratch registration never leaks into the customs namespace sync
     session.updateCustoms([makeCustom('user:a')])
     expect(session.registry.get('user:a')).toBeDefined()
-    expect(() => session.previewDefinition(draft)).not.toThrow()
+    // a re-audition after the sync re-registers the scratch id and plays
+    const audition = session.previewDefinition(draft)
+    expect(audition.status).toBe('running')
+    expect(harness.animations[harness.animations.length - 1].target).toBe(stage.layers.transition)
     session.dispose()
   })
 })
@@ -523,6 +526,30 @@ describe('PreviewSession — editor hot-reload fixes (M2 leftovers, M5)', () => 
 
     expect(image.getAttribute('src')).toBe(assetUrl('idle'))
     expect(image.style.top).toBe('-16px') // 0.9*160 - 1*160
+    session.dispose()
+  })
+
+  it('the aliased editor draft: in-place mutations still fire the ambient / reduced-motion refresh', async () => {
+    // Regression: the constructor used to keep the PASSED config object, and
+    // the editor mutates that same draft in place (EditorStore.updateConfig)
+    // — updateConfig then compared the draft against itself, so the
+    // refreshAmbient/applyReducedMotion calls below never fired.
+    const context = setup()
+    const { stage, config, assets, session } = context
+    await boot(context)
+    const swayLoop = harness.pending().find((animation) => animation.target === stage.layers.sway)
+    expect(swayLoop?.playState).toBe('running')
+
+    // Same reference, mutated in place — exactly what the editor hands over.
+    config.states.idle.ambient.sway.enabled = false
+    await session.updateConfig(config, assets)
+    expect(swayLoop?.playState).toBe('idle') // refreshAmbient ran
+    expect(runningLoopsOn(stage.layers.sway)).toBe(0)
+
+    config.global.reducedMotion = 'always'
+    await session.updateConfig(config, assets)
+    expect(stage.reducedMotion).toBe(true) // applyReducedMotion ran
+    expect(harness.pending()).toHaveLength(0) // ambient stays off under reduce
     session.dispose()
   })
 })

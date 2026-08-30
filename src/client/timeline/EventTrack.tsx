@@ -16,7 +16,7 @@
  * deletable (0 is allowed). Ambient kinds never render this track at all
  * (the editor hides it).
  */
-import { useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AnimationKind, ParticleEffectId, TimelineEvent } from '../../motion/animation-definition'
 import { POSE_KEYS } from '../../core/types'
 import { NumberField, SelectRow, TextField } from '../settings/controls'
@@ -51,6 +51,12 @@ export interface EventTrackProps {
 
 export function EventTrack(props: EventTrackProps): JSX.Element {
   const overlayRef = useRef<HTMLDivElement | null>(null)
+  /** The in-flight gesture's cancel handle — the overlay hosts one at a time. */
+  const gestureCancelRef = useRef<(() => void) | null>(null)
+
+  // Same unmount leak guard as TrackLane: cancel the live gesture's window
+  // listeners when the overlay goes away mid-press.
+  useEffect(() => () => gestureCancelRef.current?.(), [])
 
   const atFromClientX = (clientX: number): number | null => {
     const rect = overlayRef.current?.getBoundingClientRect()
@@ -60,7 +66,8 @@ export function EventTrack(props: EventTrackProps): JSX.Element {
 
   const handleMarkerDown = (eventIndex: number) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.stopPropagation()
-    beginPointerGesture(event, {
+    gestureCancelRef.current?.() // a fresh press supersedes a gesture still open
+    gestureCancelRef.current = beginPointerGesture(event, {
       onClick: () => props.onSelectEvent(eventIndex),
       onDrag: (clientX) => {
         const at = atFromClientX(clientX)

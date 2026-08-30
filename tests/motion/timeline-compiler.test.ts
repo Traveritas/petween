@@ -219,4 +219,32 @@ describe('compileTimeline — duration and reduced motion', () => {
       }
     })
   })
+
+  it('reduced-motion: out-of-order keyframes collapse to the value at the latest at', () => {
+    // Validation rejects duplicate `at` but not disorder (host/pack imports may
+    // carry unsorted tracks) — the collapsed value must come from the largest
+    // `at`, not the array tail.
+    const definition: AnimationDefinition = {
+      version: 1,
+      id: 'user:unordered',
+      name: 'Unordered',
+      kind: 'interaction',
+      durationMs: 1000,
+      repeat: { mode: 'once' },
+      tracks: [
+        {
+          property: 'transition.x',
+          keyframes: [
+            { at: 1, value: 5 },
+            { at: 0, value: -5 },
+            { at: 0.5, value: 3 },
+          ],
+        },
+      ],
+    }
+    const compiled = compileTimeline(definition, { reducedMotion: true })
+    for (const keyframe of layerKeyframes(compiled, 0, 'transition')) {
+      expect(keyframe.translate).toBe('5px 0px')
+    }
+  })
 })

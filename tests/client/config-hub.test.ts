@@ -418,6 +418,7 @@ describe('ConfigHub — custom animations (V1.1)', () => {
     const hub = new ConfigHub({ fetchConfig, fetchAnimations })
     await expect(hub.load()).rejects.toThrow('animations down')
     await expect(hub.load()).resolves.toBeDefined()
+    expect(fetchAnimations).toHaveBeenCalledTimes(2)
   })
 
   it('publish broadcasts customs and clones them', async () => {

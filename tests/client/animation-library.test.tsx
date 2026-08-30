@@ -347,6 +347,16 @@ describe('AnimationLibrary — panel and list', () => {
     expect(librarySection().textContent).toContain('内置动画只读')
   })
 
+  it('B6: a pack-namespace custom is editable (only builtins are read-only)', async () => {
+    const { api } = makeApi({ customs: [transitionCustom('manga-pop:pop', 'Manga Pop')] })
+    await render(api, true)
+    act(() => libraryButton('Manga Pop').click())
+    const buttons = [...librarySection().querySelectorAll('button')].map((button) => button.textContent)
+    expect(buttons).toContain('保存')
+    expect(buttons).toContain('删除')
+    expect(librarySection().textContent).not.toContain('内置动画只读')
+  })
+
   it('新建空白 saves a valid user: template and opens it for editing', async () => {
     const { api, mocks } = makeApi()
     await render(api, true)
@@ -664,6 +674,23 @@ describe('AnimationLibrary — mounting customs into the config editors', () => 
     payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
     expect(payload.states?.idle.enter.preset).toBe('comic-pop')
     expect(payload.states?.idle.enter.animationId).toBeNull()
+  })
+
+  it('B6: a pack-namespace transition mounts by animationId (never written back as a preset name)', async () => {
+    vi.useFakeTimers()
+    const { api, mocks } = makeApi({ customs: [transitionCustom('manga-pop:pop', 'Manga Pop')] })
+    await render(api, true)
+    const select = findControlRow('预设').querySelector('select')
+    if (select === null) throw new Error('preset select missing')
+    const customOption = [...select.querySelectorAll('option')].find((option) => option.value === 'manga-pop:pop')
+    expect(customOption?.textContent).toBe('Manga Pop')
+
+    act(() => choose(select, 'manga-pop:pop'))
+    await saveConfig()
+    const payload = mocks.patchConfig.mock.calls[mocks.patchConfig.mock.calls.length - 1][0] as ConfigPatch
+    // the pack id lands verbatim on animationId; the preset stays the fallback
+    expect(payload.states?.idle.enter.animationId).toBe('manga-pop:pop')
+    expect(payload.states?.idle.enter.preset).toBe('soft') // untouched default
   })
 
   it('the transition select echoes the custom referenced by animationId', async () => {

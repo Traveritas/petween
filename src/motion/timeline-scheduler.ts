@@ -59,7 +59,14 @@ export function runTimeline(
 
   const fireEvents = (beforeSegmentIndex: number): void => {
     for (const event of compiled.events) {
-      if (event.beforeSegmentIndex === beforeSegmentIndex) hooks.onEvent?.(event)
+      if (event.beforeSegmentIndex !== beforeSegmentIndex) continue
+      // A throwing listener must not reject the driver: the run would never
+      // settle (finished hangs, current animations leak). Isolate it instead.
+      try {
+        hooks.onEvent?.(event)
+      } catch (error) {
+        console.warn('petween: timeline event listener failed', error)
+      }
     }
   }
 
@@ -115,6 +122,9 @@ export function runTimeline(
       // between a segment's natural finish and the loop continuation).
       if (isCancelled()) return false
       fireEvents(index)
+      // A listener may cancel() this very run synchronously (e.g. an external
+      // interrupt reacting to the event) — do not start the next segment.
+      if (isCancelled()) return false
       if (index === compiled.segments.length) break
       const proceeded = await playSegment(compiled.segments[index])
       if (!proceeded || isCancelled()) return false

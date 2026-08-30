@@ -69,10 +69,13 @@ describe('AssetStore.save (§20)', () => {
       url: `/petween-assets/${meta.id}`,
     })
     expect(meta.sha256).toMatch(/^[0-9a-f]{64}$/)
+    // `created` marks THIS call's write; the persisted manifest entry never carries it.
+    expect(meta.created).toBe(true)
     // Disk file uses the host-generated name and carries the exact bytes.
     expect(await readFile(join(assetsDir, meta.fileName))).toEqual(png)
     // Manifest persisted.
-    expect(await store.list()).toEqual({ [meta.id]: meta })
+    const { created: _created, ...persisted } = meta
+    expect(await store.list()).toEqual({ [meta.id]: persisted })
   })
 
   it('accepts WebP and JPEG uploads', async () => {
@@ -86,6 +89,10 @@ describe('AssetStore.save (§20)', () => {
     const first = await store.save(makePng(2, 3), 'image/png')
     const second = await store.save(makePng(2, 3), 'image/png')
     expect(second.id).toBe(first.id)
+    // Only the first save reports the write; the dedup hit is created:false
+    // (rollback paths rely on this to spare shared assets).
+    expect(first.created).toBe(true)
+    expect(second.created).toBe(false)
     expect(Object.keys(await store.list())).toHaveLength(1)
   })
 

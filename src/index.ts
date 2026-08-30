@@ -76,7 +76,7 @@ export function apply(ctx: Context) {
     resolveAssetPath: (id) => assetStore.resolve(id),
     maxAssetBytes: assetStore.maxFileBytes,
     listAnimations: () => animationsStore.loadAll(),
-    saveAnimation: (definition) => animationsStore.save(definition),
+    saveAnimation: (definition, guard) => animationsStore.save(definition, guard),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
     // P2 Motion Pack: the collision planner runs inside the store's one-lock
     // segment (freshest library, atomic persist — host/packs.ts policy).

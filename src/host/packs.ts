@@ -40,6 +40,11 @@ import {
   validateAnimationDefinition,
 } from '../motion/animation-definition'
 import { POSE_KEYS, type PoseKey } from '../core/types'
+// Same host layer: the store owns the reserved-id rule; packs reject it at
+// validation time so a reserved id fails BEFORE any file is written (a remap
+// candidate can never collide with it by construction — the suffix `-N` is
+// always appended, and the reserved id itself carries none).
+import { RESERVED_CLIENT_DRAFT_ID } from './animations'
 
 /** The namespace of a single-file pack; 'mixed' = keep per-definition ns. */
 const PACK_NAMESPACE_RE = /^[a-z][a-z0-9-]*$/
@@ -141,6 +146,10 @@ export function validateMotionPack(raw: unknown): PackValidationResult {
     const definition = candidate as AnimationDefinition
     if (!isCustomAnimationId(definition.id)) {
       errors.push(`animations[${index}]: id "${definition.id}" is not a custom (non-builtin) namespace id`)
+      continue
+    }
+    if (definition.id === RESERVED_CLIENT_DRAFT_ID) {
+      errors.push(`animations[${index}]: id "${RESERVED_CLIENT_DRAFT_ID}" is reserved for the client preview draft and cannot be stored`)
       continue
     }
     if (typeof namespace === 'string' && namespace !== MIXED_NAMESPACE && namespaceOf(definition.id) !== namespace) {
@@ -252,11 +261,25 @@ export function planMotionPackImport(
       continue
     }
     let finalId: string | null = null
+    let reusedIdentical = false
     for (let attempt = 2; attempt < 2 + MAX_REMAP_ATTEMPTS; attempt += 1) {
       const candidate = `${definition.id}-${attempt}`
       if (!taken(candidate)) {
         finalId = candidate
         break
+      }
+      // Re-importing a previously remapped conflict: the library copy already
+      // sitting at this suffix may hold IDENTICAL content — reuse it (report
+      // "identical") instead of piling on yet another -N copy. Only an
+      // existing-library copy qualifies: an id claimed by the pack itself
+      // (requested/planned) will hold the pack-mate's own content.
+      if (!requestedIds.has(candidate) && !plannedIds.has(candidate)) {
+        const held = existing.get(candidate)
+        if (held !== undefined && sameDefinition(held, definition)) {
+          finalId = candidate
+          reusedIdentical = true
+          break
+        }
       }
     }
     if (finalId === null) {
@@ -266,6 +289,10 @@ export function planMotionPackImport(
       while (taken(finalId)) finalId = `${finalId}x`
     }
     finalIdOf.set(definition.id, finalId)
+    if (reusedIdentical) {
+      entries.push({ requestedId: definition.id, finalId, status: 'identical' })
+      continue
+    }
     plannedIds.add(finalId)
     entries.push({ requestedId: definition.id, finalId, status: 'remapped' })
     writes.push({ ...definition, id: finalId })

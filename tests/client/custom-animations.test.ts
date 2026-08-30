@@ -82,7 +82,9 @@ describe('syncCustomAnimations', () => {
     expect(warnings).toEqual([]) // the non-user id is filtered out silently
     expect(registry.get('builtin:click-pop')).toBe(BUILTIN_CLICK_POP)
     expect(registry.list().map((definition) => definition.id)).toEqual(builtinIds)
-    expect(() => syncCustomAnimations(registry, [])).not.toThrow()
+    // an empty follow-up sync leaves every built-in untouched
+    syncCustomAnimations(registry, [])
+    expect(registry.list().map((definition) => definition.id)).toEqual(builtinIds)
     expect(registry.get('builtin:click-pop')).toBe(BUILTIN_CLICK_POP)
   })
 

@@ -886,3 +886,28 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 ### 验收
 
 全仓 **50 文件 / 924 用例**全绿;typecheck 干净;lint 基线 10 警告;build 成功(fflate 内联)。真机走查:给女仆设真实署名(溟月/上善无形/ZipZipPipe/CC BY-NC-SA 4.0)→导出 6.7MB zip(manifest+六图)→删宠→导入→切片与署名逐字段一致、即导即用激活;资产 409 引用保护正确拦截误删(导入走全复用路径);奶蛋导出含 motionPack(两自定义动画+states 推导 mounts);编辑器新按钮与署名区预填实测通过。dsh web 已重启加载新产物。
+
+## 整体评审收口批(2026-08-30,七维评审 + 四组并行修复)
+
+外部评审(7 子智能体分维:架构边界/Host 安全/Motion 引擎/客户端 UI/文档测试一致性/physics 整仓/新增功能专项)确认 12 项 P1 与约 20 项 P2;不需拍板的当日修复,需拍板/排队项登记 deferred-backlog.md(§1 新增 G1/G2、§6 B11 增补、§7 新增 G3)。
+
+### 修复清单(按主题)
+
+- **typecheck 阻断**:tests/host/pet-package.test.ts 的 zip level 选项收紧为 fflate 字面量联合(0325d8a 引入,测试全绿掩盖,评审发现)。
+- **Motion**:timeline-compiler reduced-motion 坍缩先排序再取终值(乱序自定义定义下减动效用户终值错误);playInteraction 补 repeat==='once' 守卫(loop 交互动画 await 永不 settle → flash 永不恢复/实例累积,与 resolveEnter 同款);scheduler onEvent 异常隔离(try/catch+warn)与 fireEvents 后 cancel 复查。
+- **Client**:PreviewSession 构造 structuredClone config + 浅拷 assets(对齐 OverlaySession 惯例——此前 EditorStore 原地 mutate 的草稿别名使 updateConfig 变化检测恒假,Live Preview 的 ambient/reduced-motion 热更新静默失效;独立 Preview 页 src/preview/index.tsx 依赖该别名,bump() 改走 updateConfig 热路径补偿);TransitionEditor/AnimationLibrary 的 user: 前缀判断改 isCustomAnimationId(B6 放宽的消费端补齐,pack 命名空间动画可挂载可编辑);saveDraftAsNewPet 成功补 info notice;subscribePose 即时推送走 fanOutSafely;pointer-gesture 返回幂等 cancel 句柄供卸载清理(TrackLane/EventTrack 接入);LivePreview/AnimationLibrary 两处 fire-and-forget updateConfig 补 catch;三处弱断言加固。
+- **Host**:revision() 缓存单调合并(Math.max,锁外读不再回退 expectedRevision 校验窗口);宠物包 validatePetPackage 补 states 引用 kind 交叉检查(enter→transition/ambient→ambient,任何落盘前 400)+ createPet/apply 纳入尽力回滚范围(纵深防御,先删宠物再按探针回滚动画/资产);PUT /animations kind-change 409 探测经 AnimationsStore.save 可选 guard 移入锁段新鲜读取(与 DELETE referencedBy 同型,src/index.ts 一行透传接线);validateMotionPack 提前拒绝保留 id user:0draft;importAnimations 段内失败 unlink 已写文件;packs 导出 ids 除重;remap 循环对库内候选做 sameDefinition 检查(同内容冲突包重导入报 identical,不再 -N 无限堆积);AssetsStore.save 返回 created 标志、宠物包回滚只删新建资产(并发同包导入不再误删共享资产);CORS 写守卫 same-site 落回 Origin↔Host 比对(跨端口 localhost 不再豁免,Origin 缺失仍按非浏览器放行)。
+- **physics**:PhysicsCard 记录兜底草稿来源,retry 成功且未编辑时重新采纳真实配置(此前会把磁盘配置静默重置为默认);滑动下拉补「当前值」兜底;服务镜像补可选 resyncAnimations 并在启动调用一次;新增 client 入口 jsdom 测试(visibilitychange→settleIfHidden/dispose 清理/resync 调用,5 用例);migrate 删冗余 existsSync 并把注释改写实。
+- **文档**:motion-format.md §1 命名空间首字符约束补齐(对齐 ID_RE)、§12 原子性段落改写为现行语义(含 kind 交叉检查与建宠/apply 回滚)、B2→B1 seam 误标修正;deferred-backlog.md C3 错误登记(React key 策略)撤销、B11 迁移残余窗口描述同步;根 AGENTS.md §5 旧路由名与测试计数同步。
+
+### 验证
+
+主插件 **51 文件 / 950 用例**全绿(较评审基线 +1 文件 +26 用例),typecheck 双工程干净,lint 回到 10 警告基线;physics **9 文件 / 130 用例**全绿,typecheck 干净。关键修复均带红绿对照或变异验证(详见各组实现报告)。真机走查未重做——行为变更集中在边界/错误路径,UI 主流程无视觉变化;编辑器 Live Preview 热更新与 pack 动画手动挂载建议下次真机顺手目验。
+
+## 评审拍板项落地(2026-08-30 晚)
+
+整体评审收口批留下的三个拍板项同日拍板并处理完毕:
+
+- **G1 once 时间线末帧语义 → 拍板维持现状**。运行时不改(scheduler 收尾 cancel 段动画、末帧不保留);内容侧约定「once / interaction 定义的末帧应回归属性默认值」写入 motion-format.md §5;backlog §8 记录重开条件(出现真实需要末帧滞留的自定义内容)。
+- **G2 getMeta 死代码 → 拍板删除**。`src/client/api.ts` 的 `MetaResponse`/`getMeta` 与 `META_URL` 常量移除(host `GET /meta` 端点保留,属公共能力发现 API;有真实调用方再加客户端助手)。全仓 950 用例与 typecheck 复验不变。
+- **G3 physics 滑动动画 interrupt → 拍板做成配置项**。扁平字段 `slideInterrupt: boolean`(默认 true 保持现状,与 slideAnimationId 对称、不做 section 重构):client config 类型/DEFAULT_CONFIG、host 校验(strict 拒非 boolean、lenient 回落 true、旧文件缺席走默认)、throw-controller 透传配置值、设置卡片滑动区新增开关(选「不播放」时禁用,镜像 bounce 惯例;`Toggle` 控件补 disabled 对齐姊妹控件)、physics README 配置表同步。physics 9 文件 / **135 用例**全绿。

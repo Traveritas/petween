@@ -27,7 +27,7 @@ import type {
   RepeatPolicy,
   TimelineEvent,
 } from '../../motion/animation-definition'
-import { validateAnimationDefinition } from '../../motion/animation-definition'
+import { isCustomAnimationId, validateAnimationDefinition } from '../../motion/animation-definition'
 import { MOTION_PROPERTIES } from '../../motion/motion-properties'
 import { TimelineEditor } from '../timeline/TimelineEditor'
 import { addTrack, validateTimelineDraft } from '../timeline/timeline-model'
@@ -202,7 +202,9 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
       ? undefined
       : (customs.find((definition) => definition.id === selectedId) ??
         BUILTIN_DEFINITIONS.find((definition) => definition.id === selectedId))
-  const readOnly = selected === undefined || !selected.id.startsWith('user:')
+  // B6: every non-builtin namespace (user: or a pack's own) is editable
+  // custom territory; only built-ins stay read-only.
+  const readOnly = selected === undefined || !isCustomAnimationId(selected.id)
   // The draft mirrors the selection; a stale draft (selection deleted
   // externally) is discarded with the editor area.
   const evaluation = selected !== undefined && draft !== null ? evaluateDraft(selected.id, selected.parameters, draft) : null
@@ -400,7 +402,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   }, [])
 
   useEffect(() => {
-    void auditionSessionRef.current?.updateConfig(config, assets)
+    void auditionSessionRef.current?.updateConfig(config, assets).catch((error) => console.warn('petween: audition config sync failed', error))
   }, [config, assets, configRevision])
 
   useEffect(() => {

@@ -238,7 +238,15 @@ function App(): JSX.Element {
     [],
   )
 
-  const bump = (): void => bumpRevision()
+  // The session owns its config copy (PreviewSession clones at construction),
+  // so every in-place edit must ride the §16.2 hot path to reach it —
+  // updateConfig also covers the ambient / reduced-motion refreshes.
+  const bump = (): void => {
+    bumpRevision()
+    void sessionRef.current?.updateConfig(config, assets).catch((error: unknown) => {
+      console.warn('petween: preview config sync failed', error)
+    })
+  }
   const appearance = config.states[selected]
   const inherited = appearance.enter.preset === 'global'
   const globalTransition = config.global.transition

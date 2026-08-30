@@ -200,8 +200,11 @@ export class AssetStore {
    * Validate and store an image (spec §20): size cap → magic-byte sniff →
    * declared-MIME consistency → dimension cap → total-size cap. Returns the
    * existing meta when the content was already uploaded (dedup by sha256).
+   * `created` reports whether THIS call wrote a new asset: rollback paths
+   * (pet-package import) must only undo what they actually created — a dedup
+   * hit may belong to a concurrent importer that is still wiring references.
    */
-  save(buffer: Buffer, declaredMime?: string): Promise<AssetMeta> {
+  save(buffer: Buffer, declaredMime?: string): Promise<AssetMeta & { created: boolean }> {
     return this.enqueue(async () => {
       if (buffer.length === 0) throw new AssetError('UNSUPPORTED_TYPE', 'empty upload')
       if (buffer.length > this.maxFileBytes) {
@@ -226,7 +229,7 @@ export class AssetStore {
       const id = sha256.slice(0, 16)
       const manifest = await this.list()
       const existing = manifest[id]
-      if (existing !== undefined) return existing
+      if (existing !== undefined) return { ...existing, created: false }
       const totalBytes = Object.values(manifest).reduce((sum, meta) => sum + meta.sizeBytes, 0)
       if (totalBytes + buffer.length > this.maxTotalBytes) {
         throw new AssetError('TOTAL_SIZE_EXCEEDED', `assets exceed the ${this.maxTotalBytes}-byte total limit`)
@@ -245,7 +248,7 @@ export class AssetStore {
       await writeFile(join(this.options.assetsDir, meta.fileName), buffer)
       manifest[id] = meta
       await writeJsonAtomic(this.options.manifestPath, manifest)
-      return meta
+      return { ...meta, created: true }
     })
   }
 

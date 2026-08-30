@@ -49,9 +49,10 @@ export function defaultAnimationsDir(): string {
  * claim it and the client sync would silently swallow the animation. The
  * host must not import client code, hence the literal — keep the two in
  * sync. Client previewing only registers in memory, never through the host
- * PUT, so rejecting the id here cannot break it.
+ * PUT, so rejecting the id here cannot break it. Exported for packs.ts,
+ * which rejects the id at pack-validation time (before anything is written).
  */
-const RESERVED_CLIENT_DRAFT_ID = 'user:0draft'
+export const RESERVED_CLIENT_DRAFT_ID = 'user:0draft'
 
 /** Route-level id guard: `<namespace>:<name>` with a filename-safe charset. */
 const SAFE_ID_RE = /^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/
@@ -213,9 +214,20 @@ export class AnimationsStore {
     return { customs, warnings, normalized }
   }
 
-  /** Validate and persist a definition atomically; invalid input throws with details. */
-  save(definition: AnimationDefinition): Promise<void> {
-    return this.enqueue(() => this.writeValidated(definition))
+  /**
+   * Validate and persist a definition atomically; invalid input throws with
+   * details. The optional `guard` runs INSIDE the serialized segment, just
+   * before the write, with the freshest on-disk kind of the same id
+   * (undefined = not stored / unreadable): a throwing guard aborts the save
+   * without touching the disk. The routes layer uses it for the kind-change
+   * 409 probe (B10 — a lock-free pre-check could be overtaken by a concurrent
+   * config PUT mounting the animation in between).
+   */
+  save(definition: AnimationDefinition, guard?: (existingKind: AnimationKind | undefined) => Promise<void>): Promise<void> {
+    return this.enqueue(async () => {
+      if (guard !== undefined) await guard(this.kindOf(definition.id))
+      await this.writeValidated(definition)
+    })
   }
 
   /**
@@ -259,7 +271,22 @@ export class AnimationsStore {
       const { customs } = await this.loadAll()
       const existing = new Map(customs.map((definition) => [definition.id, definition]))
       const result = plan(existing)
-      for (const definition of result.writes) await this.writeValidated(definition)
+      // The planner only ever targets FREE ids (verbatim) or freshly suffixed
+      // ones (remap), so every write here creates a NEW file — a mid-segment
+      // failure rolls this call's partial writes back instead of leaving
+      // orphan files behind a 400.
+      const written: string[] = []
+      try {
+        for (const definition of result.writes) {
+          await this.writeValidated(definition)
+          written.push(definition.id)
+        }
+      } catch (error) {
+        for (const id of written) {
+          await unlink(join(this.options.animationsDir, fileNameFor(id))).catch(() => undefined)
+        }
+        throw error
+      }
       return result
     })
   }

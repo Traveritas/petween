@@ -65,7 +65,7 @@ beforeEach(async () => {
     resolveAssetPath: (id) => assetStore.resolve(id),
     maxAssetBytes: assetStore.maxFileBytes,
     listAnimations: () => animationsStore.loadAll(),
-    saveAnimation: (definition) => animationsStore.save(definition),
+    saveAnimation: (definition, guard) => animationsStore.save(definition, guard),
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
     importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
@@ -512,6 +512,20 @@ describe('/api/petween/packs (P2 Motion Pack)', () => {
     expect((await fetch(`${base}/api/petween/packs/import`, { method: 'GET' })).status).toBe(405)
   })
 
+  it('export dedupes repeated ids (?ids=a,a yields ONE definition)', async () => {
+    await postImport(packBody())
+    const res = await fetch(
+      `${base}/api/petween/packs/export?ids=${encodeURIComponent('manga:pop')},${encodeURIComponent('manga:pop')}`,
+    )
+    expect(res.status).toBe(200)
+    const pack = await res.json()
+    expect(pack.animations).toHaveLength(1)
+    expect(pack.animations[0].id).toBe('manga:pop')
+    // The deduped export re-imports cleanly (a duplicated one would 400 on
+    // the pack's internal duplicate-id check).
+    expect((await postImport(pack)).status).toBe(200)
+  })
+
   it('an exported pack re-imports identically (round trip)', async () => {
     await postImport(packBody())
     const pack = await (await fetch(`${base}/api/petween/packs/export?ids=${encodeURIComponent('manga:pop')}`)).json()
@@ -828,6 +842,37 @@ describe('/api/petween/animations (V1.1 plan §3)', () => {
     // An unreferenced animation may change kind freely.
     await putAnimation('user:free', makeTransition('user:free'))
     expect((await putAnimation('user:free', makeAmbient('user:free'))).status).toBe(200)
+  })
+
+  it('PUT routes the kind-change probe through the store lock (guard callback)', async () => {
+    await putAnimation('user:pop', makeTransition('user:pop'))
+    const config = createDefaultPetweenConfig()
+    config.states.idle.enter.animationId = 'user:pop'
+    expect((await putConfig(config)).status).toBe(200)
+
+    // Observe the contract: the route must hand the store a guard that
+    // receives the fresh stored kind and runs the reference probe from inside
+    // the save segment (the in-lock property itself is pinned in
+    // animations.test.ts).
+    const calls: string[] = []
+    const original = deps.saveAnimation
+    deps.saveAnimation = async (_definition, guard) => {
+      calls.push('save')
+      expect(typeof guard).toBe('function')
+      await guard?.('transition') // the on-disk kind here
+      // Deliberately skip the real write — the guard must have thrown.
+    }
+    try {
+      const res = await putAnimation('user:pop', makeAmbient('user:pop'))
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ error: 'ANIMATION_IN_USE' })
+      expect(calls).toEqual(['save'])
+    } finally {
+      deps.saveAnimation = original
+    }
+    // Untouched on disk.
+    const listed = await (await fetch(`${base}/api/petween/animations`)).json()
+    expect(listed.customs[0].kind).toBe('transition')
   })
 })
 
@@ -1359,12 +1404,14 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     expect(await snapshot()).toEqual(before)
   })
 
-  it('a failure after the asset writes rolls the fresh assets back (no orphans, no half pet)', async () => {
+  it('a package carrying the reserved client-draft animation id is a 400 before any write', async () => {
     const png = makePng(6, 7)
     const sha256 = createHash('sha256').update(png).digest('hex')
     const id = sha256.slice(0, 16)
-    // user:0draft passes package validation but is the store's reserved id:
-    // the asset saves first, then the animation transaction throws.
+    // 'user:0draft' passes the custom-id shape check but is reserved for the
+    // client preview draft: pack validation now rejects it up front (it used
+    // to slip through and only fail inside the animation transaction, after
+    // the package's assets had already landed).
     const manifest = {
       format: 'pet-package',
       version: 1,
@@ -1385,11 +1432,120 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     )
     const res = await postImport(bytes)
     expect(res.status).toBe(400)
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_ANIMATION')
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PET_PACKAGE_INVALID')
+    // Zero writes: no asset, no animation, no pet.
+    expect(await readdir(join(dir, 'assets')).catch(() => [])).toEqual([])
+    expect(await readdir(join(dir, 'animations')).catch(() => [])).toEqual([])
+    expect(await readdir(join(dir, 'pets')).catch(() => [])).toEqual([])
+  })
+
+  it('a slice mounting an ambient animation on an enter slot is a 400 before any write', async () => {
+    const png = makePng(6, 7)
+    const sha256 = createHash('sha256').update(png).digest('hex')
+    const id = sha256.slice(0, 16)
+    // Hand-made manifest: user:float is ambient-kind but mounted on enter —
+    // validatePetPackage must reject before createPet could persist a pet
+    // that every later strict config save would reject (a dead preset).
+    const manifest = {
+      format: 'pet-package',
+      version: 1,
+      name: 'Wrong Kind',
+      pet: { scale: 1, poses: { idle: { assetId: id } }, states: { idle: { enter: { animationId: 'user:float' } } } },
+      assets: [{ id, sha256, file: `assets/${id}.png`, mimeType: 'image/png', width: 6, height: 7 }],
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Wrong Kind 动画',
+        namespace: 'user',
+        animations: [makeAmbient('user:float')],
+      },
+    }
+    const bytes = Buffer.from(
+      zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), [`assets/${id}.png`]: new Uint8Array(png) }),
+    )
+    const res = await postImport(bytes)
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: { code: string; details?: string[] } }
+    expect(body.error.code).toBe('PET_PACKAGE_INVALID')
+    expect(body.error.details?.join(' ')).toContain('user:float')
+    expect(await readdir(join(dir, 'assets')).catch(() => [])).toEqual([])
+    expect(await readdir(join(dir, 'animations')).catch(() => [])).toEqual([])
+    expect(await readdir(join(dir, 'pets')).catch(() => [])).toEqual([])
+  })
+
+  it('a failure inside the animation transaction rolls the fresh assets back (no orphans, no half pet)', async () => {
+    const png = makePng(6, 7)
+    const sha256 = createHash('sha256').update(png).digest('hex')
+    const id = sha256.slice(0, 16)
+    const manifest = {
+      format: 'pet-package',
+      version: 1,
+      name: 'Bad',
+      pet: { scale: 1, poses: { idle: { assetId: id } }, states: { idle: { enter: { animationId: 'user:pop' } } } },
+      assets: [{ id, sha256, file: `assets/${id}.png`, mimeType: 'image/png', width: 6, height: 7 }],
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Bad 动画',
+        namespace: 'user',
+        animations: [makeTransition('user:pop')],
+        mounts: { idle: { enter: 'user:pop' } },
+      },
+    }
+    const bytes = Buffer.from(
+      zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), [`assets/${id}.png`]: new Uint8Array(png) }),
+    )
+    // Force the animation transaction to fail AFTER the asset writes landed.
+    const original = deps.importPack
+    deps.importPack = async () => {
+      throw new Error('simulated import failure')
+    }
+    try {
+      const res = await postImport(bytes)
+      expect(res.status).toBe(500)
+    } finally {
+      deps.importPack = original
+    }
     const { assets } = (await (await fetch(`${base}/api/petween/config`)).json()) as { assets: Record<string, unknown> }
     expect(assets[id]).toBeUndefined()
     const { pets } = (await (await fetch(`${base}/api/petween/pets`)).json()) as { pets: PetPreset[] }
     expect(pets).toEqual([])
+  })
+
+  it('a dedup-hit asset (created:false) survives the failure rollback — concurrent-import sharing', async () => {
+    const png = makePng(6, 7)
+    const sha256 = createHash('sha256').update(png).digest('hex')
+    const id = sha256.slice(0, 16)
+    const manifest = {
+      format: 'pet-package',
+      version: 1,
+      name: 'Shared',
+      pet: { scale: 1, poses: { idle: { assetId: id } }, states: {} },
+      assets: [{ id, sha256, file: `assets/${id}.png`, mimeType: 'image/png', width: 6, height: 7 }],
+    }
+    const bytes = Buffer.from(
+      zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), [`assets/${id}.png`]: new Uint8Array(png) }),
+    )
+    // Simulate a concurrent importer owning the shared asset: the store's
+    // content-hash dedup reports created:false (the bytes ARE on disk — the
+    // "other" import wrote them — but THIS call did not create the entry).
+    const originalSave = deps.saveAsset
+    deps.saveAsset = async (buffer, declaredMime) => ({ ...(await originalSave(buffer, declaredMime)), created: false })
+    // Force a failure after the asset step so the rollback runs.
+    const originalCreate = deps.createPet
+    deps.createPet = async () => {
+      throw new Error('simulated create failure')
+    }
+    try {
+      const res = await postImport(bytes)
+      expect(res.status).toBe(500)
+    } finally {
+      deps.saveAsset = originalSave
+      deps.createPet = originalCreate
+    }
+    // The shared asset must survive this import's rollback.
+    const { assets } = (await (await fetch(`${base}/api/petween/config`)).json()) as { assets: Record<string, unknown> }
+    expect(assets[id]).toBeDefined()
   })
 
   it('PUT /pets/<id> updates attribution field-by-field, clears with null; renames keep it', async () => {
@@ -1471,6 +1627,38 @@ describe('cross-origin write guard (§20 defense-in-depth)', () => {
       body: JSON.stringify({ name: 'Cli', from: 'blank' }),
     })
     expect(cliStyle.status).toBe(200)
+  })
+
+  it('same-site is not enough on its own: a foreign Origin is rejected, a matching one passes', async () => {
+    // Cross-port localhost counts as same-site — the guard must still compare
+    // Origin against Host instead of trusting the fetch-metadata alone.
+    const foreign = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'sec-fetch-site': 'same-site', origin: 'http://localhost:9999', 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(foreign.status).toBe(403)
+    expect((await foreign.json()).error.code).toBe('CROSS_ORIGIN')
+    const sameOrigin = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'sec-fetch-site': 'same-site', origin: base, 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(sameOrigin.status).toBe(200)
+    // No Origin at all: a non-browser client annotating fetch metadata stays allowed.
+    const cliStyle = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(cliStyle.status).toBe(200)
+    // same-origin/none keep their fast path.
+    const navStyle = await fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    expect(navStyle.status).toBe(200)
   })
 
   it('GETs are never guarded', async () => {

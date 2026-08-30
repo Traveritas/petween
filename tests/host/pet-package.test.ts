@@ -1,6 +1,6 @@
 /**
  * host/pet-package.ts unit tests (motion-format §12): manifest validation
- * (field groups, B2 version seam), zip structural guards (whitelist, bomb
+ * (field groups, B1 version seam), zip structural guards (whitelist, bomb
  * caps), asset content cross-checks (sha256, sniffing), export completeness
  * and the slice rewriting that carries collision-planned final ids.
  */
@@ -55,11 +55,14 @@ function ambientAnimation(id: string): AnimationDefinition {
   }
 }
 
+/** fflate's zipSync `level` is a 0..9 literal union, not a plain number. */
+type ZipLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+
 /** Zip a manifest (plus optional extra files) into a package body. */
 function packageZip(
   manifest: unknown,
   extraFiles: Record<string, Buffer> = {},
-  options: { level?: number } = {},
+  options: { level?: ZipLevel } = {},
 ): Buffer {
   return Buffer.from(
     zipSync(
@@ -76,7 +79,7 @@ function packageZip(
 function makePackage(
   overrides: Record<string, unknown> = {},
   extraFiles: Record<string, Buffer> = {},
-  options: { level?: number } = {},
+  options: { level?: ZipLevel } = {},
 ): Buffer {
   const asset = pngAsset()
   const manifest = {
@@ -157,7 +160,7 @@ describe('validatePetPackage: manifest fields', () => {
     expect(error.details?.join(' ')).toContain('duplicate id')
   })
 
-  it('rejects a newer format version with the explicit upgrade hint (B2 seam)', async () => {
+  it('rejects a newer format version with the explicit upgrade hint (B1 seam)', async () => {
     const error = await expectInvalid(makePackage({ version: 2 }))
     expect(error.code).toBe('PACK_VERSION_NEWER')
     expect(error.message).toContain('newer petween')
@@ -342,6 +345,55 @@ describe('validatePetPackage: asset cross-checks', () => {
       }),
     )
     expect(noPack.details).toContain('user:float')
+  })
+
+  it('rejects wrong-kind slice mounts against the pack kind table (ambient on enter, transition on ambient)', async () => {
+    const asset = pngAsset()
+    const body = makePackage({
+      pet: {
+        scale: 1,
+        poses: { idle: { assetId: asset.id } },
+        states: {
+          idle: { enter: { animationId: 'manga:float' } }, // ambient on an enter slot
+          thinking: { ambient: { customAnimationId: 'manga:pop' } }, // transition on an ambient slot
+        },
+      },
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Kitty 动画',
+        namespace: 'manga',
+        animations: [ambientAnimation('manga:float'), transitionAnimation('manga:pop')],
+      },
+    })
+    const error = await expectInvalid(body)
+    expect(error.code).toBe('PET_PACKAGE_INVALID')
+    expect(error.details?.join(' ')).toContain('states.idle.enter.animationId: "manga:float" is ambient, needs transition')
+    expect(error.details?.join(' ')).toContain('states.thinking.ambient.customAnimationId: "manga:pop" is transition, needs ambient')
+  })
+
+  it('accepts slice mounts whose kinds match (and builtin enter ids skip the table)', async () => {
+    const asset = pngAsset()
+    const body = makePackage({
+      pet: {
+        scale: 1,
+        poses: { idle: { assetId: asset.id } },
+        states: {
+          idle: { enter: { animationId: 'manga:pop' } },
+          thinking: { ambient: { customAnimationId: 'manga:float' }, enter: { animationId: 'builtin:jelly' } },
+        },
+      },
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Kitty 动画',
+        namespace: 'manga',
+        animations: [transitionAnimation('manga:pop'), ambientAnimation('manga:float')],
+      },
+    })
+    const plan = await validatePetPackage(body)
+    expect(plan.pet.states.idle.enter.animationId).toBe('manga:pop')
+    expect(plan.pet.states.thinking.ambient.customAnimationId).toBe('manga:float')
   })
 
   it('accepts a package with a motionPack and keeps builtin references out of the membership check', async () => {

@@ -5,9 +5,16 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import { ConfigStore, loadConfig } from '../../src/host/config'
+
+// Wrap (never replace) storage.readJsonFile so the revision-race test can park
+// one read mid-flight; every other call passes through to the real file IO.
+vi.mock('../../src/host/storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/host/storage')>()
+  return { ...actual, readJsonFile: vi.fn(actual.readJsonFile) }
+})
 
 let dir: string
 let store: ConfigStore
@@ -128,5 +135,39 @@ describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
     expect(merged.overlay).toEqual({ x: 1, y: 2 })
     // the invalid patch never reached the disk
     expect((await store.load()).enabled).toBe(createDefaultPetweenConfig().enabled)
+  })
+
+  it('a lock-free revision read racing an update never rolls the cache back', async () => {
+    // Seed the sidecar at 5.
+    const { writeJsonAtomic } = await vi.importActual<typeof import('../../src/host/storage')>('../../src/host/storage')
+    await writeJsonAtomic(store.revisionPath, { revision: 5 })
+    // Park the lock-free read AFTER it has read the old value but BEFORE it
+    // returns — exactly the window in which an update()'s bump lands first
+    // (the routes read the revision outside the write lock, routes.ts
+    // handleMeta/handleConfig).
+    const storage = await import('../../src/host/storage')
+    const readJsonFile = vi.mocked(storage.readJsonFile)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    readJsonFile.mockImplementationOnce(async (path: string) => {
+      const { readFile } = await import('node:fs/promises')
+      let value: unknown = null
+      try {
+        value = JSON.parse(await readFile(path, 'utf8'))
+      } catch {
+        value = null
+      }
+      await gate
+      return value
+    })
+    const staleRead = store.revision() // cache empty → reads 5, then parks
+    // A full update lands in between: bumps the sidecar to 6 and caches 6.
+    await store.update({ global: { scale: 1.4 } })
+    release()
+    // The stale read must merge monotonically — never restore the older 5.
+    await expect(staleRead).resolves.toBe(6)
+    expect(await store.revision()).toBe(6)
   })
 })

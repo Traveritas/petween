@@ -475,6 +475,42 @@ describe('MotionDirector — playInteraction (§28)', () => {
     director.dispose()
   })
 
+  it('falls back to builtin:click-pop for a repeating interaction (a loop never settles)', async () => {
+    const { stage, config, registry, director } = setup()
+    // Same once-only discipline as resolveEnter: a repeating interaction would
+    // await forever — the flash pose would never restore.
+    registry.register({
+      version: 1,
+      id: 'user:loop-click',
+      name: 'Loop Click',
+      kind: 'interaction',
+      durationMs: 200,
+      repeat: { mode: 'loop' },
+      tracks: [
+        {
+          property: 'transition.scaleX',
+          keyframes: [
+            { at: 0, value: 1 },
+            { at: 1, value: 1.2 },
+          ],
+        },
+      ],
+    })
+    config.interactions.click.animation = 'user:loop-click'
+    config.interactions.click.pose = 'success'
+    await bootThinking(director)
+
+    const done = director.playInteraction()
+    // the guard falls back to the 140ms once-only builtin pop
+    expect(harness.animations[harness.animations.length - 1].options.duration).toBe(140)
+    expect(harness.animations[harness.animations.length - 1].options.iterations).toBeUndefined()
+    await settleTransitions()
+    await done // settles — a loop instance would hang here forever
+    // flash pose swapped in and restored on settle
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'success', 'thinking'])
+    director.dispose()
+  })
+
   it('flash pose: swaps to it for the animation duration and back on finish (await-driven)', async () => {
     const { stage, config, director } = setup()
     config.interactions.click.pose = 'success'

@@ -876,6 +876,9 @@ export class EditorStore {
         states: structuredClone(draft.states),
       })
       if (this.disposed) return true
+      // Emitted before the list refresh: a refresh failure's warn overwrites
+      // this info, keeping the more actionable message on screen.
+      this.emit({ notice: { kind: 'info', text: `已另存为新宠物「${name}」。` } })
       await this.refreshPetsSafely()
       return true
     } catch (error) {

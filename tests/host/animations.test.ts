@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { AnimationError, AnimationsStore, validateAnimationId, validateCustomAnimationId } from '../../src/host/animations'
+import { createWriteLock } from '../../src/host/storage'
 
 let dir: string
 let store: AnimationsStore
@@ -228,6 +229,82 @@ describe('AnimationsStore.save', () => {
     ])
     const reloaded = (await store.loadAll()).customs.find((definition) => definition.id === 'user:a')
     expect(['V2', 'V3']).toContain(reloaded?.name)
+  })
+
+  it('runs the guard with the fresh stored kind; a throwing guard prevents the write', async () => {
+    await store.save(makeDefinition('user:pop'))
+    const observed: Array<string | undefined> = []
+    await store.save(makeDefinition('user:pop', { name: 'V2' }), async (existingKind) => {
+      observed.push(existingKind)
+    })
+    expect(observed).toEqual(['interaction'])
+    // A throwing guard aborts the save before anything hits the disk.
+    const error = await store
+      .save(makeDefinition('user:pop', { name: 'V3' }), async () => {
+        throw new AnimationError('IN_USE', 'animation is still referenced: user:pop')
+      })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(AnimationError)
+    expect((error as AnimationError).code).toBe('IN_USE')
+    const { customs } = await store.loadAll()
+    expect(customs).toHaveLength(1)
+    expect(customs[0]?.name).toBe('V2')
+    // A never-stored id reports undefined.
+    const kinds: Array<string | undefined> = []
+    await store.save(makeDefinition('user:new'), async (existingKind) => {
+      kinds.push(existingKind)
+    })
+    expect(kinds).toEqual([undefined])
+  })
+
+  it('the guard holds the write lock: a queued save cannot land while the guard is gated', async () => {
+    // Regression guard for the in-lock kind-change probe (routes.ts PUT
+    // /animations): had the guard run OUTSIDE the lock, the queued save below
+    // would complete while the guard is still gated.
+    const lock = createWriteLock()
+    const animations = new AnimationsStore({ animationsDir: join(dir, 'animations'), lock })
+    await animations.save(makeDefinition('user:pop'))
+    let releaseGuard!: () => void
+    const guardGate = new Promise<void>((resolve) => {
+      releaseGuard = resolve
+    })
+    let queuedFinished = false
+    const guarded = animations.save(makeDefinition('user:pop', { name: 'V2' }), async () => {
+      await guardGate
+    })
+    const queued = animations.save(makeDefinition('user:other')).then(() => {
+      queuedFinished = true
+    })
+    // Real clock: an ungated (buggy) guard would have let the queued save land.
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(queuedFinished).toBe(false)
+    releaseGuard()
+    await guarded
+    await queued
+    expect(queuedFinished).toBe(true)
+  })
+})
+
+describe('AnimationsStore.importAnimations', () => {
+  it('rolls back the files it already wrote when a later write in the same segment fails', async () => {
+    // 'user:0draft' is schema-valid but store-reserved: the first write lands,
+    // the second throws mid-segment (a pack validated today can never produce
+    // this — the plan callback is fed directly to test the store's own net).
+    const error = await store
+      .importAnimations(() => ({ writes: [makeDefinition('user:good'), makeDefinition('user:0draft')] }))
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(AnimationError)
+    expect((error as AnimationError).code).toBe('INVALID_DEFINITION')
+    expect((error as AnimationError).message).toContain('user:0draft')
+    // No orphan: user:good is gone from the library AND from the disk.
+    expect(await store.loadAll()).toEqual({ customs: [], warnings: [], normalized: [] })
+    expect(await readdir(join(dir, 'animations')).catch(() => [])).toEqual([])
+  })
+
+  it('persists every write of a clean plan', async () => {
+    const result = await store.importAnimations(() => ({ writes: [makeDefinition('user:a'), makeDefinition('user:b')] }))
+    expect(result.writes).toHaveLength(2)
+    expect((await store.loadAll()).customs.map((definition) => definition.id)).toEqual(['user:a', 'user:b'])
   })
 })
 

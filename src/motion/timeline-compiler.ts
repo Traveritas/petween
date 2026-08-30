@@ -97,15 +97,19 @@ function normalizeTrack(track: AnimationDefinition['tracks'][number], strength: 
     return clamp(resolved, descriptor.min ?? -Infinity, descriptor.max ?? Infinity)
   }
 
+  // Sort before the reduced-motion branch too: keyframe order is not part of
+  // the schema contract (validation rejects duplicate `at`, not disorder), so
+  // the array tail is not necessarily the timeline's end.
+  const sorted = [...track.keyframes].sort((a, b) => a.at - b.at)
+
   if (reducedMotion) {
-    const finalValue = evaluate(track.keyframes[track.keyframes.length - 1].value)
+    const finalValue = evaluate(sorted[sorted.length - 1].value)
     return {
       property: track.property,
       keyframes: [numericKeyframe(0, finalValue), numericKeyframe(1, finalValue)],
     }
   }
 
-  const sorted = [...track.keyframes].sort((a, b) => a.at - b.at)
   const keyframes = sorted.map((keyframe) => numericKeyframe(keyframe.at, evaluate(keyframe.value), keyframe.easing))
   if (keyframes[0].at > 0) {
     keyframes.unshift(numericKeyframe(0, descriptor.defaultValue))

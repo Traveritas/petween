@@ -8,6 +8,10 @@
  * Travel below the threshold ends as a click (select); crossing it reports
  * drags with the raw client coordinates — the lane owning the gesture
  * converts them to snapped timeline times.
+ *
+ * The gesture only self-cleans on move/up/cancel, so the returned cancel
+ * handle (idempotent) exists for the owner's unmount path: it removes the
+ * window listeners and mutes the gesture mid-press.
  */
 
 export const TIMELINE_DRAG_THRESHOLD_PX = 3
@@ -26,14 +30,18 @@ interface PointerLike {
   clientY?: number
 }
 
-export function beginPointerGesture(event: PointerLike, options: PointerGestureOptions): void {
-  if (typeof event.button === 'number' && event.button !== 0) return // main button only
-  if (event.isPrimary === false) return // ignore secondary touch points
-  if (typeof event.clientX !== 'number' || typeof event.clientY !== 'number') return
+/** Rejected presses never start a gesture; their cancel handle is a no-op. */
+const NOOP_CANCEL = (): void => {}
+
+export function beginPointerGesture(event: PointerLike, options: PointerGestureOptions): () => void {
+  if (typeof event.button === 'number' && event.button !== 0) return NOOP_CANCEL // main button only
+  if (event.isPrimary === false) return NOOP_CANCEL // ignore secondary touch points
+  if (typeof event.clientX !== 'number' || typeof event.clientY !== 'number') return NOOP_CANCEL
   const pointerId = typeof event.pointerId === 'number' ? event.pointerId : 0
   const startX = event.clientX
   const startY = event.clientY
   let dragging = false
+  let cancelled = false
 
   const isGestureEvent = (next: PointerLike): boolean => {
     const id = typeof next.pointerId === 'number' ? next.pointerId : 0
@@ -45,6 +53,7 @@ export function beginPointerGesture(event: PointerLike, options: PointerGestureO
     window.removeEventListener('pointercancel', handleCancel)
   }
   const handleMove = (raw: Event): void => {
+    if (cancelled) return
     const next = raw as PointerLike
     if (!isGestureEvent(next)) return
     const dx = (next.clientX as number) - startX
@@ -56,16 +65,23 @@ export function beginPointerGesture(event: PointerLike, options: PointerGestureO
     options.onDrag(next.clientX as number, next.clientY as number)
   }
   const handleUp = (raw: Event): void => {
+    if (cancelled) return
     if (!isGestureEvent(raw as PointerLike)) return
     const wasDragging = dragging
     cleanup()
     if (!wasDragging) options.onClick()
   }
   const handleCancel = (raw: Event): void => {
+    if (cancelled) return
     if (!isGestureEvent(raw as PointerLike)) return
     cleanup()
   }
   window.addEventListener('pointermove', handleMove)
   window.addEventListener('pointerup', handleUp)
   window.addEventListener('pointercancel', handleCancel)
+  return () => {
+    if (cancelled) return
+    cancelled = true
+    cleanup()
+  }
 }

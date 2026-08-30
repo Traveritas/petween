@@ -27,7 +27,6 @@ const ASSETS_URL = '/api/petween/assets'
 const ANIMATIONS_URL = '/api/petween/animations'
 const PETS_URL = '/api/petween/pets'
 const PET_IMPORT_URL = '/api/petween/pets/import'
-const META_URL = '/api/petween/meta'
 const PACK_IMPORT_URL = '/api/petween/packs/import'
 const PACK_EXPORT_URL = '/api/petween/packs/export'
 
@@ -161,19 +160,6 @@ async function requestBinary(url: string, init?: RequestInit): Promise<ArrayBuff
 
 export function getConfig(): Promise<GetConfigResponse> {
   return request(CONFIG_URL)
-}
-
-/** B2: host capability discovery (apiVersion / configVersion / revision / features). */
-export interface MetaResponse {
-  apiVersion: number
-  configVersion: number
-  revision: number
-  /** Additive-only list; probe with includes() instead of guessing endpoints. */
-  features: string[]
-}
-
-export function getMeta(): Promise<MetaResponse> {
-  return request(META_URL)
 }
 
 /**

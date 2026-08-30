@@ -1039,6 +1039,8 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(store.getSnapshot().config?.activePetId).toBeNull()
     expect(store.getSnapshot().saveState).toBe('dirty')
     expect(store.getSnapshot().pets.map((candidate) => candidate.name)).toEqual(['变体'])
+    // the success path announces itself like every other pet action
+    expect(store.getSnapshot().notice).toEqual({ kind: 'info', text: '已另存为新宠物「变体」。' })
     // The fork must not implicitly save anything.
     expect(mocks.patchConfig).not.toHaveBeenCalled()
   })

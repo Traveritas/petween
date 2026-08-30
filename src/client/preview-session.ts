@@ -67,14 +67,18 @@ export class PreviewSession {
   constructor(options: PreviewSessionOptions) {
     this.stage = options.stage
     this.auditionOnly = options.auditionOnly ?? false
-    this.config = options.config
-    this.assets = options.assets
+    // Own copies: the settings editor mutates its draft IN PLACE and hands the
+    // same object back to updateConfig() — an alias would make the change
+    // detection there compare the draft against itself (same discipline as
+    // OverlaySession's hub snapshot clone).
+    this.config = structuredClone(options.config)
+    this.assets = { ...options.assets }
     this.registry = options.registry ?? createBuiltinRegistry()
-    this.resolvePose = createPoseResolver(options.config.poses, options.assets)
+    this.resolvePose = createPoseResolver(this.config.poses, this.assets)
     this.director = new MotionDirector({
       stage: options.stage,
       registry: this.registry,
-      config: options.config,
+      config: this.config,
       // Indirection: updateConfig swaps the resolver on config hot-edits. The
       // seam is string-keyed (external poses); the preview owns none, so any
       // non-builtin key simply resolves to nothing.
@@ -83,7 +87,7 @@ export class PreviewSession {
     })
     if (options.customs !== undefined) this.updateCustoms(options.customs)
     this.source = new ManualStateSource({
-      config: options.config,
+      config: this.config,
       director: this.director,
       coalesceMs: options.coalesceMs,
     })
@@ -122,8 +126,10 @@ export class PreviewSession {
 
   /**
    * §16.2 editor hot path: move the session onto an edited config/assets
-   * draft. The session's own config OBJECT is kept and its fields are
-   * replaced with a deep copy of the draft, so the MotionDirector and the
+   * draft. The session's own config OBJECT (cloned at construction — the
+   * editor mutates its draft in place, so aliasing it would turn the diff
+   * below into a same-object no-op) is kept and its fields are replaced with
+   * a deep copy of the draft, so the MotionDirector and the
    * ManualStateSource's resolver — both holding the original object — read
    * the new values live. Ambient restarts only when the states payload (or
    * the reduced-motion setting) actually changed: unrelated slider drags must

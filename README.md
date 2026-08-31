@@ -38,7 +38,7 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 
 ## 安装
 
-要求：已安装 DSH（`@deepseek-ai/dsh`，在 0.1.0-rc.7 上实测）、Node ≥ 20 与 pnpm。
+要求：已安装 DSH（`@deepseek-ai/dsh`，在 0.1.0-rc.7 上实测）、Node ≥ 22.18（tsdown 0.22 起的构建工具链要求；插件运行时不受此限）与 pnpm。
 
 尚未发布到 npm（`dsh plugin add petween` 暂不可用），从 GitHub 克隆安装：
 
@@ -96,7 +96,7 @@ dsh plugin --profile web remove petween     # 卸载
 
 - DSH：`0.1.0-rc.7`（本仓库开发/验收版本；插件 API 若变化以 `docs/implementation-notes.md` 记录为准）
 - 运行环境：DSH Web UI（Chromium 系浏览器）
-- 构建：Node ≥ 20、pnpm
+- 构建：Node ≥ 22.18、pnpm
 
 ## 开发
 

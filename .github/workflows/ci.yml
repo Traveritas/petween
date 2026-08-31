@@ -20,6 +20,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm vitest run
-      - run: pnpm run build
-      - name: pack hygiene
+      # tsdown 0.22 requires Node ^22.18 / >=24.11 (Promise.withResolvers in its
+      # Node-20 config fallback path); typecheck+tests still run on 20 to keep
+      # the runtime-compat signal.
+      - if: ${{ matrix.node != '20' }}
+        run: pnpm run build
+      - if: ${{ matrix.node != '20' }}
+        name: pack hygiene
         run: npm pack --dry-run

@@ -15,13 +15,15 @@
  *   DELETE of the active pet → {deleted, config} fallback view on flipped
  *   hosts (C5-C); pre-flip hosts answer 409 ACTIVE_PET instead)
  * - GET    /api/petween/pets/<id>/export → application/zip (§12 pet package)
+ * - POST   /api/petween/pets/<id>/export → application/zip (P3: collected
+ *   pluginConfigs in the JSON body overlay the record snapshot)
  * - POST   /api/petween/pets/import      → { pet, config, report } | 400 PACK_INVALID (§12)
  * - PUT    /api/petween/pets/<id>        → { pet } (partial {name?, attribution?})
  * - GET    /api/petween/meta           → capability discovery (B2)
  * - POST   /api/petween/packs/import   → { entries, mounts, warnings } | 400 PACK_INVALID (P2)
  * - GET    /api/petween/packs/export?ids= → pack manifest (P2)
  */
-import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice } from '../core/types'
+import type { AssetMeta, PetAttribution, PetPluginConfigs, PetweenConfig, PetPreset, PetSlice } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 
 const CONFIG_URL = '/api/petween/config'
@@ -412,6 +414,21 @@ export interface PetPackageImportResponse {
 /** Export one pet as a shareable zip (binary body — the only non-JSON GET). */
 export function exportPetPackage(id: string): Promise<ArrayBuffer> {
   return requestBinary(`${PETS_URL}/${encodeURIComponent(id)}/export`)
+}
+
+/**
+ * P3 POST variant of the pet-package export: freshly collected companion
+ * configs (client/shared-config-registry) ride the JSON body; the host
+ * validates the envelope with the same §12 rules and overlays it per
+ * namespace onto the record snapshot before packing. Same zip binary
+ * response as the GET.
+ */
+export function exportPetPackageWithConfigs(id: string, pluginConfigs: PetPluginConfigs): Promise<ArrayBuffer> {
+  return requestBinary(`${PETS_URL}/${encodeURIComponent(id)}/export`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pluginConfigs }),
+  })
 }
 
 /** Import a pet package zip (≤48MB host-side); creates and activates the pet. */

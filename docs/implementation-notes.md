@@ -1020,7 +1020,7 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 
 - 阶段 3(client 语义):editor-store 草稿语义/C5 落点 UI;DELETE 响应已带视图、feature 位可探测,对接面已备好。
 - 阶段 4(清理):v1 读取路径/saveSlice/shim 切片路由均按「可退役」标注;config.v1.backup.json 与迁移代码至少保留一个版本。
-- 真机走查待执行:裸切往返回归(2026-08-29 事故场景)、C5-C 删除落地、v1 真实数据迁移;e2e/ 旧脚本涉及 DELETE 409 与裸切展开的预期需更新后再跑。
+- 真机走查待执行:裸切往返回归(2026-08-29 事故场景)、C5-C 删除落地、v1 真实数据迁移;e2e/ 旧脚本登记后经核实**并无**此类断言（事故核验是临时 curl，未落盘）；已由 s8-preset-authority.mjs 固化新语义（2026-08-31 第五批）。
 
 ## UX 打磨批 + 预设权威化阶段 3(2026-08-31)
 
@@ -1037,3 +1037,10 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **草稿语义审计**:以「draft 恒属于当前活跃宠物」逐条复核 dirty 门/adoptPublished/另存为/导入 revert——并发机制零改动即语义成立;仅修失真注释。
 - 验证:**54 文件 / 1028 用例**全绿,typecheck/lint 基线,build 成功。
 - 范围外登记:跨界面竞态(他端删除/切换生效宠物时本编辑器 dirty 保存会落进「别的」预设,生产恒有 hub 故窗口极窄;真修复=revision 守卫保存,超出最小改动)→ backlog。
+
+## pluginConfigs P3 导出时收集 + e2e s8(2026-08-31 第六批,三路并行)
+
+- **P3 主仓**:中性注册表 `src/client/shared-config-registry.ts`(cordis-free,抛错隔离/弃权跳过/注销 stale 守卫);`petween/client` additive `registerSharedPluginConfigProvider`(version 1 不动);editor-store `exportPetPackage` 先收集、非空走新 `POST /pets/<id>/export`(body `{pluginConfigs}` ≤64KiB,复用 P1 `validatePluginConfigs`),空表保持单参 GET(记录快照回落,行为逐字节不变);host 按命名空间整体覆盖记录快照、未收集保留、纯读不回写。+16 用例(55 文件 / 1044 绿)。
+- **P3 physics**:boot load 链上注册 provider(返回 `structuredClone(当前配置)` 快照),三道静默门(已 dispose/旧服务无此方法/hub 未 loaded),dispose 注销。+5 用例(166 绿)。刻意不做:boot load 失败后经卡片重试变 loaded 的补注册(登记 backlog §7)。
+- **e2e**:核实更正——旧脚本无 DELETE 409/裸切断言(事故核验是临时 curl 未落盘);s3/s4/s5 补「为何不变」审计注释;新建 `s8-preset-authority.mjs`(纯 HTTP,翻转四语义 + 导出 manifest + pluginConfigs 宽松断言,破坏性分支 `E2E_DELETE_LAST_PET=1` 门控,仅语法检查未真机运行)。motion-format.md §12 补 POST 导出变体与收集语义。
+- 验证:主仓 55 文件 / **1044 用例**、physics 10 文件 / **166 用例**全绿,typecheck/lint 基线,两仓 build 成功。

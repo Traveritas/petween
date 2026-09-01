@@ -21,6 +21,7 @@ import {
   type StageSnapshot,
   type UserPointerEvent,
 } from '../../src/client/extension-service'
+import { collectSharedPluginConfigs } from '../../src/client/shared-config-registry'
 import { OverlaySession } from '../../src/client/overlay-session'
 import { PetOverlay } from '../../src/client/overlay/PetOverlay'
 import { PetStage } from '../../src/client/overlay/pet-stage'
@@ -195,6 +196,21 @@ describe('extension service — no active session', () => {
     const seen: Array<StageSnapshot | null> = []
     serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
     expect(seen).toEqual([null])
+  })
+})
+
+describe('extension service — shared config providers (pet-package P3)', () => {
+  it('registerSharedPluginConfigProvider lands in the neutral registry, session-independent', () => {
+    // No live session: the collect channel is a pure registry delegation.
+    expect(collectSharedPluginConfigs()).toEqual({})
+    serviceUnsubscribers.push(petweenClientService.registerSharedPluginConfigProvider('petween-physics', () => ({ gravity: 2400 })))
+    expect(collectSharedPluginConfigs()).toEqual({ 'petween-physics': { config: { gravity: 2400 } } })
+  })
+
+  it('the returned unregister drops the namespace from collection', () => {
+    const unregister = petweenClientService.registerSharedPluginConfigProvider('petween-mood', () => ({ bubble: '…' }))
+    unregister()
+    expect(collectSharedPluginConfigs()).toEqual({})
   })
 })
 

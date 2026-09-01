@@ -12,6 +12,8 @@ import {
   deleteAnimation,
   deleteAsset,
   deletePet,
+  exportPetPackage,
+  exportPetPackageWithConfigs,
   getAnimations,
   getConfig,
   getMeta,
@@ -363,5 +365,25 @@ describe('client api — pet presets (V1.1)', () => {
       url: '/api/petween/pets/pet_abc-123/apply',
       init: { method: 'POST' },
     })
+  })
+
+  it('exportPetPackage GETs the export subpath and reads the zip as binary', async () => {
+    fetchMock.mockResolvedValue(new Response(new Uint8Array([9, 9]), { status: 200 }))
+    const data = await exportPetPackage('pet_abc-123')
+    expect(new Uint8Array(data)).toEqual(new Uint8Array([9, 9]))
+    expect(lastCall()).toMatchObject({ url: '/api/petween/pets/pet_abc-123/export' })
+    expect(lastCall().init.method ?? 'GET').toBe('GET')
+  })
+
+  it('exportPetPackageWithConfigs POSTs the collected pluginConfigs and reads the same binary (P3)', async () => {
+    fetchMock.mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { status: 200 }))
+    const pluginConfigs = { 'petween-physics': { config: { gravity: 2400 } } }
+    const data = await exportPetPackageWithConfigs('pet_abc-123', pluginConfigs)
+    expect(new Uint8Array(data)).toEqual(new Uint8Array([1, 2, 3]))
+    const { url, init } = lastCall()
+    expect(url).toBe('/api/petween/pets/pet_abc-123/export')
+    expect(init.method).toBe('POST')
+    expect((init.headers as Record<string, string>)['content-type']).toBe('application/json')
+    expect(JSON.parse(init.body as string)).toEqual({ pluginConfigs })
   })
 })

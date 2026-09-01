@@ -14,7 +14,7 @@
  * saveAnimation/deleteAnimation hit the API immediately and broadcast the
  * customs list through the hub; they never touch the config draft.
  */
-import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
+import type { AssetMeta, PetAttribution, PetPluginConfigs, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
 import { isAssetMimeType, MAX_ASSET_BYTES } from '../../core/assets-contract'
 import type { AnimationDefinition } from '../../motion/animation-definition'
@@ -28,6 +28,7 @@ import {
   deletePet as httpDeletePet,
   exportMotionPack as httpExportMotionPack,
   exportPetPackage as httpExportPetPackage,
+  exportPetPackageWithConfigs as httpExportPetPackageWithConfigs,
   getAnimations as httpGetAnimations,
   getConfig as httpGetConfig,
   getMeta as httpGetMeta,
@@ -54,6 +55,7 @@ import {
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
 import { confirmDialog, promptDialog } from '../dialog-queue'
+import { collectSharedPluginConfigs } from '../shared-config-registry'
 import { STATE_LABELS } from '../settings/state-labels'
 
 /** The API surface the store needs; the default adapter hits the real HTTP API. */
@@ -85,8 +87,12 @@ export interface EditorApi {
   importMotionPack(packJson: string): Promise<PackImportResponse>
   /** P2 Motion Pack: the ids to export, the manifest back. */
   exportMotionPack(ids: string[]): Promise<MotionPack>
-  /** §12 宠物包: the active preset id as a binary zip body. */
-  exportPetPackage(id: string): Promise<ArrayBuffer>
+  /**
+   * §12 宠物包: the preset id as a binary zip body. P3: passing freshly
+   * collected pluginConfigs switches to the POST variant (the host overlays
+   * them per namespace onto the record snapshot); undefined is the plain GET.
+   */
+  exportPetPackage(id: string, pluginConfigs?: PetPluginConfigs): Promise<ArrayBuffer>
   /** §12 宠物包: zip bytes in; the host creates AND activates the new pet. */
   importPetPackage(data: ArrayBuffer): Promise<PetPackageImportResponse>
   /** §12 宠物包: rename/re-credit a stored preset (null attribution clears). */
@@ -116,7 +122,8 @@ const httpEditorApi: EditorApi = {
   },
   importMotionPack: (packJson) => httpImportMotionPack(packJson),
   exportMotionPack: (ids) => httpExportMotionPack(ids),
-  exportPetPackage: (id) => httpExportPetPackage(id),
+  exportPetPackage: (id, pluginConfigs) =>
+    pluginConfigs === undefined ? httpExportPetPackage(id) : httpExportPetPackageWithConfigs(id, pluginConfigs),
   importPetPackage: (data) => httpImportPetPackage(data),
   updatePetMeta: async (id, body) => {
     await httpUpdatePetMeta(id, body)
@@ -761,7 +768,9 @@ export class EditorStore {
    * export a NON-active one — either way only a stored pet can be packaged,
    * so an unnamed config with no active pet gets the same "select a pet
    * first" warn as the other identity ops. The zip reflects the SAVED preset
-   * (a dirty draft is not packaged).
+   * (a dirty draft is not packaged). P3: registered companion providers get
+   * to refresh their pluginConfigs blob for the package (the full-page editor
+   * and the card share this store path, so both forms collect).
    */
   async exportPetPackage(id?: string): Promise<boolean> {
     if (this.disposed || this.snapshot.status !== 'ready') return false
@@ -772,7 +781,15 @@ export class EditorStore {
     }
     let data: ArrayBuffer
     try {
-      data = await this.api.exportPetPackage(petId)
+      // P3: companions present in this client refresh their §12 blob at
+      // export time (collected per namespace, the host overlays it onto the
+      // record snapshot). Nobody registered / all abstained → the plain GET,
+      // called exactly as before P3 (record-snapshot behavior unchanged).
+      const collected = collectSharedPluginConfigs()
+      data =
+        Object.keys(collected).length > 0
+          ? await this.api.exportPetPackage(petId, collected)
+          : await this.api.exportPetPackage(petId)
     } catch (error) {
       if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导出宠物包失败：${describeError(error)}` } })
       return false

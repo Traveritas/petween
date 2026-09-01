@@ -21,7 +21,9 @@
  *                                  accepts `{name?, attribution?}` with
  *                                  partial attribution semantics), POST
  *                                  `<id>/apply` (V1.1), POST `import` +
- *                                  GET `<id>/export` (Pet Package zip, §12)
+ *                                  GET/POST `<id>/export` (Pet Package zip,
+ *                                  §12; the POST body carries P3-collected
+ *                                  pluginConfigs overlaid on the record)
  * - prefix `/petween-assets`       GET / HEAD `<id>` subpath (static)
  *
  * The `/api` prefix belongs to the connection gateway, but exact routes win
@@ -39,7 +41,7 @@ import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '.
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { DEFAULT_PET_NAME, PetError, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset } from './pets'
+import { DEFAULT_PET_NAME, PetError, petSliceFromConfig, validatePetId, validatePluginConfigs, type PetAttribution, type PetPluginConfigs, type PetPreset } from './pets'
 import {
   buildPetPackageExport,
   buildPetPackageZip,
@@ -847,12 +849,41 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
  * §12 Pet Package export: GET /api/petween/pets/<id>/export → the zip bytes
  * (binary — sendJson never applies here). The manifest is complete or the
  * request fails: EXPORT_INCOMPLETE names the missing assets/animations.
+ * The POST variant (P3) accepts a JSON body `{pluginConfigs}` — freshly
+ * collected companion blobs, validated with the same §12 envelope rules as
+ * the import path (validatePluginConfigs) — overlaid PER NAMESPACE onto the
+ * record snapshot before packing: a collected namespace replaces the stored
+ * blob, an uncollected one keeps it. The GET behavior is unchanged.
  */
 async function handlePetPackageExport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps, id: string): Promise<void> {
-  if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET')
+  let collected: PetPluginConfigs | undefined
+  if (req.method === 'POST') {
+    const body = await readBody(req, JSON_BODY_LIMIT)
+    let raw: unknown
+    try {
+      raw = JSON.parse(body.toString('utf8'))
+    } catch {
+      throw new HttpError(400, 'INVALID_JSON', 'request body is not valid JSON')
+    }
+    const source = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    if (source.pluginConfigs !== undefined) {
+      const result = validatePluginConfigs(source.pluginConfigs)
+      if (!result.ok) throw new HttpError(400, 'INVALID_PLUGIN_CONFIGS', 'invalid pluginConfigs', result.errors)
+      collected = result.pluginConfigs
+    }
+  } else if (req.method !== 'GET') {
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected GET or POST')
+  }
   const pet = await deps.readPet(id) // NOT_FOUND for unknown ids
   const [assets, { customs }] = await Promise.all([deps.listAssets(), deps.listAnimations()])
-  const manifest = buildPetPackageExport(pet, { assets, animations: customs })
+  let exported: PetPreset = pet
+  if (collected !== undefined) {
+    // P3 merge: collected namespaces overwrite the record snapshot; the rest
+    // keep it. An empty merge stays absent so old pets keep the manifest shape.
+    const pluginConfigs = { ...pet.pluginConfigs, ...collected }
+    if (Object.keys(pluginConfigs).length > 0) exported = { ...pet, pluginConfigs }
+  }
+  const manifest = buildPetPackageExport(exported, { assets, animations: customs })
   const assetData: Record<string, Buffer> = {}
   for (const entry of manifest.assets) {
     const resolved = await deps.resolveAssetPath(entry.id)

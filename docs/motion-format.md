@@ -396,10 +396,12 @@ zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路
 - **改号表注入**：导入时 host 用本次动画改号表（§11 碰撞规划的 `requestedId → finalId` 全集，含 identical 恒等项）**覆盖注入**每条的 `animationIdRemap`；host 只注入映射、**不重写 blob 内容**——它不知道 blob 里哪些字符串是动画 id，用映射重写自己的 blob 是附属应用时的事。本次导入无动画条目时保留包内原值（petween 不解释，也不删）。
 - `version` 保持 1：纯增量字段，旧导入端对顶层未知字段本就静默忽略，新构建读取；与 API_FEATURES「只增不减」同规。
 - 存储：随新建宠物记录持久化（**切片外**字段，与 name/attribution 同层——config 镜像只重写切片三键，不动它）；附属之后可随时经 `GET /api/petween/pets/<id>` 拉取自己命名空间的 blob，附属缺席时 blob 静卧记录等待后装。
+- 导出：默认携带记录里已存的 blob；客户端导出前可经 `petween/client` 服务的 `registerSharedPluginConfigProvider`（additive，v1）向**在场**附属收集当前配置，随 `POST` 导出变体提交——按命名空间整体**覆盖**记录快照（收集结果就是附属的当前真相，remap 反正由导入时重新注入），未收集到的命名空间保留记录快照；导出纯读不回写记录。
 - **分享卫生约定**：附属 provider 只放**可公开的可调参数**（重力/弹性这类「性格」数值）；秘密、令牌、个人数据**不得进包**——包会被原样转发给接收方。
 - 导入响应 `report.pluginConfigs` 附带本次携带的命名空间列表（无 blob 时该键缺席）。
 
 ### HTTP
 
 - `GET /api/petween/pets/<id>/export` → `application/zip`
+- `POST /api/petween/pets/<id>/export`（可选 JSON body `{ pluginConfigs }` ≤64KiB，同 §12 校验规则，非法 → 400 `INVALID_PLUGIN_CONFIGS`）→ `application/zip`（收集覆盖后的打包结果）
 - `POST /api/petween/pets/import`（body 为 zip 二进制，≤ 48MB）→ `{ pet, config, report }`

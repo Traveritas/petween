@@ -476,7 +476,9 @@ export function assetEntryPath(id: string, mimeType: string): string {
 export function buildPetPackageZip(manifest: PetPackageManifest, assetData: Record<string, Buffer>): Uint8Array {
   const mimeTypeById = new Map(manifest.assets.map((entry) => [entry.id, entry.mimeType]))
   const entries: Record<string, Uint8Array> = {
-    [MANIFEST_ENTRY]: Buffer.from(JSON.stringify(manifest), 'utf8'),
+    // Pretty-printed: the manifest is the package's human-facing index (poses,
+    // mounts, attribution, pluginConfigs) — import is whitespace-insensitive.
+    [MANIFEST_ENTRY]: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
   }
   for (const [id, data] of Object.entries(assetData)) {
     entries[assetEntryPath(id, mimeTypeById.get(id) ?? 'image/png')] = data

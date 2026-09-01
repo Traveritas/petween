@@ -17,6 +17,7 @@ import {
   type UploadedAsset,
 } from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
+import { registerSharedPluginConfigProvider } from '../../src/client/shared-config-registry'
 import {
   EditorStore,
   hasAnyUsableImage,
@@ -1514,6 +1515,46 @@ describe('EditorStore — pet package import/export (§12)', () => {
       expect(downloads).toEqual(['pet-蓝猫.zip'])
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
       expect(store.getSnapshot().notice).toMatchObject({ kind: 'info', text: '已导出宠物包「蓝猫」。' })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('exportPetPackage ships collected companion configs through the POST seam (P3)', async () => {
+    const pet = preset('pet_a', '蓝猫')
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [structuredClone(pet)], activePetId: pet.id, warnings: [] })),
+      exportPetPackage: vi.fn(async () => new ArrayBuffer(8)),
+    })
+    await loadStore(api)
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
+    vi.stubGlobal('document', { createElement: () => ({ href: '', download: '', click: () => {} }) })
+    // A registered companion provider (the registry is a module singleton —
+    // it MUST leave with this test or the other export cases see it).
+    const unregister = registerSharedPluginConfigProvider('petween-physics', () => ({ gravity: 2400, slide: true }))
+    try {
+      expect(await store.exportPetPackage()).toBe(true)
+      expect(mocks.exportPetPackage).toHaveBeenCalledWith('pet_a', {
+        'petween-physics': { config: { gravity: 2400, slide: true } },
+      })
+    } finally {
+      unregister()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('exportPetPackage with no registered provider keeps the plain GET path (single-argument call)', async () => {
+    const pet = preset('pet_a', '蓝猫')
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({ pets: [structuredClone(pet)], activePetId: pet.id, warnings: [] })),
+      exportPetPackage: vi.fn(async () => new ArrayBuffer(8)),
+    })
+    await loadStore(api)
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
+    vi.stubGlobal('document', { createElement: () => ({ href: '', download: '', click: () => {} }) })
+    try {
+      expect(await store.exportPetPackage()).toBe(true)
+      expect(mocks.exportPetPackage).toHaveBeenCalledWith('pet_a')
     } finally {
       vi.unstubAllGlobals()
     }

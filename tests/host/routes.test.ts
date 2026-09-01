@@ -1460,6 +1460,17 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     return Buffer.from(await res.arrayBuffer())
   }
 
+  /** P3: the POST export variant carries freshly collected pluginConfigs. */
+  const postExport = (id: string, body: unknown): Promise<Response> =>
+    fetch(`${base}/api/petween/pets/${id}/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  const manifestOf = (zip: Buffer): Record<string, any> =>
+    JSON.parse(strFromU8(unzipSync(new Uint8Array(zip))['manifest.json'] as Uint8Array)) as Record<string, any>
+
   const postImport = (body: Buffer): Promise<Response> =>
     fetch(`${base}/api/petween/pets/import`, { method: 'POST', body: new Uint8Array(body) })
 
@@ -1629,6 +1640,80 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     const { pet: reimported, report: secondReport } = (await second.json()) as { pet: PetPreset; report: Record<string, unknown> }
     expect(secondReport.pluginConfigs).toEqual(['petween-physics'])
     expect(reimported.pluginConfigs).toEqual(imported.pluginConfigs)
+  })
+
+  it('POST <id>/export overlays collected pluginConfigs per namespace onto the record snapshot (P3)', async () => {
+    const { body } = blobPackage({
+      'petween-physics': { config: { gravity: 2400 } },
+      'petween-mood': { config: { bubble: '…' } },
+    })
+    const imported = await postImport(body)
+    expect(imported.status).toBe(200)
+    const { pet } = (await imported.json()) as { pet: PetPreset }
+
+    // Collect a fresh physics blob; petween-mood is NOT collected.
+    const res = await postExport(pet.id, {
+      pluginConfigs: { 'petween-physics': { config: { gravity: 1200, slide: true } } },
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/zip')
+    const manifest = manifestOf(Buffer.from(await res.arrayBuffer()))
+    expect(manifest.pluginConfigs).toEqual({
+      // The collected namespace REPLACES the record entry wholesale (the
+      // import-injected remap goes with it — the next import re-injects one)…
+      'petween-physics': { config: { gravity: 1200, slide: true } },
+      // …while the uncollected namespace keeps the record snapshot verbatim.
+      'petween-mood': { config: { bubble: '…' }, animationIdRemap: { 'user:pop': 'user:pop' } },
+    })
+  })
+
+  it('POST <id>/export packs collected blobs for a pet whose record has none, without persisting them', async () => {
+    const { pet } = await seedShareablePet() // a pre-P3 style record: no pluginConfigs
+    const res = await postExport(pet.id, { pluginConfigs: { 'petween-physics': { config: { gravity: 2400 } } } })
+    expect(res.status).toBe(200)
+    const manifest = manifestOf(Buffer.from(await res.arrayBuffer()))
+    expect(manifest.pluginConfigs).toEqual({ 'petween-physics': { config: { gravity: 2400 } } })
+    // The rest of the package is the same complete export the GET produces.
+    expect(manifest.pet.poses.idle.assetId).toBeDefined()
+    expect(manifest.motionPack.namespace).toBe('mixed')
+
+    // Export-only: the record keeps NO blob, and the GET stays a pure snapshot.
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(onDisk.pluginConfigs).toBeUndefined()
+    expect(manifestOf(await exportZip(pet.id)).pluginConfigs).toBeUndefined()
+  })
+
+  it('POST <id>/export with no/empty pluginConfigs falls back to the record snapshot, same as GET', async () => {
+    const { body } = blobPackage({ 'petween-physics': { config: { gravity: 2400 } } })
+    const imported = await postImport(body)
+    expect(imported.status).toBe(200)
+    const { pet } = (await imported.json()) as { pet: PetPreset }
+    const record = manifestOf(await exportZip(pet.id)).pluginConfigs
+    expect(record).toEqual(pet.pluginConfigs)
+
+    for (const payload of [{}, { pluginConfigs: {} }]) {
+      const res = await postExport(pet.id, payload)
+      expect(res.status).toBe(200)
+      expect(manifestOf(Buffer.from(await res.arrayBuffer())).pluginConfigs).toEqual(record)
+    }
+  })
+
+  it('POST <id>/export rejects invalid pluginConfigs with itemized 400s (same §12 rules as import)', async () => {
+    const { pet } = await seedShareablePet()
+    const cases: Array<{ pluginConfigs: unknown; match: string }> = [
+      { pluginConfigs: 'nope', match: 'pluginConfigs must be an object' },
+      { pluginConfigs: { 'Bad Id': { config: {} } }, match: 'plugin id must match' },
+      { pluginConfigs: { 'petween-physics': {} }, match: 'config: required' },
+      { pluginConfigs: { 'petween-physics': { config: 'x'.repeat(17 * 1024) } }, match: 'exceeds 16KiB' },
+      { pluginConfigs: { 'petween-physics': { config: {}, animationIdRemap: { 'user:a': 1 } } }, match: 'animationIdRemap must be a string→string map' },
+    ]
+    for (const { pluginConfigs, match } of cases) {
+      const res = await postExport(pet.id, { pluginConfigs })
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error: { code: string; details: string[] } }
+      expect(body.error.code).toBe('INVALID_PLUGIN_CONFIGS')
+      expect(body.error.details.some((issue) => issue.includes(match))).toBe(true)
+    }
   })
 
   it('a structurally invalid package is a 400 and nothing is written', async () => {
@@ -1843,7 +1928,15 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
   it('export 404s unknown pets; import/export method and body guards hold', async () => {
     expect((await fetch(`${base}/api/petween/pets/pet_missing/export`)).status).toBe(404)
     expect((await fetch(`${base}/api/petween/pets/import`, { method: 'GET' })).status).toBe(405)
-    expect((await fetch(`${base}/api/petween/pets/pet_x/export`, { method: 'POST' })).status).toBe(405)
+    // P3: POST is a valid export variant now — the remaining verbs are 405…
+    expect((await fetch(`${base}/api/petween/pets/pet_x/export`, { method: 'PUT' })).status).toBe(405)
+    // …a non-JSON POST body is a 400 before any pet lookup…
+    const badJson = await fetch(`${base}/api/petween/pets/pet_x/export`, { method: 'POST', body: 'not json' })
+    expect(badJson.status).toBe(400)
+    expect(((await badJson.json()) as { error: { code: string } }).error.code).toBe('INVALID_JSON')
+    // …and a well-formed POST on an unknown pet is the same 404 as the GET.
+    const missing = await postExport('pet_missing', {})
+    expect(missing.status).toBe(404)
     const notZip = await postImport(Buffer.from('not a zip at all'))
     expect(notZip.status).toBe(400)
     expect(((await notZip.json()) as { error: { code: string } }).error.code).toBe('PET_PACKAGE_INVALID')

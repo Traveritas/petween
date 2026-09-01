@@ -5,9 +5,10 @@
  * Windows onto the live pet: stage snapshots, exclusive position control,
  * animation playback by registry id, the playback/registry probes
  * (isPlaying / listAnimations / resyncAnimations), the open pose channel
- * (registerPoses / flashPose / flashAsset), and the observational streams
- * (subscribePose / subscribeUserPointer / subscribeAnimation). All widening
- * is additive — the contract version stays 1.
+ * (registerPoses / flashPose / flashAsset), the observational streams
+ * (subscribePose / subscribeUserPointer / subscribeAnimation), and the
+ * pet-package P3 collect channel (registerSharedPluginConfigProvider). All
+ * widening is additive — the contract version stays 1.
  *
  * Architecture: a module-level singleton that stays cordis-free (the client
  * half's boundary discipline). It learns about the live overlay through the
@@ -21,6 +22,10 @@
 import type { ResolvedPose } from '../core/types'
 import type { TimelineInstance } from '../motion/animation-handle'
 import type { DirectorPlaybackEvent } from '../motion/motion-director'
+import {
+  registerSharedPluginConfigProvider as registerProviderInRegistry,
+  type SharedPluginConfigProvider,
+} from './shared-config-registry'
 import {
   fanOutSafely,
   type AnimationSummary,
@@ -47,6 +52,10 @@ export type {
   StageSnapshot,
   UserPointerEvent,
 } from './overlay/session-surface'
+
+// P3: the provider shape lives in the neutral registry module (the editor
+// store imports it from there directly); re-exported for companion authors.
+export type { SharedPluginConfigProvider } from './shared-config-registry'
 
 /**
  * The session PetOverlay last registered (null = no live pet surface).
@@ -145,6 +154,16 @@ export interface PetweenClientService {
    * Cancelled runs settle with status 'cancelled', so starts always pair.
    */
   subscribeAnimation(listener: (event: DirectorPlaybackEvent) => void): () => void
+  /**
+   * Pet-package P3: register this plugin's export-time config provider under
+   * its own §12 pluginConfigs namespace (its cordis name). The settings
+   * editor's pet-package export collects every provider's CURRENT config and
+   * the host overlays it per namespace onto the record snapshot, so a pet
+   * whose record predates the pocket still shares a complete personality.
+   * Session-independent (a provider works with no live pet) and in-memory
+   * only. Returns the unregister.
+   */
+  registerSharedPluginConfigProvider(pluginId: string, provider: SharedPluginConfigProvider): () => void
 }
 
 /** Its snapshot subscription, kept so a replacement can detach it. */
@@ -285,4 +304,5 @@ export const petweenClientService: PetweenClientService = {
       animationListeners.delete(listener)
     }
   },
+  registerSharedPluginConfigProvider: (pluginId, provider) => registerProviderInRegistry(pluginId, provider),
 }

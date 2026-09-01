@@ -279,6 +279,11 @@ G3 配置化落地（implementation-notes 同日条目）。）
 
 （E1 的跨仓对齐与 C4 镜像升级已于 2026-08-27 收口，E3 同晚落地，见 §9。）
 
+### pluginConfigs provider 补注册缺口（2026-08-31 P3 登记）
+
+- physics 的导出 provider 在 boot `load().then()` 链上注册；boot load 失败、后经卡片重试变 loaded 时不会补注册（刻意语义：「启动时注册」）。
+  真要覆盖：改订阅 hub loaded 变化。影响面：导出包里缺 physics 当前配置
+  快照（落回记录快照），不影响其他链路。
 ---
 
 ## 8. 已拍板关闭

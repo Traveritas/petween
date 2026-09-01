@@ -12,7 +12,8 @@
  * - PUT    /api/petween/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
  * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
  * - GET/POST /api/petween/pets and GET/PUT/DELETE/apply subpaths (V1.1 presets;
- *   DELETE of the active pet → 409 ACTIVE_PET, C5)
+ *   DELETE of the active pet → {deleted, config} fallback view on flipped
+ *   hosts (C5-C); pre-flip hosts answer 409 ACTIVE_PET instead)
  * - GET    /api/petween/pets/<id>/export → application/zip (§12 pet package)
  * - POST   /api/petween/pets/import      → { pet, config, report } | 400 PACK_INVALID (§12)
  * - PUT    /api/petween/pets/<id>        → { pet } (partial {name?, attribution?})
@@ -30,6 +31,7 @@ const PETS_URL = '/api/petween/pets'
 const PET_IMPORT_URL = '/api/petween/pets/import'
 const PACK_IMPORT_URL = '/api/petween/packs/import'
 const PACK_EXPORT_URL = '/api/petween/packs/export'
+const META_URL = '/api/petween/meta'
 
 /** The standalone full-page settings editor (host/editor-page.ts). */
 export const EDITOR_PAGE_URL = '/petween-editor/'
@@ -347,12 +349,45 @@ export function renamePet(id: string, name: string): Promise<{ pet: PetPreset }>
   })
 }
 
-export function deletePet(id: string): Promise<{ deleted: string }> {
+/**
+ * C5-C (preset authority): deleting the ACTIVE pet makes the pointer fall
+ * back to another preset host-side, so the response then also carries the
+ * fresh materialized view (`config`) — the client lands on the fallback in
+ * the same round trip. Pre-flip hosts and non-active deletes never carry it.
+ */
+export interface DeletePetResponse {
+  deleted: string
+  config?: PetweenConfig
+}
+
+export function deletePet(id: string): Promise<DeletePetResponse> {
   return request(`${PETS_URL}/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export function applyPet(id: string): Promise<{ config: PetweenConfig }> {
   return request(`${PETS_URL}/${encodeURIComponent(id)}/apply`, { method: 'POST' })
+}
+
+// --- Capability discovery (B2) ----------------------------------------------
+
+/**
+ * B2 capability discovery response (host/routes.ts handleMeta). `features` is
+ * an additive-only list a client probes instead of guessing endpoint by
+ * endpoint; only it is consumed here. getMeta was dead code when G2 removed
+ * it — phase 3 (preset authority) is its first real caller.
+ */
+export interface GetMetaResponse {
+  apiVersion: number
+  configVersion: number
+  revision?: number
+  features: string[]
+}
+
+/** The feature flag of the preset-authority flip (host phase 2 → client phase 3). */
+export const PRESET_AUTHORITY_FEATURE = 'config.preset-authority'
+
+export function getMeta(): Promise<GetMetaResponse> {
+  return request(META_URL)
 }
 
 // --- Pet Package (§12) ------------------------------------------------------

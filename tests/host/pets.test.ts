@@ -1,16 +1,16 @@
 /**
  * PetsStore tests (V1.1 pet presets): directory scanning with per-file fault
  * tolerance, slice normalization (defaults fill), serialized writes, rename /
- * saveSlice / delete semantics, id guards — plus the ConfigStore onSaved
- * mirror wiring exactly as src/index.ts assembles it.
+ * saveSlice / delete semantics, id guards — plus writeSlice, the strict
+ * authoritative slice write path (preset-authority phase 2).
  */
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createDefaultPetweenConfig, createDefaultPoseConfigs, createDefaultStateAppearances } from '../../src/core/defaults'
-import { ConfigStore } from '../../src/host/config'
 import { PetError, PetsStore, petSliceFromConfig, validatePetId, type PetPluginConfigs, type PetSlice } from '../../src/host/pets'
+import { ConfigValidationError } from '../../src/host/validation'
 
 let dir: string
 let store: PetsStore
@@ -288,44 +288,58 @@ describe('pet id guard', () => {
   })
 })
 
-describe('config → preset mirror (ConfigStore.onSaved, wired as in src/index.ts)', () => {
-  let configStore: ConfigStore
-
-  beforeEach(() => {
-    configStore = new ConfigStore({
-      configPath: join(dir, 'config.json'),
-      onSaved: async (config) => {
-        if (config.activePetId !== null) await store.saveSlice(config.activePetId, petSliceFromConfig(config))
-      },
-    })
+describe('PetsStore.writeSlice (strict authoritative slice writes, phase 2)', () => {
+  it('applies a full slice and keeps identity + out-of-slice fields', async () => {
+    const preset = await store.create('Kitty', makeSlice(), { character: '溟月' })
+    const next = makeSlice(2.5)
+    next.poses.idle.assetId = 'aaaaaaaaaaaaaaaa'
+    const updated = await store.writeSlice(preset.id, next)
+    expect(updated.name).toBe('Kitty')
+    expect(updated.createdAt).toBe(preset.createdAt)
+    expect(updated.attribution).toEqual({ character: '溟月' })
+    expect(updated.updatedAt > preset.updatedAt).toBe(true)
+    expect(updated.scale).toBe(2.5)
+    expect(updated.poses.idle.assetId).toBe('aaaaaaaaaaaaaaaa')
+    expect(await store.read(preset.id)).toEqual(updated)
   })
 
-  it('syncs the slice into the active preset on every config update', async () => {
+  it('merges a partial patch onto the current slice (config-PUT semantics)', async () => {
     const preset = await store.create('Kitty', makeSlice())
-    await configStore.update({ activePetId: preset.id })
-    await configStore.update({ global: { scale: 2.4 }, poses: { idle: { assetId: 'bbbbbbbbbbbbbbbb' } } })
-    const mirrored = await store.read(preset.id)
-    expect(mirrored.scale).toBe(2.4)
-    expect(mirrored.poses.idle.assetId).toBe('bbbbbbbbbbbbbbbb')
+    const updated = await store.writeSlice(preset.id, { scale: 2.2 })
+    expect(updated.scale).toBe(2.2)
+    expect(updated.poses.idle.assetId).toBe('0123456789abcdef') // kept from the base
+    expect(updated.states.success.enter.preset).toBe('jump')
   })
 
-  it('writes nothing when activePetId is null', async () => {
-    await configStore.update({ global: { scale: 2 } })
-    expect(await store.list()).toEqual({ pets: [], warnings: [] })
-  })
-
-  it('a mirror failure warns but never fails or rolls back the config update', async () => {
+  it('rejects invalid fields with ConfigValidationError (no repair, no write)', async () => {
     const preset = await store.create('Kitty', makeSlice())
-    await configStore.update({ activePetId: preset.id })
-    await store.delete(preset.id) // out-of-band deletion: the mirror target is gone
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    try {
-      const config = await configStore.update({ global: { scale: 3 } })
-      expect(config.global.scale).toBe(3)
-      expect((await configStore.load()).global.scale).toBe(3)
-      expect(warn).toHaveBeenCalledOnce()
-    } finally {
-      warn.mockRestore()
-    }
+    const before = await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')
+    const error = await store.writeSlice(preset.id, { scale: 99, poses: { idle: { assetId: 'not-hex' } } }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ConfigValidationError)
+    expect((error as ConfigValidationError).issues.map((issue) => issue.path)).toEqual(['global.scale', 'poses.idle.assetId'])
+    expect(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')).toBe(before)
+  })
+
+  it('kind-checks animation mounts when a lookup is injected', async () => {
+    const preset = await store.create('Kitty', makeSlice())
+    const error = await store
+      .writeSlice(preset.id, { states: { idle: { enter: { animationId: 'user:float' } } } }, { animationLookup: () => 'ambient' })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ConfigValidationError)
+    expect((error as ConfigValidationError).issues[0]!.path).toBe('states.idle.enter.animationId')
+  })
+
+  it('skips the disk write when the validated content is unchanged', async () => {
+    const preset = await store.create('Kitty', makeSlice())
+    const before = await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')
+    const unchanged = await store.writeSlice(preset.id, makeSlice()) // same content
+    expect(unchanged.updatedAt).toBe(preset.updatedAt)
+    expect(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')).toBe(before)
+  })
+
+  it('throws NOT_FOUND when the file is gone', async () => {
+    const error = await store.writeSlice('pet_missing', makeSlice()).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(PetError)
+    expect((error as PetError).code).toBe('NOT_FOUND')
   })
 })

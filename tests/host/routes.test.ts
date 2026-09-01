@@ -19,7 +19,8 @@ import type { AnimationDefinition } from '../../src/motion/animation-definition'
 import { AnimationsStore } from '../../src/host/animations'
 import { AssetStore } from '../../src/host/assets'
 import { ConfigStore } from '../../src/host/config'
-import { PetsStore, petSliceFromConfig, type PetPreset } from '../../src/host/pets'
+import { ConfigViewStore } from '../../src/host/view-store'
+import { DEFAULT_PET_NAME, PetsStore, type PetPreset } from '../../src/host/pets'
 import { planMotionPackImport } from '../../src/host/packs'
 import { createWriteLock } from '../../src/host/storage'
 import { registerRoutes, type RoutesDeps } from '../../src/host/routes'
@@ -44,11 +45,11 @@ beforeEach(async () => {
   const configStore = new ConfigStore({
     configPath: join(dir, 'config.json'),
     lock: sharedWriteLock,
-    // The pet-preset mirror, wired exactly as in src/index.ts.
-    onSaved: async (config) => {
-      if (config.activePetId !== null) await petsStore.saveSlice(config.activePetId, petSliceFromConfig(config))
-    },
   })
+  // The phase-2 view funnel, wired exactly as in src/index.ts (the onSaved
+  // mirror is gone: slice writes land in the active preset through the
+  // funnel, and the view resolves from the v2 document + that preset).
+  const viewStore = new ConfigViewStore({ configStore, petsStore })
   const assetStore = new AssetStore({
     assetsDir: join(dir, 'assets'),
     manifestPath: join(dir, 'assets.json'),
@@ -56,9 +57,9 @@ beforeEach(async () => {
   })
   const animationsStore = new AnimationsStore({ animationsDir: join(dir, 'animations'), lock: sharedWriteLock })
   deps = {
-    loadConfig: () => configStore.load(),
-    updateConfig: (patch, options) => configStore.update(patch, options),
-    configRevision: () => configStore.revision(),
+    loadConfig: () => viewStore.loadView(),
+    updateConfig: (patch, options) => viewStore.update(patch, options),
+    configRevision: () => viewStore.revision(),
     listAssets: () => assetStore.list(),
     saveAsset: (buffer, declaredMime) => assetStore.save(buffer, declaredMime),
     deleteAsset: (id, referencedBy) => assetStore.delete(id, referencedBy),
@@ -130,14 +131,13 @@ describe('GET /api/petween/config (§19.1)', () => {
 })
 
 /**
- * Preset-authority phase 1 (host/config-view.ts): GET /config assembles its
- * response through the materialized-view seam. The matrix below locks the
- * phase-1 contract — {null pointer, dangling pointer, missing/corrupt preset
- * file, preset in sync, preset diverged} must ALL respond byte-identically to
- * the legacy behavior (the config document itself), while the write paths
- * stay untouched.
+ * Preset-authority phase 2 (host/view-store.ts): GET /config resolves the
+ * materialized view — the v2 global document plus the ACTIVE preset's slice.
+ * The matrix below locks the phase-2 contract: a present preset slice is
+ * always adopted (divergence resolves in the preset's favor), and only the
+ * no-usable-preset cases fall back to the document's own slice.
  */
-describe('GET /api/petween/config — phase 1 view-seam equivalence matrix', () => {
+describe('GET /api/petween/config — phase 2 materialized view', () => {
   const putConfig = (patch: unknown): Promise<Response> =>
     fetch(`${base}/api/petween/config`, {
       method: 'PUT',
@@ -151,88 +151,74 @@ describe('GET /api/petween/config — phase 1 view-seam equivalence matrix', () 
     return (await res.json()) as { config: PetweenConfig; assets: unknown; revision: number }
   }
 
-  /** The legacy response: exactly what the config document holds. */
-  const expectLegacyResponse = async (): Promise<PetweenConfig> => {
+  it('a null pointer (never-migrated store state) falls back to the document slice', async () => {
+    // Without a slice write there is no pet yet: the view is the document.
     const body = await getConfig()
-    const document = await deps.loadConfig()
-    expect(body.config).toEqual(document)
-    expect(body.assets).toEqual({})
-    expect(body.revision).toEqual(await deps.configRevision())
-    return document
-  }
-
-  it('null activePetId: a non-default slice with no pointer responds as the document', async () => {
-    const res = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
-    expect(res.status).toBe(200)
-    const document = await expectLegacyResponse()
-    expect(document.activePetId).toBeNull()
-    expect(document.global.scale).toBe(1.5)
+    expect(body.config).toEqual(createDefaultPetweenConfig())
+    expect(body.config.activePetId).toBeNull()
   })
 
-  it('dangling activePetId: the tolerated pointer resolves to no preset and the document answers', async () => {
-    const res = await putConfig({ activePetId: 'pet_missing', global: { scale: 2 } })
-    expect(res.status).toBe(200)
-    const document = await expectLegacyResponse()
-    expect(document.activePetId).toBe('pet_missing')
-    expect(document.global.scale).toBe(2)
-  })
-
-  it('preset in sync: the response equals the document while the preset path is exercised', async () => {
+  it('the active preset\'s slice is adopted verbatim — the document\'s own slice never leaks', async () => {
     const seeded = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
     expect(seeded.status).toBe(200)
-    const created = await fetch(`${base}/api/petween/pets`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
-    })
-    expect(created.status).toBe(200)
-    const { pet } = (await created.json()) as { pet: PetPreset }
-    // A further edit keeps the mirror busy: config save → saveSlice, in sync.
-    const edited = await putConfig({ global: { scale: 2.5 } })
-    expect(edited.status).toBe(200)
-    const document = await expectLegacyResponse()
-    expect(document.activePetId).toBe(pet.id)
-    expect(document.global.scale).toBe(2.5)
-    // The preset genuinely tracked the edits (the sync precondition).
-    const preset = await deps.readPet(pet.id)
-    expect(preset.scale).toBe(2.5)
-    expect(preset.poses.idle.assetId).toBe('0123456789abcdef')
+    const { config } = (await seeded.json()) as { config: PetweenConfig }
+    // The slice write auto-provisioned the default pet (null pointer repair);
+    // the view presents that pet and the v2 document's pointer at it.
+    expect(config.global.scale).toBe(1.5)
+    expect(config.poses.idle.assetId).toBe('0123456789abcdef')
+    expect(config.activePetId).toMatch(/^pet_[a-z0-9]+$/)
+    const { pets, activePetId } = (await (await fetch(`${base}/api/petween/pets`)).json()) as {
+      pets: PetPreset[]
+      activePetId: string
+    }
+    expect(activePetId).toBe(config.activePetId)
+    expect(pets).toHaveLength(1)
+    expect(pets[0]!.name).toBe(DEFAULT_PET_NAME)
+    expect(pets[0]!.scale).toBe(1.5)
+    // The document itself carries NO slice (writer = v2 global projection).
+    const document = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8')) as Record<string, unknown>
+    expect(document.version).toBe(2)
+    expect(document).not.toHaveProperty('poses')
+    expect(document).not.toHaveProperty('states')
+    expect(document.global).not.toHaveProperty('scale')
   })
 
-  it('preset diverged (mirror failure simulated on disk): the config document wins', async () => {
+  it('a diverged preset (out-of-band edit) wins over the document', async () => {
     const seeded = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
-    expect(seeded.status).toBe(200)
-    const created = await fetch(`${base}/api/petween/pets`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
-    })
-    const { pet } = (await created.json()) as { pet: PetPreset }
-    // Simulate a swallowed mirror failure: the on-disk preset lags behind.
-    const presetPath = join(dir, 'pets', `${pet.id}.json`)
-    const stale = JSON.parse(await readFile(presetPath, 'utf8')) as Record<string, unknown>
-    stale.scale = 9.9
-    ;(stale.poses as Record<string, { assetId: string }>).idle.assetId = 'ffffffffffffffff'
-    await writeFile(presetPath, JSON.stringify(stale))
-    const document = await expectLegacyResponse()
-    expect(document.activePetId).toBe(pet.id)
-    expect(document.global.scale).toBe(1.5) // the document's, not the stale 9.9
-    expect(document.poses.idle.assetId).toBe('0123456789abcdef')
+    const { config } = (await seeded.json()) as { config: PetweenConfig }
+    // Edit the preset directly on disk: the view must follow the preset.
+    const presetPath = join(dir, 'pets', `${config.activePetId}.json`)
+    const raw = JSON.parse(await readFile(presetPath, 'utf8')) as Record<string, unknown>
+    raw.scale = 2.5
+    ;(raw.poses as Record<string, { assetId: string }>).idle.assetId = 'ffffffffffffffff'
+    await writeFile(presetPath, JSON.stringify(raw))
+    const body = await getConfig()
+    expect(body.config.global.scale).toBe(2.5)
+    expect(body.config.poses.idle.assetId).toBe('ffffffffffffffff')
   })
 
-  it('preset file corrupt: the unreadable preset resolves to no slice and the document answers', async () => {
+  it('a dangling pointer falls back to the document slice until a write heals it', async () => {
     const seeded = await putConfig({ global: { scale: 1.5 } })
-    expect(seeded.status).toBe(200)
-    const created = await fetch(`${base}/api/petween/pets`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
-    })
-    const { pet } = (await created.json()) as { pet: PetPreset }
-    await writeFile(join(dir, 'pets', `${pet.id}.json`), '{ not json')
-    const document = await expectLegacyResponse()
-    expect(document.activePetId).toBe(pet.id)
-    expect(document.global.scale).toBe(1.5)
+    const { config } = (await seeded.json()) as { config: PetweenConfig }
+    // Out-of-band deletion of the active preset file: the view degrades to
+    // the document's own slice (defaults for a v2 document), tolerated.
+    await rm(join(dir, 'pets', `${config.activePetId}.json`))
+    const degraded = await getConfig()
+    expect(degraded.config.global.scale).toBe(1)
+    // The next slice write heals the pointer: a fresh default pet adopts the
+    // document's slice and becomes active.
+    const healed = await putConfig({ global: { scale: 2.2 } })
+    expect(healed.status).toBe(200)
+    const healedConfig = ((await healed.json()) as { config: PetweenConfig }).config
+    expect(healedConfig.global.scale).toBe(2.2)
+    expect(healedConfig.activePetId).toMatch(/^pet_[a-z0-9]+$/)
+    expect(healedConfig.activePetId).not.toBe(config.activePetId)
+    const { pets, activePetId } = (await (await fetch(`${base}/api/petween/pets`)).json()) as {
+      pets: PetPreset[]
+      activePetId: string
+    }
+    expect(pets.map((pet) => pet.id)).toEqual([healedConfig.activePetId])
+    expect(activePetId).toBe(healedConfig.activePetId)
   })
 })
 
@@ -252,7 +238,7 @@ describe('GET /api/petween/meta (B2 capability discovery)', () => {
 })
 
 describe('PUT /api/petween/config (§19.2)', () => {
-  it('roundtrips a valid config and persists it to disk', async () => {
+  it('roundtrips a valid config; the slice lands in the auto-provisioned pet, the document stays v2-global', async () => {
     const config = createDefaultPetweenConfig()
     config.enabled = false
     config.global.scale = 1.5
@@ -262,10 +248,29 @@ describe('PUT /api/petween/config (§19.2)', () => {
       body: JSON.stringify(config),
     })
     expect(res.status).toBe(200)
-    expect((await res.json()).config).toEqual(config)
+    const saved = (await res.json()).config as PetweenConfig
+    // The response is the materialized view: the PUT slice plus the pointer
+    // of the default pet the null-pointer repair provisioned around it.
+    expect({ ...saved, activePetId: null }).toEqual(config)
+    expect(saved.activePetId).toMatch(/^pet_[a-z0-9]+$/)
     const got = await (await fetch(`${base}/api/petween/config`)).json()
-    expect(got.config).toEqual(config)
-    expect(JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))).toEqual(config)
+    expect(got.config).toEqual(saved)
+    // The document on disk is the v2 global projection (no slice fields).
+    const document = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
+    expect(document).toEqual({
+      version: 2,
+      enabled: false,
+      global: {
+        transition: config.global.transition,
+        reducedMotion: config.global.reducedMotion,
+        successHoldMs: config.global.successHoldMs,
+        errorHoldMs: config.global.errorHoldMs,
+      },
+      overlay: config.overlay,
+      advanced: config.advanced,
+      interactions: config.interactions,
+      activePetId: saved.activePetId,
+    })
   })
 
   it('strips unknown fields', async () => {
@@ -397,7 +402,12 @@ describe('PUT /api/petween/config (§19.2)', () => {
     const got = await (await fetch(`${base}/api/petween/config`)).json()
     expect(got.config.global.scale).toBe(1.5)
     expect(got.config.overlay).toEqual({ x: 12, y: 34 })
-    expect(JSON.parse(await readFile(join(dir, 'config.json'), 'utf8')).global.scale).toBe(1.5)
+    // Cross-document durability: the scale lives in the (auto-provisioned)
+    // preset, the overlay in the v2 global document — neither clobbered.
+    const document = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
+    expect(document.overlay).toEqual({ x: 12, y: 34 })
+    const preset = JSON.parse(await readFile(join(dir, 'pets', `${got.config.activePetId}.json`), 'utf8'))
+    expect(preset.scale).toBe(1.5)
   })
 
   it('an editor patch (no overlay field) never drops a drag-saved position, in either write order', async () => {
@@ -576,7 +586,7 @@ describe('/api/petween/packs (P2 Motion Pack)', () => {
       },
     })
     // The patch is a plain config states patch: PUT mounts both animations
-    // onto the live config (the mirror then writes the active pet — §11).
+    // — the funnel routes the slice into the active pet (§11 挂载应用).
     const applied = await fetch(`${base}/api/petween/config`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -998,13 +1008,25 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
       body: JSON.stringify(patch),
     })
 
-  /** PUT a config whose character slice is recognizably non-default. */
-  async function seedConfig(scale = 1.5, assetId = '0123456789abcdef'): Promise<void> {
+  const listPets = async (): Promise<{ pets: PetPreset[]; activePetId: string | null; warnings: string[] }> =>
+    (await (await fetch(`${base}/api/petween/pets`)).json()) as { pets: PetPreset[]; activePetId: string | null; warnings: string[] }
+
+  /**
+   * PUT a config whose character slice is recognizably non-default; resolves
+   * the default pet the null-pointer repair auto-provisioned around the
+   * slice (it is the active pet afterwards).
+   */
+  async function seedConfig(scale = 1.5, assetId = '0123456789abcdef'): Promise<PetPreset> {
     const config = createDefaultPetweenConfig()
     config.global.scale = scale
     config.poses.idle.assetId = assetId
     const res = await putConfig(config)
     expect(res.status).toBe(200)
+    const listed = await listPets()
+    expect(listed.pets).toHaveLength(1)
+    expect(listed.pets[0]!.name).toBe(DEFAULT_PET_NAME)
+    expect(listed.activePetId).toBe(listed.pets[0]!.id)
+    return listed.pets[0]!
   }
 
   it('GET returns an empty list and a null activePetId on a fresh install', async () => {
@@ -1014,7 +1036,7 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
   })
 
   it('POST from=current saves the current slice as a preset and makes it active', async () => {
-    await seedConfig()
+    const seeded = await seedConfig()
     const res = await postPets({ name: 'Kitty', from: 'current' })
     expect(res.status).toBe(200)
     const { pet, config } = (await res.json()) as { pet: PetPreset; config: PetweenConfig }
@@ -1024,12 +1046,10 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(pet.poses.idle.assetId).toBe('0123456789abcdef')
     expect(config.activePetId).toBe(pet.id)
     // persisted: the file is on disk and GET reflects the new active pointer.
-    // (The adopt-update mirrors the slice back, so the on-disk updatedAt may
-    // tick past the created one — everything else must match verbatim.)
     const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
-    expect(onDisk).toEqual({ ...pet, updatedAt: expect.any(String) })
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    expect(listed.pets).toEqual([onDisk])
+    expect(onDisk).toEqual(pet)
+    const listed = await listPets()
+    expect(listed.pets.map((candidate) => candidate.id).sort()).toEqual([seeded.id, pet.id].sort())
     expect(listed.activePetId).toBe(pet.id)
   })
 
@@ -1046,7 +1066,7 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect((await res.json()).error.code).toBe('INVALID_REQUEST')
   })
 
-  it('POST from=blank applies an empty pet without creating an unnamed preset', async () => {
+  it('POST from=blank adopts an empty pet: the view presents its default slice', async () => {
     await seedConfig()
     const res = await postPets({ name: 'Blank', from: 'blank' })
     expect(res.status).toBe(200)
@@ -1054,15 +1074,15 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(config.activePetId).toBe(pet.id)
     expect(config.global.scale).toBe(1)
     expect(config.poses.idle.assetId).toBeUndefined()
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    expect(listed.pets.map((candidate: PetPreset) => candidate.name)).toEqual(['Blank'])
+    const listed = await listPets()
+    expect(listed.pets.map((candidate: PetPreset) => candidate.name).sort()).toEqual(['Blank', DEFAULT_PET_NAME].sort())
   })
 
   it('POST from=blank keeps existing named presets', async () => {
     await postPets({ name: 'First', from: 'current' })
     const res = await postPets({ name: 'Blank', from: 'blank' })
     expect(res.status).toBe(200)
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
+    const listed = await listPets()
     expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Blank', 'First'])
   })
 
@@ -1089,10 +1109,10 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(body.pet.poses.idle.assetId).toBe('0123456789abcdef')
     expect(body.pet.states.idle.enter).toMatchObject({ preset: 'jelly', strength: 1.4 })
     expect(body.config).toBeUndefined() // a draft creation never adopts/returns a config
-    // The active pointer, the active preset and the live config are untouched.
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
+    // The active pointer, the active preset and the live view are untouched.
+    const listed = await listPets()
     expect(listed.activePetId).toBe(active.id)
-    expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Kitty', 'Kitty 变体'])
+    expect(listed.pets.map((preset: PetPreset) => preset.name).sort()).toEqual(['Kitty', 'Kitty 变体', DEFAULT_PET_NAME].sort())
     const { config } = await (await fetch(`${base}/api/petween/config`)).json()
     expect(config.global.scale).toBe(1.5)
     expect(config.activePetId).toBe(active.id)
@@ -1100,7 +1120,7 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
   })
 
   it('POST from=draft rejects a slice referencing an unknown animation (400 INVALID_CONFIG)', async () => {
-    await seedConfig()
+    const seeded = await seedConfig()
     const res = await postPets({
       name: 'Bad',
       from: 'draft',
@@ -1108,7 +1128,8 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     })
     expect(res.status).toBe(400)
     expect((await res.json()).error.code).toBe('INVALID_CONFIG')
-    expect(await (await fetch(`${base}/api/petween/pets`)).json()).toMatchObject({ pets: [] })
+    // No new pet was created (the seeded default pet is all there is).
+    expect((await listPets()).pets.map((pet) => pet.id)).toEqual([seeded.id])
   })
 
   it('POST from=draft requires a pet slice object (400 INVALID_REQUEST)', async () => {
@@ -1126,7 +1147,7 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     })
     expect(res.status).toBe(200)
     expect((await res.json()).pet.name).toBe('New')
-    expect((await (await fetch(`${base}/api/petween/pets`)).json()).pets[0].name).toBe('New')
+    expect((await listPets()).pets[0]!.name).toBe('New')
 
     const unknown = await fetch(`${base}/api/petween/pets/pet_missing`, {
       method: 'PUT',
@@ -1143,59 +1164,79 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect((await empty.json()).error.code).toBe('INVALID_PRESET')
   })
 
-  it('DELETE removes an inactive preset but refuses the ACTIVE one with 409 ACTIVE_PET (C5)', async () => {
-    await seedConfig()
-    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
-    // The active pet is undeletable: the preset, the pointer and the live
-    // config all survive untouched (the old "clear only activePetId" landing
-    // spot is gone — switch to another pet first).
-    const refused = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
-    expect(refused.status).toBe(409)
-    expect(await refused.json()).toEqual({ error: 'ACTIVE_PET' })
-    let listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    expect(listed.pets.map((candidate: PetPreset) => candidate.id)).toEqual([pet.id])
-    expect(listed.activePetId).toBe(pet.id)
-    let got = await (await fetch(`${base}/api/petween/config`)).json()
-    expect(got.config.activePetId).toBe(pet.id)
-    expect(got.config.global.scale).toBe(1.5)
-
-    // Switch away (detach); the now-inactive preset deletes normally and the
-    // config content stays — the pet keeps showing as unsaved edits.
-    await putConfig({ activePetId: null })
-    const res = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
+  it('DELETE removes an inactive preset plainly (non-active path unchanged)', async () => {
+    const { pet: active } = (await (await postPets({ name: 'Active', from: 'current' })).json()) as { pet: PetPreset }
+    const { pet: inactive } = (
+      await (await postPets({ name: 'Inactive', from: 'draft', pet: { scale: 2, poses: {}, states: {} } })).json()
+    ) as { pet: PetPreset }
+    const res = await fetch(`${base}/api/petween/pets/${inactive.id}`, { method: 'DELETE' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ deleted: pet.id })
-    listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    expect(listed.pets).toEqual([])
-    expect(listed.activePetId).toBeNull()
-    got = await (await fetch(`${base}/api/petween/config`)).json()
-    expect(got.config.global.scale).toBe(1.5)
-    expect(got.config.poses.idle.assetId).toBe('0123456789abcdef')
-    expect(got.config.activePetId).toBeNull()
-    expect((await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })).status).toBe(404)
+    expect(await res.json()).toEqual({ deleted: inactive.id }) // no config key on the non-active path
+    const listed = await listPets()
+    expect(listed.pets.map((pet) => pet.id)).toEqual([active.id])
+    expect(listed.activePetId).toBe(active.id)
+    expect((await fetch(`${base}/api/petween/pets/${inactive.id}`, { method: 'DELETE' })).status).toBe(404)
   })
 
-  it('POST <id>/apply writes the preset slice into the config and sets it active', async () => {
-    await seedConfig()
+  it('DELETE on the ACTIVE preset falls the pointer back to the most recently updated remaining pet (C5-C)', async () => {
+    const seeded = await seedConfig()
     const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
-    // Change the live config, then apply the preset to bring the slice back.
-    await putConfig({ activePetId: null, global: { scale: 3 }, poses: { idle: { assetId: null } } })
-    const res = await fetch(`${base}/api/petween/pets/${pet.id}/apply`, { method: 'POST' })
+    // Deleting the active pet used to be a 409 ACTIVE_PET; it now lands on
+    // the most recently updated remaining preset in one round trip.
+    const res = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: string; config: PetweenConfig }
+    expect(body.deleted).toBe(pet.id)
+    expect(body.config.activePetId).toBe(seeded.id)
+    // The view presents the fallback pet's own slice.
+    expect(body.config.global.scale).toBe(1.5)
+    expect(body.config.poses.idle.assetId).toBe('0123456789abcdef')
+    const listed = await listPets()
+    expect(listed.pets.map((candidate) => candidate.id)).toEqual([seeded.id])
+    expect(listed.activePetId).toBe(seeded.id)
+  })
+
+  it('DELETE on the only (active) pet auto-provisions a fresh default pet (C5-C + form (i))', async () => {
+    const { pet } = (await (await postPets({ name: 'Solo', from: 'current' })).json()) as { pet: PetPreset }
+    const res = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: string; config: PetweenConfig }
+    expect(body.deleted).toBe(pet.id)
+    expect(body.config.activePetId).toMatch(/^pet_[a-z0-9]+$/)
+    expect(body.config.activePetId).not.toBe(pet.id)
+    // The pointer is never null: a brand-new default pet holds the view.
+    const listed = await listPets()
+    expect(listed.pets).toHaveLength(1)
+    expect(listed.pets[0]!.name).toBe(DEFAULT_PET_NAME)
+    expect(listed.activePetId).toBe(listed.pets[0]!.id)
+    expect(body.config.global.scale).toBe(1) // the fresh default slice
+  })
+
+  it('POST <id>/apply flips the pointer: the view presents the target preset\'s own slice', async () => {
+    const seeded = await seedConfig()
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    // Edit the live slice (lands in Kitty, the active pet), then apply the
+    // seeded default pet to bring its slice back.
+    await putConfig({ global: { scale: 3 }, poses: { idle: { assetId: null } } })
+    const res = await fetch(`${base}/api/petween/pets/${seeded.id}/apply`, { method: 'POST' })
     expect(res.status).toBe(200)
     const { config } = (await res.json()) as { config: PetweenConfig }
-    expect(config.activePetId).toBe(pet.id)
+    expect(config.activePetId).toBe(seeded.id)
     expect(config.global.scale).toBe(1.5)
     expect(config.poses.idle.assetId).toBe('0123456789abcdef')
+    // Kitty keeps her edited slice: no data crosses documents on a switch.
+    const kittyDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(kittyDisk.scale).toBe(3)
   })
 
   it('POST <id>/apply does not create an implicit unnamed preset', async () => {
     const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
-    // Detach and edit: the current slice is now unsaved work.
-    await putConfig({ activePetId: null, global: { scale: 2.2 } })
+    // Edit the live slice (unsaved-then-saved work on Kitty), then re-apply.
+    await putConfig({ global: { scale: 2.2 } })
     const res = await fetch(`${base}/api/petween/pets/${pet.id}/apply`, { method: 'POST' })
     expect(res.status).toBe(200)
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    expect(listed.pets.map((candidate: PetPreset) => candidate.name)).toEqual(['Kitty'])
+    const listed = await listPets()
+    expect(listed.pets.map((candidate) => candidate.name)).toEqual(['Kitty'])
     expect(listed.activePetId).toBe(pet.id)
   })
 
@@ -1217,26 +1258,26 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect((await fetch(`${base}/api/petween/pets/pet_missing`)).status).toBe(404)
   })
 
-  it('config updates mirror into the active preset file; a null activePetId mirrors nothing', async () => {
+  it('config slice writes land in the active preset file; global-only writes never touch it', async () => {
     const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
     await putConfig({ global: { scale: 2.4 } })
-    const mirrored = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
-    expect(mirrored.scale).toBe(2.4)
-    // detach, then edit again: no preset is touched
-    await putConfig({ activePetId: null })
-    await putConfig({ global: { scale: 3 } })
-    expect(JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8')).scale).toBe(2.4)
+    const afterSlice = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(afterSlice.scale).toBe(2.4)
+    // A global-only write (overlay drag persist) neither rewrites the preset
+    // nor bumps its updatedAt (the no-churn rule covers identical slices).
+    await putConfig({ overlay: { x: 10, y: 20 } })
+    const afterGlobal = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(afterGlobal).toEqual(afterSlice)
   })
 
-  // 2026-08-29 regression: a bare activePetId switch through PUT /config used
-  // to save the OLD pet's live slice, and the onSaved mirror then clobbered
-  // the NEWLY active preset with it (a real incident lost a preset's poses
-  // this way). Switching via the config route now carries apply semantics.
-  it('PUT /config with a bare activePetId switch loads the target pet slice instead of clobbering it', async () => {
+  // 2026-08-29 regression scenario, now structural: a bare activePetId switch
+  // through PUT /config is a PURE pointer write — the view presents the
+  // target pet's own slice and no data crosses presets (the old mirror that
+  // clobbered the newly active preset is gone).
+  it('PUT /config with a bare activePetId switch presents the target pet slice, both presets untouched', async () => {
     await seedConfig(1.5, 'aaaaaaaaaaaaaaaa')
     const { pet: petA } = (await (await postPets({ name: 'A', from: 'current' })).json()) as { pet: PetPreset }
-    // Diverge the live config from the fresh defaults (the mirror keeps A in
-    // sync with whatever is live at 2.4 / bbbb).
+    // Diverge the live slice (lands in A, the active pet).
     await putConfig({ global: { scale: 2.4 }, poses: { idle: { assetId: 'bbbbbbbbbbbbbbbb' } } })
     // A second preset whose slice differs from everything live.
     const { pet: petB } = (
@@ -1257,22 +1298,22 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect(res.status).toBe(200)
     const { config } = (await res.json()) as { config: PetweenConfig }
     expect(config.activePetId).toBe(petB.id)
-    // The live config now carries B's slice, not A's leftovers …
+    // The live view now carries B's slice, not A's leftovers …
     expect(config.global.scale).toBe(0.7)
     expect(config.poses.idle.assetId).toBe('cccccccccccccccc')
     expect(config.states.success.enter.preset).toBe('jump')
-    // … so the mirror could only write B's own data back: B keeps its slice …
+    // … B keeps exactly its own data on disk …
     const bDisk = JSON.parse(await readFile(join(dir, 'pets', `${petB.id}.json`), 'utf8'))
     expect(bDisk.scale).toBe(0.7)
     expect(bDisk.poses.idle.assetId).toBe('cccccccccccccccc')
     expect(bDisk.states.success.enter.preset).toBe('jump')
-    // … and A keeps the last data it actually owned (2.4 / bbbb, mirrored pre-switch).
+    // … and A keeps the last data it actually owned (2.4 / bbbb).
     const aDisk = JSON.parse(await readFile(join(dir, 'pets', `${petA.id}.json`), 'utf8'))
     expect(aDisk.scale).toBe(2.4)
     expect(aDisk.poses.idle.assetId).toBe('bbbbbbbbbbbbbbbb')
   })
 
-  it('a switch patch with caller slice fields wins over the preset base', async () => {
+  it('a switch patch with caller slice fields writes them into the TARGET pet', async () => {
     await seedConfig(1.5, 'aaaaaaaaaaaaaaaa')
     await postPets({ name: 'A', from: 'current' })
     const { pet: petB } = (
@@ -1299,33 +1340,37 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     const res = await putConfig({ activePetId: petB.id, global: { successHoldMs: 3000 } })
     expect(res.status).toBe(200)
     const { config } = (await res.json()) as { config: PetweenConfig }
-    expect(config.global.scale).toBe(0.7) // NOT the 1.5 still on disk pre-switch
+    expect(config.global.scale).toBe(0.7) // NOT the 1.5 still live pre-switch
     expect(config.global.successHoldMs).toBe(3000)
   })
 
-  it('a switch to a dangling pet id stays tolerated: saved verbatim, no expansion', async () => {
+  it('a switch to a dangling pet id is a loud 404; explicit null is a tolerated no-op (phase 2)', async () => {
     await seedConfig()
-    await postPets({ name: 'Kitty', from: 'current' })
-    const res = await putConfig({ activePetId: 'pet_zzzzzzzzzzzzzz0' })
-    expect(res.status).toBe(200)
-    const { config } = (await res.json()) as { config: PetweenConfig }
-    expect(config.activePetId).toBe('pet_zzzzzzzzzzzzzz0')
-    expect(config.global.scale).toBe(1.5) // live data untouched: nothing was loaded
+    const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    const dangling = await putConfig({ activePetId: 'pet_zzzzzzzzzzzzzz0' })
+    expect(dangling.status).toBe(404)
+    expect((await dangling.json()).error.code).toBe('NOT_FOUND')
+    // The retired "detach": null carries no pointer opinion — the write
+    // succeeds and the current pointer stays (roundtrip compatibility).
+    const detach = await putConfig({ activePetId: null, global: { successHoldMs: 3000 } })
+    expect(detach.status).toBe(200)
+    // Neither attempt moved the live view.
+    const { config } = await (await fetch(`${base}/api/petween/config`)).json()
+    expect(config.global.scale).toBe(1.5)
+    expect(config.global.successHoldMs).toBe(3000)
+    expect(config.activePetId).toBe(pet.id)
   })
 
   it('DELETE /assets refuses 409 when only a non-active preset references the asset', async () => {
     const upload = await fetch(`${base}/api/petween/assets`, { method: 'POST', body: uploadBody(makePng(2, 3), 'image/png') })
     const assetId = ((await upload.json()) as { asset: { id: string } }).asset.id
-    await seedConfig(1.5, assetId)
-    await postPets({ name: 'Kitty', from: 'current' }) // Kitty references the asset
-    await postPets({ name: 'Blank', from: 'blank' }) // switch away: the config no longer references it
+    const seeded = await seedConfig(1.5, assetId) // the seeded pet references the asset
+    await postPets({ name: 'Blank', from: 'blank' }) // switch away: the view no longer references it
     const res = await fetch(`${base}/api/petween/assets/${assetId}`, { method: 'DELETE' })
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: 'ASSET_IN_USE' })
-    // Deleting the referencing preset frees the asset.
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
-    const kitty = listed.pets.find((candidate: PetPreset) => candidate.name === 'Kitty')
-    await fetch(`${base}/api/petween/pets/${kitty.id}`, { method: 'DELETE' })
+    // Deleting the referencing (now inactive) preset frees the asset.
+    await fetch(`${base}/api/petween/pets/${seeded.id}`, { method: 'DELETE' })
     expect((await fetch(`${base}/api/petween/assets/${assetId}`, { method: 'DELETE' })).status).toBe(200)
   })
 })
@@ -1366,8 +1411,9 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
 
   /**
    * Seed a share-worthy active pet: two poses on real assets, a custom enter
-   * on idle and a custom ambient on thinking, saved as a preset carrying an
-   * attribution block.
+   * on idle and a custom ambient on thinking — created via from:'draft' (a
+   * slice-carrying creation that never touches the config, so no default pet
+   * gets auto-provisioned), then applied, and carrying an attribution block.
    */
   async function seedShareablePet(): Promise<{ pet: PetPreset; idleId: string; thinkId: string }> {
     const idleId = await uploadPng(2, 3)
@@ -1380,21 +1426,28 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
       })
       expect(res.status).toBe(200)
     }
-    const config = createDefaultPetweenConfig()
-    config.poses.idle.assetId = idleId
-    config.poses.thinking.assetId = thinkId
-    config.states.idle.enter.animationId = 'user:pop'
-    config.states.thinking.ambient.customAnimationId = 'user:float'
-    expect((await putJson('/api/petween/config', config)).status).toBe(200)
     const saved = await fetch(`${base}/api/petween/pets`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Share Me', from: 'current' }),
+      body: JSON.stringify({
+        name: 'Share Me',
+        from: 'draft',
+        pet: {
+          scale: 1,
+          poses: { idle: { assetId: idleId }, thinking: { assetId: thinkId } },
+          states: {
+            idle: { enter: { animationId: 'user:pop' } },
+            thinking: { ambient: { customAnimationId: 'user:float' } },
+          },
+        },
+      }),
     })
     expect(saved.status).toBe(200)
-    const { pet } = (await saved.json()) as { pet: PetPreset }
+    const { pet: created } = (await saved.json()) as { pet: PetPreset }
+    const applied = await fetch(`${base}/api/petween/pets/${created.id}/apply`, { method: 'POST' })
+    expect(applied.status).toBe(200)
     const attribution = { character: '溟月', creators: ['上善无形'], license: 'CC BY-NC-SA 4.0' }
-    const meta = await putJson(`/api/petween/pets/${pet.id}`, { attribution })
+    const meta = await putJson(`/api/petween/pets/${created.id}`, { attribution })
     expect(meta.status).toBe(200)
     return { pet: ((await meta.json()) as { pet: PetPreset }).pet, idleId, thinkId }
   }
@@ -1549,7 +1602,8 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     // The single-pet read (the companion's pull path) exposes the same blob.
     const single = (await (await fetch(`${base}/api/petween/pets/${pet.id}`)).json()) as { pet: PetPreset }
     expect(single.pet.pluginConfigs).toEqual(pet.pluginConfigs)
-    // The apply's onSaved mirror rewrote only the slice: the blob survives on disk.
+    // The apply is a pure pointer flip: nothing rewrote the record, so the
+    // blob survives on disk verbatim.
     const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
     expect(onDisk.pluginConfigs['petween-physics'].config).toEqual(config)
   })
@@ -1776,8 +1830,9 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
     // Invalid shapes are 400s and change nothing.
     expect((await putJson(`/api/petween/pets/${pet.id}`, { attribution: { creators: 'nope' } })).status).toBe(400)
     expect((await putJson(`/api/petween/pets/${pet.id}`, { attribution: 'nope' })).status).toBe(400)
-    // A config save mirrors the slice WITHOUT dropping the stored attribution
-    // (the attribution lives on the record, the mirror only rewrites slices).
+    // A config slice write lands in the active preset WITHOUT dropping the
+    // stored attribution (the attribution lives on the record, outside the
+    // slice the write replaces).
     await putJson(`/api/petween/pets/${pet.id}`, { attribution: { license: 'MIT' } })
     await putJson('/api/petween/config', { global: { scale: 2 } })
     const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))

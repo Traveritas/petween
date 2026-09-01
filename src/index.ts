@@ -10,14 +10,16 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { AnimationsStore } from './host/animations'
 import { AssetStore } from './host/assets'
 import { ConfigStore } from './host/config'
+import { ConfigViewStore } from './host/view-store'
 import { createWriteLock } from './host/storage'
 import { registerEditorPage } from './host/editor-page'
-import { PetsStore, petSliceFromConfig } from './host/pets'
+import { PetsStore } from './host/pets'
 import { planMotionPackImport } from './host/packs'
 import { registerRoutes, type RoutesDeps } from './host/routes'
 import { createPetweenHostService } from './host/service'
 import { attachStateChannel } from './host/state-channel'
 import { migrateLegacyHome } from './host/migrate'
+import { ensurePresetAuthority } from './host/migrate-v2'
 
 export const name = 'petween'
 export const inject = ['webServer']
@@ -42,8 +44,13 @@ export function apply(ctx: Context) {
   // when even its copy fallback fails (see host/migrate.ts).
   migrateLegacyHome(dshHomePath('motion-pet'), dshHomePath('petween'))
   const root = dshHomePath('petween')
+  // Preset authority (phase 2): migrate a v1 config.json to the v2 global
+  // document (slice pushed into its active preset, original backed up as
+  // config.v1.backup.json) and guarantee the active pointer is never null —
+  // same before-any-store discipline as the rename above (host/migrate-v2.ts).
+  ensurePresetAuthority(root)
   // B10: ONE write lock shared by every store — cross-store mutations (a
-  // config save vs. an asset delete's reference probe, a pet mirror write vs.
+  // config save vs. an asset delete's reference probe, a pet slice write vs.
   // an animation delete) can no longer interleave, closing the cross-store
   // TOCTOU window the per-store chains left open.
   const sharedWriteLock = createWriteLock()
@@ -53,12 +60,15 @@ export function apply(ctx: Context) {
     configPath: join(root, 'config.json'),
     lock: sharedWriteLock,
     animationLookup: (id) => animationsStore.kindOf(id),
-    // Pet-preset mirror (V1.1): every config save re-writes the active
-    // preset's slice, so editor changes to the current pet automatically
-    // belong to that preset. Failures warn inside ConfigStore, never roll back.
-    onSaved: async (config) => {
-      if (config.activePetId !== null) await petsStore.saveSlice(config.activePetId, petSliceFromConfig(config))
-    },
+  })
+  // Phase 2: the single funnel for every view-affecting read/write — GET and
+  // PUT /config both resolve the materialized view through it (global fields
+  // → the v2 document, slice fields → the active preset, pointer writes as
+  // pure flips), and the ONE revision counter bumps on the same path.
+  const viewStore = new ConfigViewStore({
+    configStore,
+    petsStore,
+    animationLookup: (id) => animationsStore.kindOf(id),
   })
   const assetStore = new AssetStore({
     assetsDir: join(root, 'assets'),
@@ -67,9 +77,9 @@ export function apply(ctx: Context) {
   })
 
   const deps: RoutesDeps = {
-    loadConfig: () => configStore.load(),
-    updateConfig: (patch, options) => configStore.update(patch, options),
-    configRevision: () => configStore.revision(),
+    loadConfig: () => viewStore.loadView(),
+    updateConfig: (patch, options) => viewStore.update(patch, options),
+    configRevision: () => viewStore.revision(),
     listAssets: () => assetStore.list(),
     saveAsset: (buffer, declaredMime) => assetStore.save(buffer, declaredMime),
     deleteAsset: (id, referencedBy) => assetStore.delete(id, referencedBy),

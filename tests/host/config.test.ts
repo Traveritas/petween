@@ -1,13 +1,15 @@
 /**
  * Host config tests (spec §18.3, §26, §29.2): default fallback, corrupt-file
- * fallback, per-field repair, unknown-field stripping, atomic save roundtrip.
+ * fallback, per-field repair, unknown-field stripping, atomic save roundtrip
+ * — plus the preset-authority phase-2 contract: the writer persists ONLY the
+ * v2 global document, the loader reads both v1 (full) and v2 (global) files.
  */
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import { ConfigStore, loadConfig } from '../../src/host/config'
+import { ConfigStore, loadConfig, toGlobalDocument } from '../../src/host/config'
 
 // Wrap (never replace) storage.readJsonFile so the revision-race test can park
 // one read mid-flight; every other call passes through to the real file IO.
@@ -83,6 +85,28 @@ describe('loadConfig (§18.3)', () => {
     expect(loadConfig({ version: 2, enabled: false })).toMatchObject({ version: 1, enabled: false })
     expect(loadConfig({ version: 'one', enabled: false })).toMatchObject({ version: 1, enabled: false })
   })
+
+  it('dual-read (phase 2): a v2 global document loads with the default slice', () => {
+    const config = loadConfig({
+      version: 2,
+      enabled: false,
+      global: { transition: { preset: 'jelly', strength: 1.2, durationMs: 300 }, successHoldMs: 3000 },
+      overlay: { x: 12, y: 34 },
+      activePetId: 'pet_abc123',
+    })
+    // The v2 global fields land …
+    expect(config.enabled).toBe(false)
+    expect(config.global.transition).toEqual({ preset: 'jelly', strength: 1.2, durationMs: 300 })
+    expect(config.global.successHoldMs).toBe(3000)
+    expect(config.overlay).toEqual({ x: 12, y: 34 })
+    expect(config.activePetId).toBe('pet_abc123')
+    // … and the slice fields a v2 document does not carry come from the
+    // defaults (the view layer replaces them with the active preset's slice).
+    const defaults = createDefaultPetweenConfig()
+    expect(config.global.scale).toBe(defaults.global.scale)
+    expect(config.poses).toEqual(defaults.poses)
+    expect(config.states).toEqual(defaults.states)
+  })
 })
 
 describe('ConfigStore', () => {
@@ -91,47 +115,76 @@ describe('ConfigStore', () => {
   })
 
   it('loads defaults when the file is corrupt', async () => {
-    const { writeFile } = await import('node:fs/promises')
     await writeFile(store.configPath, '### not json ###', 'utf8')
     expect(await store.load()).toEqual(createDefaultPetweenConfig())
   })
 
-  it('saves atomically: readable afterwards, no .tmp residue', async () => {
+  it('reads a legacy v1 document with its slice intact (dual-read)', async () => {
+    const v1 = createDefaultPetweenConfig()
+    v1.enabled = false
+    v1.global.scale = 1.7
+    v1.poses.idle.assetId = '0123456789abcdef'
+    await writeFile(store.configPath, JSON.stringify(v1), 'utf8')
+    const loaded = await store.load()
+    expect(loaded).toEqual(v1)
+  })
+
+  it('saves atomically as the v2 global projection: readable afterwards, no .tmp residue', async () => {
     const config = createDefaultPetweenConfig()
     config.enabled = false
     config.global.scale = 1.8
+    config.activePetId = 'pet_abc123'
     await store.save(config)
-    expect(await store.load()).toEqual(config)
+    // The writer persists ONLY the v2 global document — the slice (scale
+    // included) stays with the presets.
+    expect(JSON.parse(await readFile(store.configPath, 'utf8'))).toEqual(toGlobalDocument(config))
+    // … and it loads back as the same globals plus the default slice.
+    const loaded = await store.load()
+    expect({ ...loaded, activePetId: config.activePetId }).toEqual({
+      ...createDefaultPetweenConfig(),
+      enabled: false,
+      activePetId: config.activePetId,
+    })
     const entries = await readdir(dir)
     expect(entries).toEqual(['config.json'])
     expect(entries.some((entry) => entry.endsWith('.tmp'))).toBe(false)
   })
 })
 
-describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
-  it('merges a partial patch onto the current config and persists it', async () => {
-    const merged = await store.update({ global: { scale: 1.5 } })
-    expect(merged.global.scale).toBe(1.5)
+describe('ConfigStore.updateGlobals (serialized read-merge-write, §19.2 + phase 2)', () => {
+  it('merges a partial patch onto the current document and persists the v2 projection', async () => {
+    const merged = await store.updateGlobals({ global: { successHoldMs: 3000 }, overlay: { x: 12, y: 34 } })
+    expect(merged.global.successHoldMs).toBe(3000)
     // untouched fields come from the current config (defaults here)
-    expect(merged.overlay).toEqual(createDefaultPetweenConfig().overlay)
+    expect(merged.enabled).toBe(createDefaultPetweenConfig().enabled)
+    expect(JSON.parse(await readFile(store.configPath, 'utf8'))).toEqual(toGlobalDocument(merged))
     expect(await store.load()).toEqual(merged)
+  })
+
+  it('ignores slice fields in the patch: they route to the presets, never to this document', async () => {
+    const merged = await store.updateGlobals({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
+    expect(merged.global.scale).toBe(1) // untouched — scale is slice-owned now
+    expect(merged.poses.idle.assetId).toBeUndefined()
+    const onDisk = JSON.parse(await readFile(store.configPath, 'utf8'))
+    expect(onDisk.global).not.toHaveProperty('scale')
+    expect(onDisk).not.toHaveProperty('poses')
   })
 
   it('serializes concurrent updates: both patches land (no lost update)', async () => {
     const [a, b] = await Promise.all([
-      store.update({ global: { scale: 1.5 } }),
-      store.update({ overlay: { x: 12, y: 34 } }),
+      store.updateGlobals({ enabled: false }),
+      store.updateGlobals({ overlay: { x: 12, y: 34 } }),
     ])
-    expect(a.global.scale).toBe(1.5)
+    expect(a.enabled).toBe(false)
     expect(b.overlay).toEqual({ x: 12, y: 34 })
     const final = await store.load()
-    expect(final.global.scale).toBe(1.5)
+    expect(final.enabled).toBe(false)
     expect(final.overlay).toEqual({ x: 12, y: 34 })
   })
 
   it('a rejected patch does not wedge the queue', async () => {
-    await expect(store.update({ enabled: 'yes' })).rejects.toThrow(/enabled/)
-    const merged = await store.update({ overlay: { x: 1, y: 2 } })
+    await expect(store.updateGlobals({ enabled: 'yes' })).rejects.toThrow(/enabled/)
+    const merged = await store.updateGlobals({ overlay: { x: 1, y: 2 } })
     expect(merged.overlay).toEqual({ x: 1, y: 2 })
     // the invalid patch never reached the disk
     expect((await store.load()).enabled).toBe(createDefaultPetweenConfig().enabled)
@@ -152,7 +205,6 @@ describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
       release = resolve
     })
     readJsonFile.mockImplementationOnce(async (path: string) => {
-      const { readFile } = await import('node:fs/promises')
       let value: unknown = null
       try {
         value = JSON.parse(await readFile(path, 'utf8'))
@@ -164,7 +216,7 @@ describe('ConfigStore.update (serialized read-merge-write, §19.2)', () => {
     })
     const staleRead = store.revision() // cache empty → reads 5, then parks
     // A full update lands in between: bumps the sidecar to 6 and caches 6.
-    await store.update({ global: { scale: 1.4 } })
+    await store.updateGlobals({ enabled: false })
     release()
     // The stale read must merge monotonically — never restore the older 5.
     await expect(staleRead).resolves.toBe(6)

@@ -54,6 +54,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
         max={1}
         step={0.01}
         value={pose.anchor.x}
+        tooltip="锚点（Anchor）是图片上对准地面固定点的位置（默认 0.5 / 0.96，即脚底中心）。"
         onChange={(value) =>
           store.updateConfig((draft) => {
             draft.poses[state].anchor.x = value
@@ -66,6 +67,7 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
         max={1}
         step={0.01}
         value={pose.anchor.y}
+        tooltip="锚点（Anchor）是图片上对准地面固定点的位置（默认 0.5 / 0.96，即脚底中心）。"
         onChange={(value) =>
           store.updateConfig((draft) => {
             draft.poses[state].anchor.y = value
@@ -84,7 +86,6 @@ export function PoseEditor(props: PoseEditorProps): JSX.Element {
           })
         }
       />
-      <p className={styles.hint}>锚点（Anchor）是图片上对准地面固定点的位置（默认 0.5 / 0.96，即脚底中心）。</p>
     </section>
   )
 }

@@ -180,6 +180,9 @@ G3 配置化落地（implementation-notes 同日条目）。）
   remount 导致焦点掉 `<body>`、键盘 ←→ 微调失效）。对就地 move 语义的
   TrackLane/EventTrack 而言纯索引正确，此子项撤销，勿按原文执行。
 - api.ts request() 无调用方 signal 透传（在途请求不能随组件取消）。
+- 全页编辑器 `src/editor/index.tsx` 页头常驻灰色副标题（页面功能描述）——
+  教学性文字，未随 2026-08-31 tooltip 批转化（当时不在改动范围）；
+  下次顺手批转为标题 tooltip 或精简【UX 打磨批登记】。
 - settings brand 色 fallback hex 有四种、NoticeBar 单槽位不支持排队提示。
 
 ### A6. 时间轴键盘可达性 → 已于 2026-08-27 下午解决（§9 存档）
@@ -254,6 +257,11 @@ G3 配置化落地（implementation-notes 同日条目）。）
   `isAssetMimeType` guard），五处硬编码全部改 import；包炸弹护栏与运动
   像素边界有意保留独立（不同旋钮）。
 
+- 跨界面竞态：他端删除/切换生效宠物时，若本编辑器 dirty 且无 hub，
+  refreshPets 只做显示层指针同步，之后保存的切片会被 host 按当前指针
+  路由进「别的」预设（翻转前后果只是写全局文档）——生产恒有 hub 故窗口
+  极窄，真修复=revision 守卫保存或指针移动时全量视图重同步【2026-08-31
+  阶段 3 审计新增】。
 ---
 
 ## 7. physics 仓

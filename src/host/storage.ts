@@ -8,6 +8,7 @@
  * the same file (in-process and cross-process).
  */
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
@@ -57,6 +58,45 @@ export async function writeJsonAtomic<T>(filePath: string, data: T): Promise<voi
       /* directory fsync not supported — rename alone still satisfies §18.2 */
     }
   })
+}
+
+/**
+ * Synchronous twin of {@link writeJsonAtomic} for the boot-time v1→v2
+ * migration (host/migrate-v2.ts): it must complete before the first store
+ * exists, so the async/lock machinery is unavailable. Same temp + fsync +
+ * rename discipline, minus the cross-process file lock — boot migrations run
+ * before any other writer can exist (the legacy-home rename in
+ * host/migrate.ts sets the precedent).
+ */
+export function writeJsonAtomicSync<T>(filePath: string, data: T): void {
+  const dir = dirname(filePath)
+  mkdirSync(dir, { recursive: true })
+  const content = JSON.stringify(data, null, 2)
+  const tmp = `${filePath}.tmp`
+  const handle = openSync(tmp, 'w')
+  try {
+    writeFileSync(handle, content, 'utf8')
+    fsyncSync(handle)
+  } finally {
+    closeSync(handle)
+  }
+  try {
+    renameSync(tmp, filePath)
+  } catch (error) {
+    rmSync(tmp, { force: true })
+    throw error
+  }
+  // Best effort: directory entry durability. Unsupported on some platforms.
+  try {
+    const dirHandle = openSync(dir, 'r')
+    try {
+      fsyncSync(dirHandle)
+    } finally {
+      closeSync(dirHandle)
+    }
+  } catch {
+    /* directory fsync not supported — rename alone still satisfies §18.2 */
+  }
 }
 
 /**

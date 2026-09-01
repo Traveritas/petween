@@ -186,7 +186,7 @@ const makeApi = (
       throw new Error('not used in these tests')
     }),
     renamePet: vi.fn(async () => {}),
-    deletePet: vi.fn(async () => {}),
+    deletePet: vi.fn(async (id: string) => ({ deleted: id })),
     applyPet: vi.fn(async () => structuredClone(config)),
     exportPetPackage: vi.fn(async () => {
       throw new Error('not used in these tests')
@@ -360,7 +360,9 @@ describe('AnimationLibrary — panel and list', () => {
     expect(buttons).toContain('▶ 试播')
     expect(buttons).not.toContain('保存')
     expect(buttons).not.toContain('删除')
-    expect(librarySection().textContent).toContain('内置动画只读')
+    // UX: the read-only note moved from a resident hint to the clone button's tooltip
+    expect(librarySection().textContent).not.toContain('内置动画只读')
+    expect(libraryButton('克隆为自定义').getAttribute('data-tooltip')).toContain('内置动画只读')
   })
 
   it('B6: a pack-namespace custom is editable (only builtins are read-only)', async () => {
@@ -371,6 +373,7 @@ describe('AnimationLibrary — panel and list', () => {
     expect(buttons).toContain('保存')
     expect(buttons).toContain('删除')
     expect(librarySection().textContent).not.toContain('内置动画只读')
+    expect(libraryButton('克隆为自定义').getAttribute('data-tooltip')).toBeNull()
   })
 
   it('新建空白 saves a valid user: template and opens it for editing', async () => {
@@ -514,7 +517,9 @@ describe('AnimationLibrary — editing, validation, save', () => {
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     expect(libraryButton('保存').disabled).toBe(false)
-    expect(librarySection().textContent).toContain('自动移除不适用的事件')
+    // UX: the kind-switch note moved from a resident hint to the 类型 row's tooltip
+    expect(librarySection().textContent).not.toContain('自动移除不适用的事件')
+    expect(libraryControlRow('类型').getAttribute('data-tooltip')).toContain('自动移除不适用的事件')
 
     // transition → ambient removes the pose-swap AND the transition-layer
     // track (the schema keeps ambient off that layer), seeding a default loop.

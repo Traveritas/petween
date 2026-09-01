@@ -80,7 +80,7 @@ const makeApi = (withImage: boolean): EditorApi => {
       throw new Error('not used in these tests')
     }),
     renamePet: vi.fn(async () => {}),
-    deletePet: vi.fn(async () => {}),
+    deletePet: vi.fn(async (id: string) => ({ deleted: id })),
     applyPet: vi.fn(async () => structuredClone(config)),
     patchConfig: vi.fn(async (patch: ConfigPatch) => ({
       ...structuredClone(config),
@@ -255,6 +255,25 @@ describe('PetweenSettings', () => {
     expect(container.querySelector('.petween-position')).not.toBeNull()
   })
 
+  it('UX: teaching copy lives in control tooltips, not resident hint lines', async () => {
+    await render(makeApi(true))
+    // shared controls expose their explanation via data-tooltip
+    expect(findControlRow('粒子特效').getAttribute('data-tooltip')).toContain('粒子爆发')
+    expect(findControlRow('活跃状态内切换姿势').getAttribute('data-tooltip')).toContain('reasoning')
+    expect(findControlRow('停留方式').getAttribute('data-tooltip')).toContain('保持该姿势')
+    expect(findControlRow('点击闪现姿势').getAttribute('data-tooltip')).toContain('临时换图')
+    expect(findControlRow('执行动画内的换图事件').getAttribute('data-tooltip')).toContain('换图指令')
+    expect(findControlRow('锚点 X').getAttribute('data-tooltip')).toContain('脚底中心')
+    expect(findControlRow('自定义循环动画').getAttribute('data-tooltip')).toContain('同时播放')
+    const replay = [...container.querySelectorAll('button')].find((b) => b.textContent === '▶ 重播进入动画')
+    expect(replay?.getAttribute('data-tooltip')).toContain('同一套渲染与状态机')
+    // …and none of it is resident on the page any more
+    expect(container.textContent).not.toContain('粒子爆发')
+    expect(container.textContent).not.toContain('脚底中心')
+    expect(container.textContent).not.toContain('与下方内置循环同时播放')
+    expect(container.textContent).not.toContain('预览与主界面宠物使用同一套渲染与状态机')
+  })
+
   it('the terminal-hold select saves advanced.terminalHold and disables the hold duration inputs', async () => {
     vi.useFakeTimers()
     const api = makeApi(true)
@@ -342,7 +361,7 @@ describe('PetweenSettings', () => {
     })
   })
 
-  it('wide editor switches, creates blank, renames through the C2 modals; the active pet cannot be deleted (C5)', async () => {
+  it('wide editor switches, creates blank, renames through the C2 modals; pet deletion lives in the manage list (C5-C)', async () => {
     const api = makeApi(true)
     const response = await api.getConfig()
     const config = response.config
@@ -384,6 +403,7 @@ describe('PetweenSettings', () => {
     const deletePet = vi.fn(async (id: string) => {
       pets = pets.filter((pet) => pet.id !== id)
       if (config.activePetId === id) config.activePetId = null
+      return { deleted: id }
     })
     api.getPets = getPets
     api.applyPet = applyPet
@@ -392,8 +412,14 @@ describe('PetweenSettings', () => {
     api.deletePet = deletePet
 
     await render(api, true)
-    expect(container.textContent).toContain('有未保存修改时无法切换宠物')
-    expect(container.textContent).toContain('复制当前宠物并切换')
+    // UX: the resident pet-card hint paragraph is gone — the same semantics
+    // now ride on the controls' tooltips (data-tooltip attributes).
+    expect(findControlRow('当前宠物').getAttribute('data-tooltip')).toContain('有未保存修改时无法切换宠物')
+    const copyButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '复制')
+    const blankButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '新建空白')
+    expect(copyButton?.getAttribute('data-tooltip')).toBe('基于当前宠物创建副本并切换过去')
+    expect(blankButton?.getAttribute('data-tooltip')).toBe('创建空白宠物并切换过去')
+    expect(container.textContent).not.toContain('复制当前宠物并切换')
 
     const select = findControlRow('当前宠物').querySelector('select')
     if (select === null) throw new Error('pet select missing')
@@ -402,15 +428,15 @@ describe('PetweenSettings', () => {
     expect(applyPet).toHaveBeenCalledWith('pet_b')
     expect(select.value).toBe('pet_b')
 
-    // 新建空白宠物并切换 declined in the prompt modal: nothing is created.
-    act(() => clickButton('新建空白宠物并切换'))
+    // 新建空白 declined in the prompt modal: nothing is created.
+    act(() => clickButton('新建空白'))
     expect(modalDialog()?.textContent).toContain('新建空白宠物')
     await act(async () => modalButton('取消').click())
     expect(modalDialog()).toBeNull()
     expect(createPet).not.toHaveBeenCalled()
 
     // confirmed: the typed name goes to createPet.
-    act(() => clickButton('新建空白宠物并切换'))
+    act(() => clickButton('新建空白'))
     act(() => typeInput(modalInput(), '空白猫'))
     await act(async () => modalButton('确定').click())
     await flushActions()
@@ -428,15 +454,14 @@ describe('PetweenSettings', () => {
     expect(renamePet).toHaveBeenCalledWith('pet_c', '改名猫')
     expect(container.textContent).toContain('改名猫')
 
-    // C5: the delete button targets the ACTIVE pet, which the host now
-    // refuses to delete — the card disables it outright and says why.
-    const deleteButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '删除')
-    if (deleteButton === undefined) throw new Error('delete button missing')
-    expect(deleteButton.disabled).toBe(true)
-    expect(container.textContent).toContain('生效中的宠物不能删除')
-    act(() => deleteButton.click())
-    await flushActions()
-    expect(modalDialog()).toBeNull()
+    // Phase 3 (C5-C): the toolbar's always-disabled 删除 button is retired —
+    // deletion lives exclusively in the 管理宠物 list (its own describe below).
+    // The list is collapsed here, so no 删除 button renders anywhere in the card.
+    const petSection = container.querySelector('section[aria-label="宠物预设"]')
+    const deleteButtons = [...(petSection?.querySelectorAll('button') ?? [])].filter(
+      (candidate) => candidate.textContent === '删除',
+    )
+    expect(deleteButtons).toEqual([])
     expect(deletePet).not.toHaveBeenCalled()
   })
 
@@ -579,7 +604,7 @@ describe('PetweenSettings', () => {
     await render(api, true)
 
     // Escape cancels: the modal closes and nothing is created.
-    act(() => clickButton('新建空白宠物并切换'))
+    act(() => clickButton('新建空白'))
     expect(document.activeElement).toBe(modalInput()) // prompt input autofocused
     act(() => typeInput(modalInput(), '逃跑猫'))
     act(() => pressKey(modalInput(), 'Escape'))
@@ -587,7 +612,7 @@ describe('PetweenSettings', () => {
     expect(createPet).not.toHaveBeenCalled()
 
     // Enter inside the input confirms with the typed name.
-    act(() => clickButton('新建空白宠物并切换'))
+    act(() => clickButton('新建空白'))
     act(() => typeInput(modalInput(), '回车猫'))
     await act(async () => pressKey(modalInput(), 'Enter'))
     await flushActions()
@@ -926,6 +951,7 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: config.activePetId, warnings: [] }))
     api.deletePet = vi.fn(async (id: string) => {
       pets = pets.filter((pet) => pet.id !== id)
+      return { deleted: id }
     })
     api.renamePet = vi.fn(async (id: string, name: string) => {
       pets = pets.map((pet) => (pet.id === id ? { ...pet, name } : pet))
@@ -966,7 +992,9 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     const activeRow = rowNamed('蓝猫')
     expect(activeRow.textContent).toContain('生效中')
     expect(rowButton(activeRow, '删除').disabled).toBe(true)
-    expect(activeRow.textContent).toContain('生效中——切换到其他宠物后可删除')
+    // UX: the why moved from a resident inline hint to the disabled button's tooltip
+    expect(activeRow.textContent).not.toContain('切换到其他宠物后可删除')
+    expect(rowButton(activeRow, '删除').getAttribute('data-tooltip')).toBe('生效中——切换到其他宠物后可删除')
     // rename/export stay available on the active row (same as the toolbar)
     expect(rowButton(activeRow, '重命名').disabled).toBe(false)
     expect(rowButton(activeRow, '导出').disabled).toBe(false)
@@ -974,6 +1002,7 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     const otherRow = rowNamed('白猫')
     expect(otherRow.textContent).not.toContain('生效中')
     expect(rowButton(otherRow, '删除').disabled).toBe(false)
+    expect(rowButton(otherRow, '删除').getAttribute('data-tooltip')).toBeNull()
   })
 
   it('deleting a non-active preset confirms with the consequence triple; cancel keeps it, confirm deletes (§2.4)', async () => {
@@ -1001,8 +1030,7 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     expect(rowNamed('蓝猫').textContent).toContain('生效中')
     // the draft and the active identity are untouched by a non-active delete
     expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_a')
-    // …and the draft never became dirty (the hint text itself mentions
-    // 有未保存修改, so probe the dirty-branch save label instead)
+    // …and the draft never became dirty (probe the dirty-branch save label)
     expect(container.textContent).not.toContain('保存到「')
     expect(container.textContent).not.toContain('保存修改（未命名配置）')
   })
@@ -1093,5 +1121,152 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     expect(select.value).toBe('pet_a')
     expect(api.patchConfig).not.toHaveBeenCalled()
     expect(container.textContent).toContain('有未保存修改')
+  })
+
+  it('pre-flip hosts (no meta feature) keep the unnamed-config option in the selector', async () => {
+    const api = await twoPetApi() // no getMeta → old semantics
+    await render(api, true)
+    const select = findControlRow('当前宠物').querySelector('select')
+    expect(select?.textContent).toContain('未命名配置（不属于任何宠物）')
+  })
+
+  /** Phase-3 probe seam: make an api advertise the preset-authority feature. */
+  const withPresetAuthority = (api: EditorApi): EditorApi => {
+    api.getMeta = vi.fn(async () => ({
+      apiVersion: 1,
+      configVersion: 2,
+      revision: 1,
+      features: ['config', 'config.preset-authority'],
+    }))
+    return api
+  }
+
+  /** A pet with an explicit updatedAt (the C5-C fallback picks the newest remaining). */
+  const petAt = (id: string, name: string, config: PetweenConfig, updatedAt: string): PetPreset => ({
+    ...makePet(id, name, config),
+    updatedAt,
+  })
+
+  /**
+   * Truthful C5-C host stand-in: deleting the ACTIVE pet falls the pointer
+   * back to the most recently updated remaining preset — or provisions the
+   * default pet when none is left — and the fresh view rides the response.
+   */
+  const presetAuthorityApi = async (initial: PetPreset[], activeId: string): Promise<EditorApi> => {
+    const api = withPresetAuthority(makeApi(true))
+    const { config } = await api.getConfig()
+    config.activePetId = activeId
+    let pets = [...initial]
+    let currentId: string | null = activeId
+    api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: currentId, warnings: [] }))
+    api.deletePet = vi.fn(async (id: string) => {
+      pets = pets.filter((pet) => pet.id !== id)
+      if (currentId !== id) return { deleted: id }
+      const next = [...pets].sort((a, b) =>
+        a.updatedAt === b.updatedAt ? a.id.localeCompare(b.id) : a.updatedAt < b.updatedAt ? 1 : -1,
+      )[0]
+      const landed = next ?? petAt('pet_default', '未命名宠物（可改名）', config, '2026-08-24T00:00:00.000Z')
+      if (next === undefined) pets = [landed]
+      currentId = landed.id
+      const view = structuredClone(config)
+      view.activePetId = landed.id
+      return { deleted: id, config: view }
+    })
+    return api
+  }
+
+  it('C5-C: the ACTIVE row is deletable — the confirm names the fallback and the delete lands on it', async () => {
+    const base = createDefaultPetweenConfig()
+    const api = await presetAuthorityApi(
+      [
+        petAt('pet_a', '蓝猫', base, '2026-08-21T00:00:00.000Z'),
+        petAt('pet_b', '白猫', base, '2026-08-22T00:00:00.000Z'),
+      ],
+      'pet_a',
+    )
+    const applySpy = vi.spyOn(api, 'applyPet')
+    await render(api, true)
+    act(() => collapseToggle('管理宠物').click())
+
+    // feature-on: the active row's delete is enabled and carries no tooltip
+    const activeRow = rowNamed('蓝猫')
+    expect(rowButton(activeRow, '删除').disabled).toBe(false)
+    expect(rowButton(activeRow, '删除').getAttribute('data-tooltip')).toBeNull()
+
+    // the confirm names the landing spot on top of the consequence triple
+    act(() => rowButton(activeRow, '删除').click())
+    expect(modalDialog()?.textContent).toContain(
+      '确认删除宠物「蓝猫」？删除后将切换到「白猫」。该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。',
+    )
+    await act(async () => modalButton('取消').click())
+    await flushActions()
+    expect(api.deletePet).not.toHaveBeenCalled()
+
+    // confirmed: one round trip — the DELETE response's view lands the
+    // selector on the fallback WITHOUT an apply call; the badge moves over
+    act(() => rowButton(rowNamed('蓝猫'), '删除').click())
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(api.deletePet).toHaveBeenCalledWith('pet_a')
+    expect(applySpy).not.toHaveBeenCalled()
+    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_b')
+    expect(manageRows()).toHaveLength(1)
+    expect(rowNamed('白猫').textContent).toContain('生效中')
+  })
+
+  it('C5-C: the fallback named in the confirm is the MOST RECENTLY updated remaining pet', async () => {
+    const base = createDefaultPetweenConfig()
+    const api = await presetAuthorityApi(
+      [
+        petAt('pet_a', '蓝猫', base, '2026-08-23T00:00:00.000Z'),
+        petAt('pet_b', '白猫', base, '2026-08-21T00:00:00.000Z'),
+        petAt('pet_c', '橘猫', base, '2026-08-22T00:00:00.000Z'),
+      ],
+      'pet_a',
+    )
+    await render(api, true)
+    act(() => collapseToggle('管理宠物').click())
+    act(() => rowButton(rowNamed('蓝猫'), '删除').click())
+    // 蓝猫 is the newest overall, but it is the one being deleted — the
+    // fallback is the newest REMAINING one (橘猫, not 白猫).
+    expect(modalDialog()?.textContent).toContain('删除后将切换到「橘猫」')
+    await act(async () => modalButton('取消').click())
+    await flushActions()
+    expect(api.deletePet).not.toHaveBeenCalled()
+  })
+
+  it('C5-C: deleting the last pet confirms with the default-pet landing copy and lands on it', async () => {
+    const base = createDefaultPetweenConfig()
+    const api = await presetAuthorityApi([petAt('pet_a', '独苗', base, '2026-08-21T00:00:00.000Z')], 'pet_a')
+    await render(api, true)
+    act(() => collapseToggle('管理宠物').click())
+    act(() => rowButton(rowNamed('独苗'), '删除').click())
+    expect(modalDialog()?.textContent).toContain(
+      '确认删除宠物「独苗」？删除后将为你新建「未命名宠物（可改名）」。该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。',
+    )
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(api.deletePet).toHaveBeenCalledWith('pet_a')
+    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_default')
+    expect(rowNamed('未命名宠物（可改名）').textContent).toContain('生效中')
+  })
+
+  it('preset authority retires the unnamed-config paths: selector option, save label, attribution hint', async () => {
+    const api = withPresetAuthority(await twoPetApi())
+    await render(api, true)
+    // selector: no pet-less option, and the tooltip stops explaining it
+    const select = findControlRow('当前宠物').querySelector('select')
+    expect([...(select?.options ?? [])].every((option) => option.value !== '')).toBe(true)
+    expect(select?.textContent).not.toContain('未命名配置')
+    expect(findControlRow('当前宠物').getAttribute('data-tooltip')).not.toContain('未命名配置')
+    // dirty the draft: the save button names the pet, never the unnamed config
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    expect(container.textContent).toContain('保存到「蓝猫」')
+    expect(container.textContent).not.toContain('保存修改（未命名配置）')
+    // the attribution section never shows the unnamed-config hint
+    act(() => collapseToggle('来源与署名').click())
+    expect(container.textContent).not.toContain('当前是未命名配置')
   })
 })

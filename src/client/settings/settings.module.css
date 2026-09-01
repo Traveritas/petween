@@ -366,6 +366,50 @@
   margin: 4px 0;
 }
 
+/* --- CSS-only tooltips (UX: explanatory copy moved off the page) ---
+   Any element may carry a data-tooltip attribute; the text renders in an
+   ::after bubble above the element on hover (pointer) and on
+   focus-visible / focus-within (keyboard — focus-within covers the shared
+   controls, whose tooltip attribute sits on the wrapping <label> while the
+   real focus lands on the inner input/select). Attribute selectors pass
+   through CSS-modules unscoped, so one block serves every consumer. */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.12);
+  color: var(--dsw-alias-label-primary, #1f2335);
+  font-size: 12px;
+  font-weight: normal;
+  line-height: 1.5;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease-in-out;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after,
+[data-tooltip]:focus-within::after {
+  opacity: 1;
+}
+
 .button {
   font: inherit;
   padding: 6px 10px;

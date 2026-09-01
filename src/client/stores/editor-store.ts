@@ -30,6 +30,7 @@ import {
   exportPetPackage as httpExportPetPackage,
   getAnimations as httpGetAnimations,
   getConfig as httpGetConfig,
+  getMeta as httpGetMeta,
   getPets as httpGetPets,
   importMotionPack as httpImportMotionPack,
   importPetPackage as httpImportPetPackage,
@@ -39,9 +40,12 @@ import {
   updatePetMeta as httpUpdatePetMeta,
   uploadAsset as httpUploadAsset,
   ApiError,
+  PRESET_AUTHORITY_FEATURE,
   type ConfigPatch,
+  type DeletePetResponse,
   type GetAnimationsResponse,
   type GetConfigResponse,
+  type GetMetaResponse,
   type GetPetsResponse,
   type MotionPack,
   type PackImportResponse,
@@ -59,11 +63,18 @@ export interface EditorApi {
   getAnimations(): Promise<GetAnimationsResponse>
   /** V1.1: named character presets and the active config pointer. */
   getPets(): Promise<GetPetsResponse>
+  /**
+   * B2 capability probe (phase 3): fetched once per load. OPTIONAL — older
+   * test doubles omit it and any failure reads as "old host" (feature off),
+   * so a pre-B2 server never breaks the editor load.
+   */
+  getMeta?(): Promise<GetMetaResponse>
   createPet(input: { name: string; from: 'current' | 'blank' }): Promise<{ pet: PetPreset; config: PetweenConfig }>
   /** A2: persist the supplied slice as a NEW preset; never touches the active pet. */
   createPetFromDraft(name: string, pet: PetSlice): Promise<{ pet: PetPreset }>
   renamePet(id: string, name: string): Promise<void>
-  deletePet(id: string): Promise<void>
+  /** C5-C: deleting the ACTIVE pet resolves the fallback config view too (preset-authority hosts only). */
+  deletePet(id: string): Promise<DeletePetResponse>
   applyPet(id: string): Promise<PetweenConfig>
   /** Patch PUT of the editor-owned sections; resolves the host-merged full config. */
   patchConfig(patch: ConfigPatch): Promise<PetweenConfig>
@@ -88,14 +99,13 @@ const httpEditorApi: EditorApi = {
   getConfig: () => httpGetConfig(),
   getAnimations: () => httpGetAnimations(),
   getPets: () => httpGetPets(),
+  getMeta: () => httpGetMeta(),
   createPet: (input) => httpCreatePet(input),
   createPetFromDraft: (name, pet) => httpCreatePetFromDraft(name, pet),
   renamePet: async (id, name) => {
     await httpRenamePet(id, name)
   },
-  deletePet: async (id) => {
-    await httpDeletePet(id)
-  },
+  deletePet: (id) => httpDeletePet(id),
   applyPet: async (id) => (await httpApplyPet(id)).config,
   patchConfig: async (patch) => (await httpPatchConfig(patch)).config,
   putAnimation: async (definition) => {
@@ -147,6 +157,13 @@ export interface EditorSnapshot {
   saveState: SaveState
   loadError: string | null
   saveError: string | null
+  /**
+   * Phase-3 probe result (B2 meta, fetched once per load): true when the host
+   * has flipped to preset authority — activePetId is never null and deleting
+   * the ACTIVE pet falls back to another preset (C5-C). False keeps the
+   * pre-flip UI (unnamed-config paths, active-delete ban) for old hosts.
+   */
+  presetAuthority: boolean
   notice: EditorNotice | null
   /** §11 挂载应用: mounts from the last imported pack, awaiting confirmation. */
   pendingMounts: PendingMountApply | null
@@ -186,7 +203,9 @@ function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'TIMEOUT') return '请求超时，请稍后重试'
     if (error.code === 'NETWORK') return '网络连接失败，请检查网络'
-    // C5 方案 a: the host's bare `{error:'ACTIVE_PET'}` 409 has no message.
+    // Pre-flip hosts (C5 方案 a) refuse the active-pet delete with a bare
+    // `{error:'ACTIVE_PET'}` 409 that carries no message; flipped hosts
+    // (C5-C) never send it — reachable only on old hosts or a race.
     if (error.code === 'ACTIVE_PET') return '生效中的宠物不能删除，请先切换到其他宠物'
   }
   return error instanceof Error ? error.message : String(error)
@@ -228,6 +247,7 @@ export class EditorStore {
       saveState: 'idle',
       loadError: null,
       saveError: null,
+      presetAuthority: false,
       notice: null,
       pendingMounts: null,
       importing: null,
@@ -262,17 +282,24 @@ export class EditorStore {
       let pets: PetPreset[]
       let petWarnings: string[]
       let activePetId: string | null
+      let presetAuthority: boolean
       if (this.hub !== undefined) {
-        const [shared, petsResponse] = await Promise.all([this.hub.load(), this.api.getPets()])
+        const [shared, petsResponse, probedAuthority] = await Promise.all([
+          this.hub.load(),
+          this.api.getPets(),
+          this.probePresetAuthority(),
+        ])
         ;({ config, assets, customs } = shared)
         animationWarnings = this.hub.getAnimationWarnings()
         animationNormalized = this.hub.getAnimationNormalized()
         ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
+        presetAuthority = probedAuthority
       } else {
-        const [configResponse, animationsResponse, petsResponse] = await Promise.all([
+        const [configResponse, animationsResponse, petsResponse, probedAuthority] = await Promise.all([
           this.api.getConfig(),
           this.api.getAnimations(),
           this.api.getPets(),
+          this.probePresetAuthority(),
         ])
         ;({ config, assets } = configResponse)
         // `normalized` defaults for a stale pre-2026-08-28 host response —
@@ -283,6 +310,7 @@ export class EditorStore {
           normalized: animationNormalized = [],
         } = animationsResponse)
         ;({ pets, warnings: petWarnings, activePetId } = petsResponse)
+        presetAuthority = probedAuthority
       }
       if (this.disposed) return
       // Hub-backed stores keep the shared poll alive themselves: when the pet
@@ -319,6 +347,7 @@ export class EditorStore {
         assets: { ...assets },
         customs: structuredClone(customs),
         pets: structuredClone(pets),
+        presetAuthority,
         // Skips outrank compatibility info when both exist; either way say
         // exactly what happened — never "skipped" for a loaded animation.
         notice: skippedNotice ?? normalizedNotice,
@@ -326,6 +355,23 @@ export class EditorStore {
     } catch (error) {
       if (this.disposed) return
       this.emit({ status: 'error', loadError: describeError(error) })
+    }
+  }
+
+  /**
+   * Phase-3 feature probe (B2 meta): ONE GET per load(), cached on the
+   * snapshot as `presetAuthority`. Every failure mode — a pre-B2 host's 404,
+   * a transport error, a body without a features array, an older test double
+   * without getMeta — reads as "old host": the pre-flip UI stays and the
+   * probe never breaks the editor load.
+   */
+  private async probePresetAuthority(): Promise<boolean> {
+    try {
+      const meta = this.api.getMeta === undefined ? undefined : await this.api.getMeta()
+      const features: unknown = meta?.features
+      return Array.isArray(features) && features.includes(PRESET_AUTHORITY_FEATURE)
+    } catch {
+      return false
     }
   }
 
@@ -638,8 +684,8 @@ export class EditorStore {
   /**
    * §11 挂载应用: merge the pending mounts into the local draft (only the
    * mounted fields; everything else keeps the draft's values). The editor's
-   * manual-save flow then persists them — the mirror writes them into the
-   * ACTIVE pet on save, which is "apply the pack onto the current pet".
+   * manual-save flow then persists them — the PUT slice shim routes them
+   * into the ACTIVE pet on save, which is "apply the pack onto the current pet".
    */
   applyPendingMounts(): void {
     const pending = this.snapshot.pendingMounts
@@ -764,7 +810,7 @@ export class EditorStore {
    * pet switching, expressed as an explicit discard confirm because the file
    * picker already committed the user to the import intent). Any queued save
    * settles first — an in-flight PUT writing the old draft into the NEW
-   * active pet's mirror after the reload would silently clobber it.
+   * active pet's slice after the reload would silently clobber it.
    */
   async importPetPackage(file: File): Promise<boolean> {
     if (this.disposed || this.snapshot.status !== 'ready') return false
@@ -948,11 +994,21 @@ export class EditorStore {
     }
   }
 
+  /**
+   * C5-C (preset authority): flipped hosts allow deleting the ACTIVE pet —
+   * the response then carries the fresh view with the pointer already on the
+   * fallback pet (or the auto-provisioned default pet), adopted here in the
+   * same round trip via {@link adoptPetConfig} (no extra GET, the overlay
+   * follows through the hub publish). Pre-flip hosts 409 the active delete
+   * (ACTIVE_PET maps to a friendly notice); non-active deletes and old hosts
+   * never carry a config, so the list refresh below is the only follow-up.
+   */
   async deletePet(id: string): Promise<boolean> {
     if (!(await this.preparePetAction(id))) return false
     try {
-      await this.api.deletePet(id)
+      const result = await this.api.deletePet(id)
       if (this.disposed) return true
+      if (result.config !== undefined) this.adoptPetConfig(result.config)
       await this.refreshPetsSafely()
       return true
     } catch (error) {
@@ -1007,7 +1063,7 @@ export class EditorStore {
     return true
   }
 
-  /** Adopt the full config returned by create/apply and publish it immediately. */
+  /** Adopt the full config returned by create/apply/delete-active (C5-C) and publish it immediately. */
   private adoptPetConfig(config: PetweenConfig): void {
     const next = structuredClone(config)
     this.dirty = false
@@ -1020,7 +1076,15 @@ export class EditorStore {
     this.hub?.publish({ config: next, assets: this.snapshot.assets, customs: this.snapshot.customs })
   }
 
-  /** Refresh the list after every pet mutation and synchronize delete-active's null pointer. */
+  /**
+   * Refresh the list after every pet mutation. If the active pointer moved
+   * behind our back (another surface's switch/delete), adopt the new pointer
+   * for display only — the draft's slice values stay untouched (a draft is
+   * never dropped), and where a save lands is decided by the HOST's pointer
+   * at PUT time, never by this client-side copy. The store's own active
+   * deletes adopt the DELETE response's view instead (C5-C), so this branch
+   * no-ops for them.
+   */
   private async refreshPets(): Promise<void> {
     const { pets, activePetId, warnings } = await this.api.getPets()
     if (this.disposed) return

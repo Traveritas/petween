@@ -5,7 +5,15 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
 import type { AnimationKind } from '../../src/motion/animation-definition'
-import { ConfigValidationError, repairConfig, validateAssetId, validateConfigPatch } from '../../src/host/validation'
+import { petSliceFromConfig } from '../../src/host/pets'
+import {
+  ConfigValidationError,
+  repairConfig,
+  validateAssetId,
+  validateConfigPatch,
+  validateGlobalPatch,
+  validatePetSlicePatch,
+} from '../../src/host/validation'
 
 describe('validateConfigPatch (§19.2)', () => {
   it('accepts a full valid config unchanged', () => {
@@ -418,11 +426,15 @@ describe('activePetId (V1.1 pet presets)', () => {
     expect(validateConfigPatch({ enabled: false }, base).activePetId).toBe('pet_abc123')
   })
 
-  it('accepts a pet id or an explicit null in strict mode', () => {
+  it('accepts a pet id in strict mode; explicit null is a tolerated no-op (preset authority, phase 2)', () => {
     expect(validateConfigPatch({ activePetId: 'pet_lx3ab9f2' }).activePetId).toBe('pet_lx3ab9f2')
     const base = createDefaultPetweenConfig()
     base.activePetId = 'pet_abc123'
-    expect(validateConfigPatch({ activePetId: null }, base).activePetId).toBeNull()
+    // "Detach" is retired: null reads as "no pointer opinion" and keeps the
+    // current value, so full-document roundtrips echoing a null pointer
+    // keep working instead of failing.
+    expect(validateConfigPatch({ activePetId: null }, base).activePetId).toBe('pet_abc123')
+    expect(validateConfigPatch({ activePetId: null }).activePetId).toBeNull()
   })
 
   it('rejects malformed values with the field path in strict mode', () => {
@@ -437,11 +449,40 @@ describe('activePetId (V1.1 pet presets)', () => {
     }
   })
 
-  it('repair falls back instead of throwing on malformed values', () => {
+  it('repair falls back instead of throwing on malformed values (null stays tolerated on read)', () => {
     expect(repairConfig({ activePetId: 'user:x' }).activePetId).toBeNull()
     expect(repairConfig({ activePetId: 42 }).activePetId).toBeNull()
     expect(repairConfig({ activePetId: 'pet_ok123' }).activePetId).toBe('pet_ok123')
     expect(repairConfig({ activePetId: null }).activePetId).toBeNull()
+  })
+})
+
+describe('validateGlobalPatch / validatePetSlicePatch (phase-2 segment split)', () => {
+  it('the global walker never reads slice fields; they keep the base value', () => {
+    const result = validateGlobalPatch({
+      enabled: false,
+      global: { scale: 99, successHoldMs: 3000 }, // scale is slice-owned: ignored here, NOT a 400
+      poses: { idle: { assetId: '0123456789abcdef' } },
+    })
+    expect(result.enabled).toBe(false)
+    expect(result.global.successHoldMs).toBe(3000)
+    expect(result.global.scale).toBe(1) // the default base's, untouched
+    expect(result.poses.idle.assetId).toBeUndefined()
+  })
+
+  it('the slice walker validates with config-shaped field paths and merge semantics', () => {
+    const base = petSliceFromConfig(createDefaultPetweenConfig())
+    const patched = validatePetSlicePatch({ scale: 2, poses: { idle: { zoom: 3 } } }, base)
+    expect(patched.scale).toBe(2)
+    expect(patched.poses.idle.zoom).toBe(3)
+    expect(patched.states).toEqual(base.states) // absent → kept
+    try {
+      validatePetSlicePatch({ scale: 99, states: { idle: { pose: 'dragon' } } }, base)
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError)
+      expect((error as ConfigValidationError).issues.map((issue) => issue.path)).toEqual(['global.scale', 'states.idle.pose'])
+    }
   })
 })
 

@@ -14,6 +14,7 @@ import {
   deletePet,
   getAnimations,
   getConfig,
+  getMeta,
   getPets,
   patchConfig,
   putAnimation,
@@ -336,6 +337,21 @@ describe('client api — pet presets (V1.1)', () => {
     const failure = await deletePet('pet_missing').catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(ApiError)
     expect((failure as ApiError).code).toBe('NOT_FOUND')
+  })
+
+  it('deletePet passes through the C5-C fallback config view (preset-authority hosts)', async () => {
+    const config = createDefaultPetweenConfig()
+    config.activePetId = 'pet_fallback'
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: 'pet_abc-123', config }))
+    await expect(deletePet('pet_abc-123')).resolves.toEqual({ deleted: 'pet_abc-123', config })
+  })
+
+  it('getMeta GETs the capability-discovery endpoint (B2)', async () => {
+    const payload = { apiVersion: 1, configVersion: 2, revision: 7, features: ['config', 'config.preset-authority'] }
+    fetchMock.mockResolvedValue(jsonResponse(200, payload))
+    await expect(getMeta()).resolves.toEqual(payload)
+    expect(lastCall().url).toBe('/api/petween/meta')
+    expect(lastCall().init.method ?? 'GET').toBe('GET')
   })
 
   it('applyPet POSTs the apply subpath and returns the host config', async () => {

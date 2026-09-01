@@ -148,10 +148,16 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
         </span>
       )
     case 'dirty': {
-      // §5.2-2: the dirty save button names its target — the active pet (the
-      // save mirrors into its preset) or the unnamed config (config only).
+      // §5.2-2: the dirty save button names its target — the active pet the
+      // slice save lands in. The unnamed-config label survives only for
+      // pre-flip hosts: under preset authority an active pet always exists.
       const activePet = snapshot.pets.find((pet) => pet.id === snapshot.config?.activePetId)
-      const saveLabel = activePet !== undefined ? `保存到「${activePet.name}」` : '保存修改（未命名配置）'
+      const saveLabel =
+        activePet !== undefined
+          ? `保存到「${activePet.name}」`
+          : snapshot.presetAuthority
+            ? '保存修改'
+            : '保存修改（未命名配置）'
       return (
         <span className={`${styles.saveState} ${styles.saveBusy}`}>
           <span>有未保存修改</span>
@@ -245,19 +251,18 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
     if (name !== null) await store.renamePet(active.id, name)
   }
 
-  const deleteActive = async (): Promise<void> => {
-    if (active === undefined) return
-    // §5.2-4 consequence triple (same copy as the manage list's delete).
-    const message = `确认删除宠物「${active.name}」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
-    if (!(await confirmDialog({ message }))) return
-    await store.deletePet(active.id)
-  }
-
   return (
     <section className={styles.section} aria-label="宠物预设">
       <h2 className={styles.sectionTitle}>宠物</h2>
       <div className={styles.petToolbar}>
-        <label className={styles.petSelectLabel}>
+        <label
+          className={styles.petSelectLabel}
+          data-tooltip={
+            snapshot.presetAuthority
+              ? '保存把当前配置写回所选宠物预设；有未保存修改时无法切换宠物。'
+              : '保存把当前配置写回所选宠物预设；有未保存修改时无法切换宠物。未命名配置不属于任何宠物，只写入配置本身。'
+          }
+        >
           <span className={styles.label}>当前宠物</span>
           <select
             className={styles.select}
@@ -266,7 +271,9 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
               if (event.target.value !== '') void store.applyPet(event.target.value)
             }}
           >
-            <option value="">未命名配置（不属于任何宠物）</option>
+            {/* Phase 3: preset-authority hosts never have a pet-less config —
+                the unnamed option survives only for pre-flip hosts. */}
+            {snapshot.presetAuthority ? null : <option value="">未命名配置（不属于任何宠物）</option>}
             {snapshot.pets.map((pet) => (
               <option key={pet.id} value={pet.id}>
                 {pet.name}
@@ -277,15 +284,31 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
         <div className={styles.petActions}>
           {/* The prompt + fork live in the store: the dirty gate's notice
               action (§3.3) offers the same 另存 shortcut. */}
-          <button type="button" className={styles.button} onClick={() => void store.promptSaveDraftAsNewPet()}>
+          <button
+            type="button"
+            className={styles.button}
+            data-tooltip="把当前修改（含未保存部分）存成新宠物预设；当前宠物与草稿原样保留。"
+            onClick={() => void store.promptSaveDraftAsNewPet()}
+          >
             另存草稿为新宠物
           </button>
-          {/* §5.2-1: button names carry the switch semantics. */}
-          <button type="button" className={styles.button} onClick={() => void createCopy()}>
-            复制当前宠物并切换
+          {/* §5.2-1: short verb labels; the copy/switch semantics moved into
+              tooltips (UX: resident grey hints are gone from this card). */}
+          <button
+            type="button"
+            className={styles.button}
+            data-tooltip="基于当前宠物创建副本并切换过去"
+            onClick={() => void createCopy()}
+          >
+            复制
           </button>
-          <button type="button" className={styles.button} onClick={() => void createBlank()}>
-            新建空白宠物并切换
+          <button
+            type="button"
+            className={styles.button}
+            data-tooltip="创建空白宠物并切换过去"
+            onClick={() => void createBlank()}
+          >
+            新建空白
           </button>
           <button
             type="button"
@@ -295,19 +318,10 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           >
             重命名
           </button>
-          {/* C5 方案 a: the host refuses to delete the ACTIVE pet (409
-              ACTIVE_PET) — deleting it used to clear only the pointer while
-              the live config kept the deleted pet's values. The button
-              targets the active pet by construction, so it stays disabled
-              while one is active; the hint says to switch away first. */}
-          <button
-            type="button"
-            className={styles.button}
-            disabled={active === undefined || config.activePetId === active.id}
-            onClick={() => void deleteActive()}
-          >
-            删除
-          </button>
+          {/* Phase 3 (C5-C): the toolbar's always-disabled 删除 button is
+              retired — deletion lives in the 管理宠物 list below, which owns
+              both generations of active-delete semantics (pre-flip disabled /
+              preset-authority fallback-naming confirm). */}
           {/* §12 宠物包: share the ACTIVE pet as a zip / adopt one from a zip. */}
           <button
             type="button"
@@ -324,11 +338,10 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           />
         </div>
       </div>
-      <p className={styles.hint}>
-        保存把当前配置写回所选宠物预设（未命名配置不属于任何宠物，只写入配置本身）；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。生效中的宠物不能删除，请先切换到其他宠物。
-      </p>
+      {/* UX: this card's explanatory copy lives in control tooltips
+          (data-tooltip), not in a resident hint paragraph. */}
       <ManagePetsSection snapshot={snapshot} store={store} />
-      <AttributionSection active={active} store={store} />
+      <AttributionSection active={active} presetAuthority={snapshot.presetAuthority} store={store} />
     </section>
   )
 }
@@ -336,12 +349,17 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
 /**
  * §2.4 管理宠物: every stored preset as a row — name, active badge, rename,
  * export and delete — under the same disclosure interaction as the 来源与署名
- * block. The active row's delete stays disabled (C5: the host refuses the
- * ACTIVE_PET delete with 409) and says why inline; deleting a non-active
- * preset confirms through the C2 modal with the consequence triple (its
- * credit goes with it; images and animations stay in the library). Rows never
- * touch the draft — the store's non-active rename/delete/export paths skip
- * the dirty gate.
+ * block. Rows never touch the draft — the store's non-active rename/delete/
+ * export paths skip the dirty gate.
+ *
+ * Deleting a NON-active preset confirms through the C2 modal with the
+ * consequence triple (its credit goes with it; images and animations stay in
+ * the library). The ACTIVE row depends on the host generation: pre-flip
+ * hosts refuse the delete (409 ACTIVE_PET), so the button stays disabled
+ * with the reason on its tooltip; under preset authority (C5-C) the host
+ * falls back to the most recently updated remaining preset — or provisions
+ * the default pet when none is left — and the confirm copy names that
+ * landing spot (mirroring routes.ts resolvePetFallback).
  */
 function ManagePetsSection(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
   const { snapshot, store } = props
@@ -354,8 +372,20 @@ function ManagePetsSection(props: { snapshot: EditorSnapshot; store: EditorStore
   }
 
   const deletePet = async (pet: PetPreset): Promise<void> => {
-    // §5.2-4: a destructive confirm names the object and the consequence triple.
-    const message = `确认删除宠物「${pet.name}」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
+    let message: string
+    if (pet.id === activePetId && snapshot.presetAuthority) {
+      // C5-C: the confirm names the landing spot. The fallback mirrors the
+      // host's resolvePetFallback (routes.ts) — the most recently updated
+      // remaining preset, id ascending on ties; none left → the default pet.
+      const fallback = snapshot.pets
+        .filter((candidate) => candidate.id !== pet.id)
+        .sort((a, b) => (a.updatedAt === b.updatedAt ? a.id.localeCompare(b.id) : a.updatedAt < b.updatedAt ? 1 : -1))[0]
+      const landing = fallback === undefined ? '将为你新建「未命名宠物（可改名）」' : `将切换到「${fallback.name}」`
+      message = `确认删除宠物「${pet.name}」？删除后${landing}。该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
+    } else {
+      // §5.2-4: a destructive confirm names the object and the consequence triple.
+      message = `确认删除宠物「${pet.name}」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
+    }
     if (!(await confirmDialog({ message }))) return
     await store.deletePet(pet.id)
   }
@@ -393,12 +423,12 @@ function ManagePetsSection(props: { snapshot: EditorSnapshot; store: EditorStore
                   <button
                     type="button"
                     className={styles.button}
-                    disabled={isActive}
+                    disabled={isActive && !snapshot.presetAuthority}
+                    data-tooltip={isActive && !snapshot.presetAuthority ? '生效中——切换到其他宠物后可删除' : undefined}
                     onClick={() => void deletePet(pet)}
                   >
                     删除
                   </button>
-                  {isActive ? <span className={styles.hint}>生效中——切换到其他宠物后可删除</span> : null}
                 </li>
               )
             })}
@@ -441,11 +471,12 @@ const buildAttribution = (form: AttributionForm): PetAttribution | null => {
 /**
  * §12 宠物包: origin & credit editor for the active preset — collapsed by
  * default, prefilled from the preset's stored attribution. An unsaved config
- * (no active preset) disables the fields instead of hiding the section, so
- * the feature is discoverable before the first pet exists.
+ * (no active preset — a pre-flip-host state; preset authority always has one)
+ * disables the fields instead of hiding the section, so the feature is
+ * discoverable before the first pet exists.
  */
-function AttributionSection(props: { active: PetPreset | undefined; store: EditorStore }): JSX.Element {
-  const { active, store } = props
+function AttributionSection(props: { active: PetPreset | undefined; presetAuthority: boolean; store: EditorStore }): JSX.Element {
+  const { active, presetAuthority, store } = props
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<AttributionForm>(() => seedAttributionForm(active))
   // Re-seed when the active pet identity changes (switch/import); edits made
@@ -528,15 +559,20 @@ function AttributionSection(props: { active: PetPreset | undefined; store: Edito
               <span className={styles.unit} />
             </label>
           </div>
-          <p className={styles.hint}>
-            {active === undefined
-              ? '当前是未命名配置，选中一只宠物后才能编辑署名。'
-              : '署名保存在宠物预设上，导出宠物包时会一并带上，方便分享时注明出处。'}
-          </p>
+          {/* The no-active-pet case is a STATE note (why the fields are
+              disabled), so it stays resident — but only for pre-flip hosts;
+              under preset authority an active pet always exists. The active-
+              pet explainer moved onto the save button's tooltip. */}
+          {active === undefined && !presetAuthority ? (
+            <p className={styles.hint}>当前是未命名配置，选中一只宠物后才能编辑署名。</p>
+          ) : null}
           <button
             type="button"
             className={styles.button}
             disabled={active === undefined}
+            data-tooltip={
+              active === undefined ? undefined : '署名保存在宠物预设上，导出宠物包时会一并带上，方便分享时注明出处。'
+            }
             onClick={() => void store.savePetAttribution(buildAttribution(form))}
           >
             保存署名
@@ -635,8 +671,8 @@ function GlobalCard(props: { config: PetweenConfig; store: EditorStore }): JSX.E
 /**
  * Full-width card below the editor columns: the advanced behaviour switches
  * in one column, the terminal-hold group (mode + both durations) in another
- * and the click interactions in a third. Long explanations live on their own
- * hint lines so they never break a control row.
+ * and the click interactions in a third. Explanatory copy rides on the
+ * controls' tooltips (data-tooltip); only state notes stay resident.
  */
 function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefinition[]; store: EditorStore }): JSX.Element {
   const { config, customs, store } = props
@@ -650,6 +686,7 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
           <Toggle
             label="活跃状态内切换姿势"
             checked={config.advanced.changePoseWithinActive}
+            tooltip="开启后思考/工作使用各自图片，reasoning 与工具调用之间按下方所选方式换图。"
             onChange={(checked) =>
               store.updateConfig((draft) => {
                 draft.advanced.changePoseWithinActive = checked
@@ -661,23 +698,23 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
             value={config.advanced.activityTransition}
             options={ACTIVITY_TRANSITION_OPTIONS}
             disabled={!config.advanced.changePoseWithinActive}
+            tooltip="开启后思考/工作使用各自图片，reasoning 与工具调用之间按上方所选方式换图。"
             onChange={(value) =>
               store.updateConfig((draft) => {
                 draft.advanced.activityTransition = value
               })
             }
           />
-          <p className={styles.hint}>开启后思考/工作使用各自图片，reasoning 与工具调用之间按上方所选方式换图。</p>
           <Toggle
             label="粒子特效"
             checked={config.advanced.particles}
+            tooltip="过渡/交互动画里的纸屑与星星等粒子爆发；开启减少动态效果时始终不发射。"
             onChange={(checked) =>
               store.updateConfig((draft) => {
                 draft.advanced.particles = checked
               })
             }
           />
-          <p className={styles.hint}>过渡/交互动画里的纸屑与星星等粒子爆发；开启减少动态效果时始终不发射。</p>
         </div>
         <div className={styles.cardColumn}>
           <div className={styles.groupTitle}>成功/失败</div>
@@ -685,6 +722,7 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
             label="停留方式"
             value={config.advanced.terminalHold}
             options={TERMINAL_HOLD_OPTIONS}
+            tooltip="任务成功/失败后宠物保持该姿势的方式与时长。"
             onChange={(value) =>
               store.updateConfig((draft) => {
                 draft.advanced.terminalHold = value
@@ -719,7 +757,7 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
               })
             }
           />
-          <p className={styles.hint}>任务成功/失败后宠物保持该姿势的方式与时长。</p>
+          {/* State note (why the durations are disabled) — stays resident. */}
           {!timedHold && (
             <p className={styles.hint}>当前为「直到点击宠物或新对话」，停留时长不适用。</p>
           )}
@@ -740,6 +778,7 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
             label="点击闪现姿势"
             value={config.interactions.click.pose ?? ''}
             options={FLASH_POSE_OPTIONS}
+            tooltip="闪现姿势只在点击动画播放期间临时换图；该姿势没有可用图片时保持不变。"
             onChange={(value) =>
               store.updateConfig((draft) => {
                 draft.interactions.click.pose = value === '' ? null : (value as PoseKey)
@@ -749,15 +788,13 @@ function AdvancedCard(props: { config: PetweenConfig; customs: AnimationDefiniti
           <Toggle
             label="执行动画内的换图事件"
             checked={config.interactions.click.honorAnimationPoseSwap}
+            tooltip="开启后动画自带的换图指令也会在点击时生效（播完回到当前状态的图）。"
             onChange={(checked) =>
               store.updateConfig((draft) => {
                 draft.interactions.click.honorAnimationPoseSwap = checked
               })
             }
           />
-          <p className={styles.hint}>
-            闪现姿势只在点击动画播放期间临时换图；该姿势没有可用图片时保持不变。开启「执行动画内的换图事件」后，动画自带的换图指令也会在点击时生效（播完回到当前状态的图）。
-          </p>
         </div>
       </div>
     </section>

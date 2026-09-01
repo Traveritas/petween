@@ -11,6 +11,13 @@
  *   ConfigValidationError (→ HTTP 400). Unknown fields are still stripped
  *   rather than rejected (§19.2 "只接受 schema 中存在的字段").
  *
+ * Preset-authority phase 2: the walker additionally splits by SEGMENT —
+ * `validateGlobalPatch` covers only the v2 global document's fields and
+ * `validatePetSlicePatch` only the preset-owned character slice, so a PUT
+ * body routes each field to its authoritative store (host/view-store.ts).
+ * The full-document `repairConfig`/`validateConfigPatch` are unchanged: the
+ * loader keeps reading both v1 (full) and v2 (global-only) documents.
+ *
  * Numeric bounds: strength/duration/scale/anchor come from the spec; the
  * remaining ranges are internal sanity bounds, marked as such below.
  */
@@ -19,6 +26,7 @@ import type {
   BounceConfig,
   BreatheConfig,
   PetweenConfig,
+  PetSlice,
   PoseAnchor,
   PoseConfig,
   PoseKey,
@@ -193,15 +201,20 @@ function nullablePoseField(value: unknown, fallback: PoseKey | null, path: strin
 }
 
 /**
- * activePetId (V1.1): a `pet_*` preset id or explicit null (unsaved edits).
- * Shape only — a dangling id (preset deleted out-of-band) is tolerated, the
- * client matches it against the pet list.
+ * activePetId (V1.1): a `pet_*` preset id. Shape only — existence is the
+ * caller's concern (the phase-2 update funnel 404s a dangling id).
+ *
+ * Preset authority (phase 2): explicit null no longer means "detach" (every
+ * edit belongs to a pet). It is read as NO-OP — "no pointer opinion" — and
+ * falls back to the current value, so a full-document roundtrip that echoes
+ * a null pointer from an older GET keeps working instead of failing (or,
+ * worse, silently dropping the slice's ownership).
  */
 function nullablePetIdField(value: unknown, fallback: string | null, path: string, walk: Walk): string | null {
   if (value === undefined) return fallback
-  if (value === null) return null
+  if (value === null) return fallback // retired "detach": tolerated as no-change
   if (typeof value === 'string' && PET_ID_RE.test(value)) return value
-  fail(walk, path, 'expected a "pet_<name>" id or null')
+  fail(walk, path, 'expected a "pet_<name>" id')
   return fallback
 }
 
@@ -390,7 +403,13 @@ function poseRecordField<V>(
   return out
 }
 
-function buildConfig(raw: unknown, base: PetweenConfig, mode: Mode, options: ConfigValidationOptions = {}): PetweenConfig {
+function buildConfig(
+  raw: unknown,
+  base: PetweenConfig,
+  mode: Mode,
+  options: ConfigValidationOptions = {},
+  segments: 'all' | 'global' = 'all',
+): PetweenConfig {
   const walk: Walk = { mode, issues: [], animationLookup: options.animationLookup }
   const source = objectField(raw ?? undefined, '', walk)
   // Version handling is decided by loadConfig (spec §18.3); here the v1 tag
@@ -404,11 +423,16 @@ function buildConfig(raw: unknown, base: PetweenConfig, mode: Mode, options: Con
   const interactionsSource = objectField(source.interactions, 'interactions', walk)
   const clickSource = objectField(interactionsSource.click, 'interactions.click', walk)
 
+  // Preset-authority phase 2: a 'global' walk covers only the v2 global
+  // document's fields — the character slice (poses/states/global.scale) is
+  // NOT read and passes through from the base untouched (it routes to
+  // validatePetSlicePatch instead).
+  const walkSlice = segments === 'all'
   const config: PetweenConfig = {
     version: 1,
     enabled: booleanField(source.enabled, base.enabled, 'enabled', walk),
     global: {
-      scale: numberField(globalSource.scale, base.global.scale, 'global.scale', walk, SCALE_RANGE),
+      scale: walkSlice ? numberField(globalSource.scale, base.global.scale, 'global.scale', walk, SCALE_RANGE) : base.global.scale,
       transition: transitionField(
         globalSource.transition,
         base.global.transition,
@@ -426,8 +450,8 @@ function buildConfig(raw: unknown, base: PetweenConfig, mode: Mode, options: Con
       successHoldMs: numberField(globalSource.successHoldMs, base.global.successHoldMs, 'global.successHoldMs', walk, HOLD_RANGE),
       errorHoldMs: numberField(globalSource.errorHoldMs, base.global.errorHoldMs, 'global.errorHoldMs', walk, HOLD_RANGE),
     },
-    poses: poseRecordField(source.poses, base.poses, poseField, 'poses', walk),
-    states: poseRecordField(source.states, base.states, stateField, 'states', walk),
+    poses: walkSlice ? poseRecordField(source.poses, base.poses, poseField, 'poses', walk) : base.poses,
+    states: walkSlice ? poseRecordField(source.states, base.states, stateField, 'states', walk) : base.states,
     overlay: {
       x: nullableNumberField(overlaySource.x, base.overlay.x, 'overlay.x', walk),
       y: nullableNumberField(overlaySource.y, base.overlay.y, 'overlay.y', walk),
@@ -497,6 +521,46 @@ export function validateConfigPatch(
   options: ConfigValidationOptions = {},
 ): PetweenConfig {
   return buildConfig(raw, base, 'strict', options)
+}
+
+/**
+ * Preset-authority phase 2 — strict validation of the GLOBAL segments of a
+ * PUT /config patch: everything the v2 global document owns (enabled, the
+ * global.transition/reducedMotion/holds triplet, overlay, advanced,
+ * interactions, the activePetId pointer). The character slice fields
+ * (poses / states / global.scale) are NOT read here — they route to
+ * {@link validatePetSlicePatch} and land in the active preset. The result
+ * keeps the base's slice so callers keep the familiar full shape; the writer
+ * projects the v2 global document out of it (host/config.ts
+ * toGlobalDocument).
+ */
+export function validateGlobalPatch(
+  raw: unknown,
+  base: PetweenConfig = createDefaultPetweenConfig(),
+  options: ConfigValidationOptions = {},
+): PetweenConfig {
+  return buildConfig(raw, base, 'strict', options, 'global')
+}
+
+/**
+ * Preset-authority phase 2 — strict validation of a character-slice patch
+ * against a preset's current slice. The input uses the slice shape
+ * `{scale?, poses?, states?}` (the update funnel extracts `scale` from the
+ * PUT body's `global` object first). Same walker rules and merge semantics
+ * as a config PUT: absent fields keep the base, invalid present fields throw
+ * a ConfigValidationError — the field paths stay config-shaped
+ * (`global.scale`, `poses.*`, `states.*`) so clients see unchanged messages.
+ */
+export function validatePetSlicePatch(raw: unknown, base: PetSlice, options: ConfigValidationOptions = {}): PetSlice {
+  const walk: Walk = { mode: 'strict', issues: [], animationLookup: options.animationLookup }
+  const source = objectField(raw ?? undefined, '', walk)
+  const slice: PetSlice = {
+    scale: numberField(source.scale, base.scale, 'global.scale', walk, SCALE_RANGE),
+    poses: poseRecordField(source.poses, base.poses, poseField, 'poses', walk),
+    states: poseRecordField(source.states, base.states, stateField, 'states', walk),
+  }
+  if (walk.issues.length > 0) throw new ConfigValidationError(walk.issues)
+  return slice
 }
 
 /** Asset ids are the first 16 hex chars of the content sha256 (host-generated). */

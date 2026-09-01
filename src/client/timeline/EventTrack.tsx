@@ -160,11 +160,9 @@ export function EventInspector(props: EventInspectorProps): JSX.Element {
             placeholder="内置槽名（idle…）或 user: 姿态 id"
             listId="petween-pose-targets"
             listOptions={POSE_KEYS}
+            tooltip="互动动画的 pose-swap 在播放时切到目标姿态：内置槽名走回退链，user: 姿态需先由附属插件注册；未命中的目标会被跳过。"
             onChange={(value) => props.onSetPose(value.trim() === '' ? undefined : value.trim())}
           />
-          <p className={styles.hint}>
-            互动动画的 pose-swap 在播放时切到目标姿态：内置槽名走回退链，user: 姿态需先由附属插件注册；未命中的目标会被跳过。
-          </p>
         </>
       ) : deletable ? (
         // A deletable pose-swap on a transition is an extra beyond the

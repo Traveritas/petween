@@ -578,8 +578,13 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
               <PetRenderer onStage={handleAuditionStage} embedded size={220} />
             </div>
             <div className={styles.animationPreviewActions}>
-              <span className={styles.hint}>此渲染器只播放动画库试播。</span>
-              <button type="button" className={styles.button} disabled={!previewReady} onClick={stopAudition}>
+              <button
+                type="button"
+                className={styles.button}
+                disabled={!previewReady}
+                data-tooltip="此渲染器只播放动画库试播。"
+                onClick={stopAudition}
+              >
                 ■ 停止
               </button>
             </div>
@@ -605,9 +610,9 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 value={draft.kind}
                 options={KIND_OPTIONS}
                 disabled={readOnly}
+                tooltip="切换类型时会自动移除不适用的事件与轨道；切回过渡类型时会补充 pose-swap（换图）。"
                 onChange={changeKind}
               />
-              <p className={styles.hint}>切换类型时会自动移除不适用的事件与轨道；切回过渡类型时会补充 pose-swap（换图）。</p>
               <NumberField
                 label="时长"
                 min={1}
@@ -662,6 +667,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                   type="button"
                   className={styles.jsonToggle}
                   aria-expanded={jsonOpen}
+                  data-tooltip="与时间轴实时同步；批量粘贴或外部工具产出的定义可经「编辑 JSON」应用。"
                   onClick={() => setJsonOpen((open) => !open)}
                 >
                   {jsonOpen ? '▾' : '▸'} JSON 视图
@@ -679,7 +685,6 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                           编辑 JSON…
                         </button>
                       </div>
-                      <p className={styles.hint}>与时间轴实时同步；批量粘贴或外部工具产出的定义可经「编辑 JSON」应用。</p>
                     </>
                   ) : (
                     <>
@@ -699,16 +704,18 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                         </ul>
                       ) : null}
                       <div className={styles.jsonActions}>
-                        <button type="button" className={styles.button} onClick={applyJson}>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          data-tooltip="粘贴含 tracks / events 字段的 JSON 对象（例如完整动画定义）；校验通过后替换当前轨道与事件。"
+                          onClick={applyJson}
+                        >
                           应用 JSON
                         </button>
                         <button type="button" className={styles.button} onClick={() => setJsonDraft(null)}>
                           取消
                         </button>
                       </div>
-                      <p className={styles.hint}>
-                        粘贴含 tracks / events 字段的 JSON 对象（例如完整动画定义）；校验通过后替换当前轨道与事件。
-                      </p>
                     </>
                   )
                 ) : null}
@@ -743,13 +750,21 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                   type="button"
                   className={styles.button}
                   disabled={busy || !draftValid}
+                  data-tooltip={
+                    readOnly ? '内置动画只读：时间轴上的修改仅用于试播，克隆后随副本保存。' : undefined
+                  }
                   onClick={() => void handleClone()}
                 >
                   克隆为自定义
                 </button>
               </div>
               <div className={styles.auditionRow}>
-                <Toggle label="循环试播" checked={autoReplay} onChange={setAutoReplay} />
+                <Toggle
+                  label="循环试播"
+                  checked={autoReplay}
+                  tooltip="编辑变更且校验通过后自动重播一次。"
+                  onChange={setAutoReplay}
+                />
                 <div className={styles.auditionStrength}>
                   <Slider
                     label="试播强度"
@@ -757,14 +772,11 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                     max={strengthBounds.max}
                     step={0.05}
                     value={previewStrength}
+                    tooltip="只作用于预览，不写入定义。"
                     onChange={setPreviewStrength}
                   />
                 </div>
               </div>
-              <p className={styles.hint}>循环试播会在编辑变更且校验通过后自动重播一次；试播强度只作用于预览，不写入定义。</p>
-              {readOnly ? (
-                <p className={styles.hint}>内置动画只读：时间轴上的修改仅用于试播，「克隆为自定义」后随副本保存。</p>
-              ) : null}
             </>
           )}
         </div>

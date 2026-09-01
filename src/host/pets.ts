@@ -8,9 +8,10 @@
  * preset. Ids are host-generated (`pet_<base36><hex>`), so disk names never
  * derive from user input and traversal is impossible by construction.
  *
- * The store is also the mirror target: ConfigStore's onSaved hook re-writes
- * the active preset's slice on every config save, so editor changes to the
- * current pet automatically belong to that preset.
+ * Preset-authority phase 2: presets are the slice's single source of truth.
+ * The authoritative write path is {@link PetsStore.writeSlice} (strict
+ * validation, config-PUT discipline); `saveSlice`'s repair-style
+ * normalization survives only for read/import repair paths (create()).
  */
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -18,9 +19,9 @@ import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { PetweenConfig, PetAttribution, PetPluginConfigs, PetPreset, PetSlice } from '../core/types'
-import { POSE_KEYS } from '../core/types'
+import type { AnimationKind } from '../motion/animation-definition'
 import { createWriteLock, writeJsonAtomic, type WriteLock } from './storage'
-import { repairConfig } from './validation'
+import { repairConfig, validatePetSlicePatch } from './validation'
 
 export type { PetAttribution, PetPluginConfigEntry, PetPluginConfigs, PetPreset, PetSlice } from '../core/types'
 
@@ -291,49 +292,14 @@ export function petSliceFromConfig(config: PetweenConfig): PetSlice {
   return { scale: config.global.scale, poses: config.poses, states: config.states }
 }
 
-/** Config patch that applies a preset: the character slice plus the active pointer. */
-export function applyPatchFor(pet: PetPreset): Record<string, unknown> {
-  // Optional animation references use patch semantics where an absent field
-  // means "keep current". A preset application is authoritative, so encode
-  // absent references as null to clear ids owned by the previous pet.
-  const states = Object.fromEntries(
-    POSE_KEYS.map((key) => {
-      const state = pet.states[key]
-      return [
-        key,
-        {
-          ...state,
-          enter: { ...state.enter, animationId: state.enter.animationId ?? null },
-          ambient: { ...state.ambient, customAnimationId: state.ambient.customAnimationId ?? null },
-        },
-      ]
-    }),
-  )
-  return { activePetId: pet.id, poses: pet.poses, states, global: { scale: pet.scale } }
-}
-
 /**
- * Pet-switch patch base (bare-switch guard): the target preset's full
- * character slice, so the onSaved mirror can only ever write the preset's
- * own data back into it. Caller slice fields win field-by-field; `global`
- * merges scale-only — a caller `global` without `scale` must not resurrect
- * the previous pet's scale through the merge-onto-current patch semantics.
+ * The auto-provisioned pet's name (preset authority, form (i)): every edit
+ * belongs to a pet, so the boot migration (host/migrate-v2.ts), the update
+ * funnel's null/dangling-pointer repair and the C5-C delete fallback all
+ * create this pet when nothing else exists. Renaming is the user's fork
+ * point — the name says so.
  */
-export function expandPetSwitchPatch(raw: Record<string, unknown>, pet: PetPreset): Record<string, unknown> {
-  const base = applyPatchFor(pet)
-  const callerGlobal =
-    typeof raw.global === 'object' && raw.global !== null ? (raw.global as Record<string, unknown>) : undefined
-  const callerScale = callerGlobal?.scale
-  return {
-    ...raw,
-    poses: raw.poses !== undefined ? raw.poses : base.poses,
-    states: raw.states !== undefined ? raw.states : base.states,
-    global:
-      callerGlobal !== undefined
-        ? { ...callerGlobal, scale: callerScale !== undefined ? callerScale : (base.global as { scale: number }).scale }
-        : { scale: (base.global as { scale: number }).scale },
-  }
-}
+export const DEFAULT_PET_NAME = '未命名宠物（可改名）'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -395,7 +361,7 @@ function toPreset(raw: Record<string, unknown>): PetPreset {
   if (attribution !== undefined) preset.attribution = attribution
   // §12: carried explicitly — toPreset whitelists known keys, so without this
   // line a record's pluginConfigs would silently vanish on the next read
-  // (and with it on the next saveSlice mirror write).
+  // (and with it on the next slice write, which spreads the stored record).
   const pluginConfigs = normalizePluginConfigs(raw.pluginConfigs)
   if (pluginConfigs !== undefined) preset.pluginConfigs = pluginConfigs
   return preset
@@ -538,13 +504,40 @@ export class PetsStore {
   }
 
   /**
-   * Replace a preset's slice (the config mirror path), keeping name and
-   * createdAt. NOT_FOUND when the file is gone — the mirror caller treats
-   * that as a warning, since the config stays authoritative. When the
-   * normalized content is unchanged the write is skipped and the original
-   * updatedAt kept: the mirror fires on every config save (e.g. each drag
-   * persisting overlay.x/y), and rewriting identical slices would churn the
-   * preset files and fake content changes in updatedAt.
+   * Replace a preset's slice from a STRICTLY validated patch — the
+   * authoritative slice write path (preset-authority phase 2). The patch
+   * uses the slice shape `{scale?, poses?, states?}` and is validated
+   * against the preset's CURRENT slice with config-PUT semantics: absent
+   * fields keep their value, invalid present fields throw
+   * ConfigValidationError (→ HTTP 400 at the routes layer). Name, createdAt
+   * and the out-of-slice fields (attribution, pluginConfigs) are kept; an
+   * unchanged result skips the disk write and the updatedAt bump (same
+   * no-churn rule as saveSlice).
+   */
+  writeSlice(id: string, slice: unknown, options: { animationLookup?: (id: string) => AnimationKind | undefined } = {}): Promise<PetPreset> {
+    return this.enqueue(async () => {
+      const preset = await this.read(id)
+      const validated = validatePetSlicePatch(slice, { scale: preset.scale, poses: preset.poses, states: preset.states }, options)
+      const unchanged =
+        preset.scale === validated.scale &&
+        JSON.stringify(preset.poses) === JSON.stringify(validated.poses) &&
+        JSON.stringify(preset.states) === JSON.stringify(validated.states)
+      if (unchanged) return preset
+      const updated: PetPreset = { ...preset, ...validated, updatedAt: this.now() }
+      await writeJsonAtomic(this.filePathFor(preset.id), updated)
+      return updated
+    })
+  }
+
+  /**
+   * Replace a preset's slice with repair-style normalization, keeping name
+   * and createdAt. This is the READ/IMPORT repair path (a create() sibling):
+   * tolerant field-wise repair instead of strict rejection. The
+   * authoritative write path is writeSlice() — new callers writing user
+   * input belong there. NOT_FOUND when the file is gone. When the normalized
+   * content is unchanged the write is skipped and the original updatedAt
+   * kept: rewriting identical slices would churn the preset files and fake
+   * content changes in updatedAt.
    */
   saveSlice(id: string, slice: unknown): Promise<PetPreset> {
     return this.enqueue(async () => {

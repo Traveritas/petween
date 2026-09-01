@@ -67,12 +67,16 @@ export function LivePreview(props: LivePreviewProps): JSX.Element {
         ))}
       </div>
       <div className={styles.previewToolbar}>
-        <button type="button" className={styles.button} onClick={onReplay}>
+        <button
+          type="button"
+          className={styles.button}
+          data-tooltip="预览与主界面宠物使用同一套渲染与状态机。"
+          onClick={onReplay}
+        >
           ▶ 重播进入动画
         </button>
         <Toggle label="锚点十字" checked={showAnchor} onChange={setShowAnchor} />
       </div>
-      <p className={styles.hint}>预览与主界面宠物使用同一套渲染与状态机。</p>
     </div>
   )
 }

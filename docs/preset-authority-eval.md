@@ -127,8 +127,8 @@ physics 仓：**零改动**（只经 cordis 服务与 HTTP 消费，不触碰 co
 
 - **阶段 0（拍板）**：第 7 节 6 个开放问题全部拍板；规格先行写入 motion-format.md / development-spec 相关节。
 - **阶段 1（host 只读面，S）【已落地 2026-08-31】**：`GET /config` 改物化视图（全局文档 + 活跃预设切片拼装），**写路径一律不动**。验收：新测试锁「对任意状态，视图 ≡ 旧 config」；950 用例基线零改动全绿。
-- **阶段 2（host 写路径重定向，L）**：PUT /config 切片字段 shim 路由到活跃预设；onSaved 镜像删除；apply/裸切/包导入改指针翻转；revision 合成。验收：client 测试零改动通过 + host 测试重写组全绿 + 真机走查（含裸切往返回归——2026-08-29 事故场景）。
-- **阶段 3（client 语义收敛，M）**：editor-store 草稿模型对齐新所有权；C5 落点；UI 文案。
+- **阶段 2（host 写路径重定向，L）【已落地 2026-08-31】**：PUT /config 切片字段 shim 路由到活跃预设；onSaved 镜像删除；apply/裸切/包导入改指针翻转；revision 合成。验收：client 测试零改动通过 + host 测试重写组全绿 + 真机走查（含裸切往返回归——2026-08-29 事故场景）。
+- **阶段 3（client 语义收敛，M）【已落地 2026-08-31】**：editor-store 草稿模型对齐新所有权；C5 落点；UI 文案。
 - **阶段 4（清理，S）**：`applyPatchFor`/`expandPetSwitchPatch`/兼容 shim 退役；文档与 AGENTS.md 同步。
 
 ### 7. 开放问题（待拍板）【2026-08-31 已拍板：用户授权主代理代定，结合 pet-lifecycle-ux-design.md 综合】

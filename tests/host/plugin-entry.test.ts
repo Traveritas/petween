@@ -109,6 +109,9 @@ describe('host apply — mount-once flag', () => {
   it('migrates a legacy motion-pet home onto petween before any store loads', () => {
     const legacy = join(process.env.DSH_HOME!, 'motion-pet')
     const target = join(process.env.DSH_HOME!, 'petween')
+    // Earlier tests' apply() calls already provisioned a first-run home;
+    // clear it so the legacy rename has somewhere to land.
+    rmSync(target, { recursive: true, force: true })
     mkdirSync(join(legacy, 'assets'), { recursive: true })
     writeFileSync(join(legacy, 'config.json'), JSON.stringify({ marker: 'real-user-data' }))
     writeFileSync(join(legacy, 'assets', 'a.webp'), Buffer.from([0x89, 0x50]))
@@ -117,8 +120,15 @@ describe('host apply — mount-once flag', () => {
     apply(ctx)
     // Entry-level guarantee: the rename happened, content survived intact.
     expect(existsSync(legacy)).toBe(false)
-    expect(readFileSync(join(target, 'config.json'), 'utf8')).toBe(JSON.stringify({ marker: 'real-user-data' }))
     expect(readFileSync(join(target, 'assets', 'a.webp'))).toEqual(Buffer.from([0x89, 0x50]))
+    // The preset-authority migration (host/migrate-v2.ts) then rewrote the
+    // v1-shaped config as the v2 global document — the ORIGINAL survives as
+    // the backup, and a default pet now owns the (default) slice.
+    expect(readFileSync(join(target, 'config.v1.backup.json'), 'utf8')).toBe(JSON.stringify({ marker: 'real-user-data' }))
+    const document = JSON.parse(readFileSync(join(target, 'config.json'), 'utf8')) as Record<string, unknown>
+    expect(document.version).toBe(2)
+    expect(document.activePetId).toMatch(/^pet_[a-z0-9]+$/)
+    expect(existsSync(join(target, 'pets', `${document.activePetId as string}.json`))).toBe(true)
     // Keep the isolated home clean for the tests that follow.
     rmSync(target, { recursive: true, force: true })
   })

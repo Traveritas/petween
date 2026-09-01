@@ -8,7 +8,14 @@
  * fetch involved.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigPatch, type PetPackageImportResponse, type UploadedAsset } from '../../src/client/api'
+import {
+  ApiError,
+  PRESET_AUTHORITY_FEATURE,
+  type ConfigPatch,
+  type GetMetaResponse,
+  type PetPackageImportResponse,
+  type UploadedAsset,
+} from '../../src/client/api'
 import { ConfigHub, type ConfigSnapshot } from '../../src/client/config-hub'
 import {
   EditorStore,
@@ -107,7 +114,10 @@ const makeApi = (overrides: Partial<EditorApi> = {}): { api: EditorApi; mocks: A
     }),
     deletePet: vi.fn(async (id: string) => {
       serverPets = serverPets.filter((pet) => pet.id !== id)
+      // Pre-flip truth: an active delete cleared only the pointer (the C5-C
+      // fallback-view response is mocked per test, feature-on only).
       if (serverConfig.activePetId === id) serverConfig.activePetId = null
+      return { deleted: id }
     }),
     applyPet: vi.fn(async (id: string) => {
       const pet = serverPets.find((candidate) => candidate.id === id)
@@ -209,6 +219,43 @@ describe('EditorStore — load', () => {
     await loadStore(api)
     expect(store.getSnapshot().status).toBe('error')
     expect(store.getSnapshot().loadError).toBe('boom')
+  })
+
+  it('probes the B2 meta once per load: config.preset-authority turns presetAuthority on', async () => {
+    const meta: GetMetaResponse = { apiVersion: 1, configVersion: 2, revision: 1, features: ['config', PRESET_AUTHORITY_FEATURE] }
+    const getMeta = vi.fn(async () => meta)
+    const { api } = makeApi({ getMeta })
+    await loadStore(api)
+    expect(getMeta).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().status).toBe('ready')
+    expect(store.getSnapshot().presetAuthority).toBe(true)
+  })
+
+  it('a failing/absent/malformed meta probe keeps presetAuthority off and never breaks the load', async () => {
+    // Pre-B2 host: the route 404s.
+    const { api } = makeApi({
+      getMeta: vi.fn(async () => {
+        throw new ApiError(404, 'NOT_FOUND', 'unknown route')
+      }),
+    })
+    await loadStore(api)
+    expect(store.getSnapshot().status).toBe('ready')
+    expect(store.getSnapshot().presetAuthority).toBe(false)
+    store.dispose()
+
+    // Very old host / older test double: no meta endpoint at all.
+    await loadStore(makeApi().api)
+    expect(store.getSnapshot().status).toBe('ready')
+    expect(store.getSnapshot().presetAuthority).toBe(false)
+    store.dispose()
+
+    // Malformed body: no features array.
+    const { api: weirdApi } = makeApi({
+      getMeta: vi.fn(async () => ({}) as unknown as GetMetaResponse),
+    })
+    await loadStore(weirdApi)
+    expect(store.getSnapshot().status).toBe('ready')
+    expect(store.getSnapshot().presetAuthority).toBe(false)
   })
 })
 
@@ -1121,6 +1168,82 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(store.getSnapshot().pets.map((candidate) => candidate.id)).toEqual([active.id])
     expect(store.getSnapshot().config?.activePetId).toBe(active.id)
     expect(store.getSnapshot().config?.global.scale).toBe(1.8)
+  })
+
+  it('deleting the ACTIVE pet adopts the fallback view from the DELETE response (C5-C, preset authority)', async () => {
+    const active = preset('pet_active', '当前', 1.8)
+    const fallback = preset('pet_fallback', '继任', 0.9)
+    const activeConfig = createDefaultPetweenConfig()
+    activeConfig.activePetId = active.id
+    activeConfig.global.scale = active.scale
+    let serverPetsList = [active, fallback]
+    let serverActiveId: string | null = active.id
+    const { api, mocks } = makeApi({
+      getMeta: vi.fn(async () => ({
+        apiVersion: 1,
+        configVersion: 2,
+        revision: 1,
+        features: ['config', PRESET_AUTHORITY_FEATURE],
+      })),
+      getConfig: vi.fn(async () => ({ config: structuredClone(activeConfig), assets: {} })),
+      getPets: vi.fn(async () => ({
+        pets: structuredClone(serverPetsList),
+        activePetId: serverActiveId,
+        warnings: [] as string[],
+      })),
+      deletePet: vi.fn(async (id: string) => {
+        serverPetsList = serverPetsList.filter((pet) => pet.id !== id)
+        if (serverActiveId !== id) return { deleted: id }
+        // The truthful C5-C host: the pointer falls back and the fresh view
+        // (fallback pet's slice) rides the DELETE response.
+        serverActiveId = fallback.id
+        const view = createDefaultPetweenConfig()
+        view.activePetId = fallback.id
+        view.global.scale = fallback.scale
+        return { deleted: id, config: view }
+      }),
+    })
+    await loadStore(api)
+    expect(store.getSnapshot().presetAuthority).toBe(true)
+
+    expect(await store.deletePet(active.id)).toBe(true)
+    // The view landed in the same round trip — no second config GET.
+    expect(mocks.getConfig).toHaveBeenCalledTimes(1)
+    const config = store.getSnapshot().config
+    expect(config?.activePetId).toBe(fallback.id)
+    expect(config?.global.scale).toBe(0.9)
+    // clean slate: the draft is now the fallback pet's saved slice
+    expect(store.getSnapshot().saveState).toBe('saved')
+    expect(store.getSnapshot().pets.map((pet) => pet.id)).toEqual([fallback.id])
+  })
+
+  it('C5-C keeps the dirty gate: deleting the ACTIVE pet with unsaved edits is still blocked', async () => {
+    const active = preset('pet_active', '当前', 1)
+    const other = preset('pet_other', '备用', 1.2)
+    const config = createDefaultPetweenConfig()
+    config.activePetId = active.id
+    const { api, mocks } = makeApi({
+      getMeta: vi.fn(async () => ({
+        apiVersion: 1,
+        configVersion: 2,
+        revision: 1,
+        features: ['config', PRESET_AUTHORITY_FEATURE],
+      })),
+      getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
+      getPets: vi.fn(async () => ({ pets: [active, other], activePetId: active.id, warnings: [] })),
+    })
+    await loadStore(api)
+    expect(store.getSnapshot().presetAuthority).toBe(true)
+    store.updateConfig((draft) => {
+      draft.global.scale = 1.6
+    })
+
+    expect(await store.deletePet(active.id)).toBe(false)
+    expect(mocks.deletePet).not.toHaveBeenCalled()
+    // identity changes never drop a draft implicitly — the §3.3 warn names the exits
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn', action: 'save-draft-as-new-pet' })
+    expect(store.getSnapshot().config?.activePetId).toBe(active.id)
+    expect(store.getSnapshot().config?.global.scale).toBe(1.6)
   })
 
   it('blocks pet switching while config changes are unsaved', async () => {

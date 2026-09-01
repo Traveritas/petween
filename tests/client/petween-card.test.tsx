@@ -13,7 +13,7 @@ import { EDITOR_PAGE_URL, type ConfigPatch } from '../../src/client/api'
 import { PetweenCard } from '../../src/client/settings/PetweenCard'
 import type { EditorApi } from '../../src/client/stores/editor-store'
 import { createDefaultPetweenConfig } from '../../src/core/defaults'
-import type { AssetMeta } from '../../src/core/types'
+import type { AssetMeta, PetPreset } from '../../src/core/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -80,7 +80,7 @@ const makeApi = (withImage: boolean): { api: EditorApi; mocks: ApiMocks } => {
       throw new Error('not used in these tests')
     }),
     renamePet: vi.fn(async () => {}),
-    deletePet: vi.fn(async () => {}),
+    deletePet: vi.fn(async (id: string) => ({ deleted: id })),
     applyPet: vi.fn(async () => structuredClone(config)),
     putAnimation: vi.fn(async () => {}),
     deleteAnimation: vi.fn(async () => {}),
@@ -173,6 +173,37 @@ describe('PetweenCard', () => {
     expect(container.textContent).toContain('已保存')
     // …and gone again once the draft is saved
     expect(container.textContent).not.toContain('关闭卡片将丢弃未保存修改')
+  })
+
+  it('preset authority (feature-on): the dirty save button names the active pet, never the unnamed config', async () => {
+    const { api } = makeApi(true)
+    const { config } = await api.getConfig()
+    config.activePetId = 'pet_a'
+    const pet: PetPreset = {
+      id: 'pet_a',
+      name: '蓝猫',
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      scale: 1,
+      poses: structuredClone(config.poses),
+      states: structuredClone(config.states),
+    }
+    api.getMeta = vi.fn(async () => ({
+      apiVersion: 1,
+      configVersion: 2,
+      revision: 1,
+      features: ['config', 'config.preset-authority'],
+    }))
+    api.getPets = vi.fn(async () => ({ pets: [pet], activePetId: 'pet_a', warnings: [] }))
+    await render(api)
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    const button = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === '保存到「蓝猫」',
+    )
+    expect(button?.disabled).toBe(false)
+    expect(container.textContent).not.toContain('保存修改（未命名配置）')
   })
 
   it('the scale slider spans 0.3..4, aligned with the full editor and host validation', async () => {

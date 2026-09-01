@@ -240,7 +240,8 @@ export interface PetPreset extends PetSlice {
   attribution?: PetAttribution
   /**
    * §12 宠物包: companion-plugin blobs carried by pet packages. Lives OUTSIDE
-   * the slice, so the saveSlice config mirror never touches it.
+   * the slice, so slice writes (host/pets.ts writeSlice/saveSlice) never
+   * touch it.
    */
   pluginConfigs?: PetPluginConfigs
 }

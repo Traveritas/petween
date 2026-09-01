@@ -360,6 +360,8 @@ describe('TimelineEditor — inspector: at and value', () => {
     const baseInput = controlRow(inspector(), '基础值 base').querySelector('input')
     const amountInput = controlRow(inspector(), '强度系数 amount').querySelector('input')
     if (baseInput === null || amountInput === null) throw new Error('parameter inputs missing')
+    // UX: the formula note lives on the amount row's tooltip, not a resident hint
+    expect(controlRow(inspector(), '强度系数 amount').getAttribute('data-tooltip')).toContain('base + 强度 × amount')
     type(baseInput, '0.8')
     expect(changes[1].tracks[0].keyframes[0].value).toEqual({ base: 0.8, parameter: 'strength', amount: 0 })
     type(amountInput, '-0.25')
@@ -400,7 +402,8 @@ describe('TimelineEditor — inspector: easing and the same-layer sync', () => {
     expect(next.tracks[0].keyframes[0].easing).toBe('ease-in') // outside the interval
     expect(next.tracks[1].keyframes[0].easing).toBe('ease-in')
     expect(next.tracks[2]).toEqual(otherLayer) // different layer untouched
-    expect(inspector().textContent).toContain('同层轨道共享缓动')
+    // UX: the same-layer note moved from a resident hint to the row's tooltip
+    expect(controlRow(inspector(), '缓动').getAttribute('data-tooltip')).toContain('同层轨道共享缓动')
     expectValidDrafts('transition', changes)
   })
 
@@ -666,9 +669,10 @@ describe('TimelineEditor — keyboard focus retention & interaction pose-swap au
     type(poseInput as HTMLInputElement, 'working')
     expect(changes[changes.length - 1]?.events).toEqual([{ at: 0.5, type: 'pose-swap', pose: 'working' }])
     expect(validations[validations.length - 1]).toEqual([])
-    // The hint teaches the play-time semantics instead of telling the author
-    // to delete a legal event.
-    expect(eventInspector.textContent).toContain('播放时')
+    // The play-time semantics moved into the pose field's tooltip (UX: no
+    // resident teaching hints) instead of telling the author to delete a
+    // legal event.
+    expect(controlRow(eventInspector, '目标姿态').getAttribute('data-tooltip')).toContain('播放时')
 
     // Clearing the target makes the draft invalid (schema) until fixed.
     type(poseInput as HTMLInputElement, '')

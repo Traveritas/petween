@@ -45,6 +45,7 @@ export function AmbientEditor(props: AmbientEditorProps): JSX.Element {
         label="自定义循环动画"
         value={ambient.customAnimationId ?? ''}
         options={customOptions}
+        tooltip="与下方内置循环同时播放，循环方式与时长取自动画定义。"
         onChange={(value) =>
           store.updateConfig((draft) => {
             if (value === '') delete draft.states[state].ambient.customAnimationId
@@ -52,7 +53,6 @@ export function AmbientEditor(props: AmbientEditorProps): JSX.Element {
           })
         }
       />
-      <p className={styles.hint}>与下方内置循环同时播放，循环方式与时长取自动画定义。</p>
 
       <Toggle
         label="Bounce 弹跳"

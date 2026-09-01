@@ -2,6 +2,13 @@
  * client/settings/controls.tsx — small shared form controls for the settings
  * panels (Slider / NumberField / Toggle / SelectRow / FileImportButton).
  * Slider ranges mirror the host validation bounds (host/validation.ts).
+ *
+ * Every control takes an optional `tooltip`: the text lands in a
+ * data-tooltip attribute on the control's root element (the wrapping <label>
+ * for rows, the trigger button for FileImportButton) and is rendered by the
+ * CSS-only tooltip rules in settings.module.css — hover for pointer users,
+ * focus-visible/focus-within for keyboard users. Explanatory copy that used
+ * to sit in resident .hint lines lives here instead.
  */
 import { useRef, useState, type JSX } from 'react'
 import { ASSET_ACCEPT_ATTRIBUTE } from '../../core/assets-contract'
@@ -26,6 +33,7 @@ export function Slider(props: {
   value: number
   unit?: string
   disabled?: boolean
+  tooltip?: string
   onChange: (value: number) => void
 }): JSX.Element {
   const decimals = stepDecimals(props.step)
@@ -38,7 +46,10 @@ export function Slider(props: {
     return Number(clamp(stepped, props.min, props.max).toFixed(decimals))
   }
   return (
-    <label className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}>
+    <label
+      className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}
+      data-tooltip={props.tooltip}
+    >
       <span className={styles.label}>{props.label}</span>
       <input
         type="range"
@@ -65,6 +76,7 @@ export function NumberField(props: {
   value: number
   unit?: string
   disabled?: boolean
+  tooltip?: string
   onChange: (value: number) => void
 }): JSX.Element {
   const { value, min, max, onChange } = props
@@ -82,7 +94,10 @@ export function NumberField(props: {
     if (next !== value) onChange(next)
   }
   return (
-    <label className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}>
+    <label
+      className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}
+      data-tooltip={props.tooltip}
+    >
       <span className={styles.label}>{props.label}</span>
       <input
         type="number"
@@ -103,9 +118,14 @@ export function NumberField(props: {
   )
 }
 
-export function Toggle(props: { label: string; checked: boolean; onChange: (checked: boolean) => void }): JSX.Element {
+export function Toggle(props: {
+  label: string
+  checked: boolean
+  tooltip?: string
+  onChange: (checked: boolean) => void
+}): JSX.Element {
   return (
-    <label className={`${styles.row} ${styles.toggle}`}>
+    <label className={`${styles.row} ${styles.toggle}`} data-tooltip={props.tooltip}>
       <input type="checkbox" checked={props.checked} onChange={(event) => props.onChange(event.target.checked)} />
       <span>{props.label}</span>
     </label>
@@ -123,10 +143,11 @@ export function TextField(props: {
   placeholder?: string
   listId?: string
   listOptions?: readonly string[]
+  tooltip?: string
   onChange: (value: string) => void
 }): JSX.Element {
   return (
-    <label className={styles.row}>
+    <label className={styles.row} data-tooltip={props.tooltip}>
       <span className={styles.label}>{props.label}</span>
       <input
         type="text"
@@ -153,10 +174,14 @@ export function SelectRow<T extends string>(props: {
   value: T
   options: ReadonlyArray<{ value: T; label: string }>
   disabled?: boolean
+  tooltip?: string
   onChange: (value: T) => void
 }): JSX.Element {
   return (
-    <label className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}>
+    <label
+      className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}
+      data-tooltip={props.tooltip}
+    >
       <span className={styles.label}>{props.label}</span>
       <select
         className={styles.select}
@@ -180,10 +205,14 @@ export function GroupedSelectRow<T extends string>(props: {
   value: T
   groups: ReadonlyArray<{ label: string; options: ReadonlyArray<{ value: T; label: string }> }>
   disabled?: boolean
+  tooltip?: string
   onChange: (value: T) => void
 }): JSX.Element {
   return (
-    <label className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}>
+    <label
+      className={props.disabled === true ? `${styles.row} ${styles.disabled}` : styles.row}
+      data-tooltip={props.tooltip}
+    >
       <span className={styles.label}>{props.label}</span>
       <select
         className={styles.select}
@@ -217,6 +246,7 @@ export function FileImportButton(props: {
   busy?: boolean
   /** Defaults to the §2.1 image formats. */
   accept?: string
+  tooltip?: string
   onFile: (file: File) => void
 }): JSX.Element {
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -227,6 +257,7 @@ export function FileImportButton(props: {
         type="button"
         className={styles.button}
         disabled={props.disabled === true || busy}
+        data-tooltip={props.tooltip}
         onClick={() => inputRef.current?.click()}
       >
         {busy ? '上传中…' : props.label}

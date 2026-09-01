@@ -4,8 +4,8 @@
  * (fixed number or strength-parameterized base + amount), and easing
  * (named presets or a custom cubic-bezier). Easing changes go through
  * onSetEasing so the editor can sync the whole layer (V1 same-layer rule,
- * see timeline-model.setKeyframeEasing) — the hint under the control says
- * so to the user.
+ * see timeline-model.setKeyframeEasing) — the 缓动 row's tooltip says so
+ * to the user.
  */
 import type { JSX } from 'react'
 import type {
@@ -132,9 +132,9 @@ export function KeyframeInspector(props: KeyframeInspectorProps): JSX.Element | 
             max={4096}
             step={0.01}
             value={paramValue.amount}
+            tooltip="实际值 = base + 强度 × amount（强度默认为 1）"
             onChange={(amount) => props.onSetValue(props.keyframeIndex, { ...paramValue, amount })}
           />
-          <p className={styles.hint}>实际值 = base + 强度 × amount（强度默认为 1）</p>
         </>
       ) : (
         <NumberField
@@ -146,7 +146,13 @@ export function KeyframeInspector(props: KeyframeInspectorProps): JSX.Element | 
           onChange={(next) => props.onSetValue(props.keyframeIndex, next)}
         />
       )}
-      <SelectRow label="缓动" value={easingChoice} options={EASING_OPTIONS} onChange={setEasingChoice} />
+      <SelectRow
+        label="缓动"
+        value={easingChoice}
+        options={EASING_OPTIONS}
+        tooltip="同层轨道共享缓动：此处的修改会同步到同层其他轨道的相交区间。"
+        onChange={setEasingChoice}
+      />
       {easingChoice === 'custom' ? (
         <div className={styles.bezierGrid}>
           {BEZIER_POINT_LABELS.map((name, pointIndex) => (
@@ -162,7 +168,6 @@ export function KeyframeInspector(props: KeyframeInspectorProps): JSX.Element | 
           ))}
         </div>
       ) : null}
-      <p className={styles.hint}>同层轨道共享缓动：此处的修改会同步到同层其他轨道的相交区间。</p>
       <button type="button" className={settingsStyles.button} onClick={() => props.onDelete(props.keyframeIndex)}>
         删除关键帧
       </button>

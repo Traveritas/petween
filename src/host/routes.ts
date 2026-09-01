@@ -39,8 +39,7 @@ import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '.
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { buildConfigView } from './config-view'
-import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset, type PetSlice } from './pets'
+import { DEFAULT_PET_NAME, PetError, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset } from './pets'
 import {
   buildPetPackageExport,
   buildPetPackageZip,
@@ -88,6 +87,7 @@ const API_VERSION = 1
 const API_FEATURES: readonly string[] = [
   'config', // GET/PUT /api/petween/config (§19.1/§19.2)
   'config.revision', // B3: revision in config responses + x-petween-expected-revision
+  'config.preset-authority', // phase 2: presets own the slice; PUT slice fields route to the active preset
   'assets', // POST/DELETE /api/petween/assets (§19.3/§19.4)
   'animations', // GET/PUT/DELETE /api/petween/animations (V1.1)
   'packs', // P2 Motion Pack: POST /packs/import + GET /packs/export
@@ -100,17 +100,26 @@ const API_FEATURES: readonly string[] = [
 
 /** Everything the routes need from config/asset persistence, injected for tests. */
 export interface RoutesDeps {
+  /**
+   * Preset-authority phase 2: resolves the MATERIALIZED config view (the v2
+   * global document + the active preset's slice, host/view-store.ts) in the
+   * legacy v1 shape — GET /config and every consumer below work off the view.
+   */
   loadConfig(): Promise<PetweenConfig>
   /**
-   * PUT path: strictly validate the patch against the current config and
-   * atomically save it, resolving the merged config. Implementations must
-   * serialize concurrent calls (ConfigStore.update) — a bare read-modify-write
-   * loses fields when two writers overlap. `options.expectedRevision` (B3)
-   * opts the caller into conflict detection: a stale expectation rejects
-   * (RevisionMismatchError → 409 REVISION_MISMATCH) before anything is written.
+   * PUT path: the phase-2 funnel (host/view-store.ts). Global fields are
+   * strictly validated and written to the v2 global document; slice fields
+   * (poses / states / global.scale) are strictly validated and written into
+   * the ACTIVE preset; a bare activePetId is a pure pointer write (dangling
+   * 404s; explicit null is a tolerated no-op — the retired "detach"). Resolves the fresh materialized VIEW — PUT
+   * responses carry it because the editor's adoptPublished depends on the
+   * shape. Implementations must serialize concurrent calls.
+   * `options.expectedRevision` (B3) opts the caller into conflict detection:
+   * a stale expectation rejects (RevisionMismatchError → 409
+   * REVISION_MISMATCH) before anything is written.
    */
   updateConfig(patch: unknown, options?: { expectedRevision?: number }): Promise<PetweenConfig>
-  /** B3: the current monotonic config revision (bumped once per update). */
+  /** B3: the one monotonic revision covering every view-affecting write. */
   configRevision(): Promise<number>
   listAssets(): Promise<Record<string, AssetMeta>>
   /**
@@ -450,23 +459,11 @@ async function handleMeta(req: IncomingMessage, res: ServerResponse, deps: Route
 async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method === 'GET') {
     const [config, assets, revision] = await Promise.all([deps.loadConfig(), deps.listAssets(), deps.configRevision()])
-    // Preset-authority phase 1 (host/config-view.ts): the response flows
-    // through the materialized-view seam. The active preset is read with the
-    // cheapest existing pattern — PetsStore.read, one small file (PetsStore
-    // keeps no cache by design; listPets would scan the whole directory) —
-    // and only when a pointer exists, so this polled hot path gains at most
-    // one tiny read. A missing/corrupt preset resolves to a null slice (the
-    // view then falls back to the config document), tolerated exactly like
-    // the PUT bare-switch guard below.
-    let activePresetSlice: PetSlice | null = null
-    if (config.activePetId !== null) {
-      try {
-        activePresetSlice = await deps.readPet(config.activePetId)
-      } catch (error) {
-        if (!(error instanceof PetError && error.code === 'NOT_FOUND')) throw error
-      }
-    }
-    sendJson(res, 200, { config: buildConfigView(config, activePresetSlice), assets, revision })
+    // Preset-authority phase 2: deps.loadConfig() resolves the materialized
+    // view (v2 global document + active preset slice, host/view-store.ts) —
+    // the legacy response shape is unchanged, so external consumers and the
+    // extension surface never notice the flip.
+    sendJson(res, 200, { config, assets, revision })
     return
   }
   if (req.method === 'PUT') {
@@ -491,31 +488,11 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: Rou
       }
       expectedRevision = Number(expectedRaw)
     }
-    // Bare pet-switch guard (2026-08-29): a PUT that flips activePetId
-    // without the character slice used to save the OLD pet's live data, and
-    // the onSaved mirror then wrote that data into the NEWLY active preset —
-    // a silent clobber (incident: a preset lost its poses this way). A
-    // switch through this route now carries apply semantics: the target
-    // preset's slice becomes the patch base, with caller-supplied poses /
-    // states / global.scale still winning field-by-field. Dangling ids stay
-    // tolerated (validation's documented stance): no expansion, the mirror
-    // no-ops with its existing warn.
-    if (typeof raw === 'object' && raw !== null) {
-      const targetId = (raw as Record<string, unknown>).activePetId
-      if (typeof targetId === 'string') {
-        const current = await deps.loadConfig()
-        if (targetId !== current.activePetId) {
-          try {
-            raw = expandPetSwitchPatch(raw as Record<string, unknown>, await deps.readPet(targetId))
-          } catch (error) {
-            if (!(error instanceof PetError && error.code === 'NOT_FOUND')) throw error
-          }
-        }
-      }
-    }
-    // Strict validation against the current config as base, then atomic save —
-    // serialized inside updateConfig so overlapping PUTs cannot lose fields.
-    // Sequential on purpose: the revision read must observe THIS update's bump.
+    // Phase 2 (host/view-store.ts): the updateConfig dep is the view funnel —
+    // slice fields route to the active preset, global fields to the v2
+    // document, and a bare activePetId is a pure pointer write (the
+    // 2026-08-29 bare-switch clobber class is gone by construction; the
+    // expandPetSwitchPatch guard retired with the mirror it protected).
     const config = await deps.updateConfig(raw, expectedRevision === undefined ? undefined : { expectedRevision })
     const revision = await deps.configRevision()
     sendJson(res, 200, { config, revision })
@@ -709,9 +686,10 @@ async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: 
       sendJson(res, 200, { pet, config: updated })
       return
     }
-    // from=blank: create an empty named preset and apply it.
+    // from=blank: create an empty named preset and adopt it (a pure pointer
+    // write — the view then presents the blank preset's own default slice).
     const pet = await deps.createPet(source.name, {})
-    const updated = await deps.updateConfig(applyPatchFor(pet))
+    const updated = await deps.updateConfig({ activePetId: pet.id })
     sendJson(res, 200, { pet, config: updated })
     return
   }
@@ -719,13 +697,29 @@ async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: 
 }
 
 /**
+ * C5-C and the import rollback share this: the pet the active pointer falls
+ * back to — the most recently updated remaining preset, or a freshly
+ * provisioned default pet when none is left (form (i): the pointer is never
+ * null).
+ */
+async function resolvePetFallback(deps: RoutesDeps, excludeId?: string): Promise<string> {
+  const { pets } = await deps.listPets()
+  const remaining = pets.filter((pet) => pet.id !== excludeId)
+  const newest = remaining.sort((a, b) => (a.updatedAt === b.updatedAt ? a.id.localeCompare(b.id) : a.updatedAt < b.updatedAt ? 1 : -1))[0]
+  if (newest !== undefined) return newest.id
+  const created = await deps.createPet(DEFAULT_PET_NAME, {})
+  return created.id
+}
+
+/**
  * §12 Pet Package import: POST /api/petween/pets/import with the zip body.
  * Validation is fully read-only (host/pet-package.ts); writes then follow the
  * fixed order assets → animations (the existing one-lock pack transaction) →
- * pet creation LAST → immediate apply. Any failure along the way rolls the
- * fresh writes back best-effort — only ids this call actually created are
- * removed, with the same fresh-state reference probes as the DELETE routes
- * (B10), so a concurrent consumer that started reusing them keeps them.
+ * pet creation LAST → pointer flip (preset authority: the "apply" is a pure
+ * activePetId write). Any failure along the way rolls the fresh writes back
+ * best-effort — only ids this call actually created are removed, with the
+ * same fresh-state reference probes as the DELETE routes (B10), so a
+ * concurrent consumer that started reusing them keeps them.
  */
 async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected POST')
@@ -745,9 +739,21 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
    * reusing an id keeps it.
    */
   const rollback = async (petId?: string): Promise<void> => {
-    // The pet goes first: until it is deleted its own slice still references
-    // the fresh animations/assets, and the probes below would spare them.
-    if (petId !== undefined) await deps.deletePet(petId).catch(() => undefined)
+    if (petId !== undefined) {
+      // Preset authority (eval §5 risk 6): never delete the pet the pointer
+      // still references — reset the pointer FIRST. The import flips the
+      // pointer as its last write, so an apply failure means it never moved;
+      // this reset is defensive depth, not the expected path.
+      const current = await deps.loadConfig().catch(() => null)
+      if (current?.activePetId === petId) {
+        const fallback = await resolvePetFallback(deps, petId).catch(() => null)
+        if (fallback !== null) await deps.updateConfig({ activePetId: fallback }).catch(() => undefined)
+      }
+      // The pet goes before the animation/asset probes: until it is deleted
+      // its own slice still references the fresh animations/assets, and the
+      // probes below would spare them.
+      await deps.deletePet(petId).catch(() => undefined)
+    }
     for (const id of importedAnimationIds) {
       await deps
         .deleteAnimation(id, async (animationId) => {
@@ -814,7 +820,9 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
   }
   let config: PetweenConfig
   try {
-    config = await deps.updateConfig(applyPatchFor(pet))
+    // Preset authority: the "apply" is a pure pointer flip — the imported
+    // pet's own slice is already in its record, so the view presents it.
+    config = await deps.updateConfig({ activePetId: pet.id })
   } catch (error) {
     await rollback(pet.id)
     throw error
@@ -890,8 +898,10 @@ async function handlePets(
     const id = validatePetId(sub.slice(0, -'/apply'.length))
     if (id === null) throw new HttpError(404, 'NOT_FOUND', 'unknown pet')
     if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected POST')
+    // Preset authority: applying is a pure pointer flip — the view presents
+    // the target preset's own slice (no slice data crosses documents).
     const pet = await deps.readPet(id)
-    const updated = await deps.updateConfig(applyPatchFor(pet))
+    const updated = await deps.updateConfig({ activePetId: pet.id })
     sendJson(res, 200, { config: updated })
     return
   }
@@ -929,14 +939,18 @@ async function handlePets(
     return
   }
   if (req.method === 'DELETE') {
-    // C5 方案 a: the ACTIVE preset cannot be deleted. The old behavior
-    // silently cleared only activePetId while the live config kept the
-    // deleted pet's values — a confusing landing spot (the pet then showed
-    // as "unsaved edits" nobody remembered forking). The caller must switch
-    // to another pet first. Same 409 shape as ASSET_IN_USE/ANIMATION_IN_USE.
+    // C5-C (preset authority, UX 方案 C): deleting the ACTIVE preset is now
+    // allowed — the pointer falls back to the most recently updated
+    // remaining preset, or to a freshly provisioned default pet when none is
+    // left (the 409 ACTIVE_PET ban and the older "clear only activePetId"
+    // landing spot are both gone). The response carries the fresh view so
+    // clients land on the fallback pet in one round trip.
     const config = await deps.loadConfig()
     if (config.activePetId === id) {
-      sendJson(res, 409, { error: 'ACTIVE_PET' })
+      await deps.deletePet(id)
+      const fallback = await resolvePetFallback(deps, id)
+      const updated = await deps.updateConfig({ activePetId: fallback })
+      sendJson(res, 200, { deleted: id, config: updated })
       return
     }
     await deps.deletePet(id)

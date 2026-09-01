@@ -995,3 +995,45 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - 测试 +11(seam 单测 6 + 路由级等价矩阵 5:null/悬空/同步/分叉/损坏逐格断言响应 ≡ 旧行为且 assets/revision 不变)。
 - 验证:**52 文件 / 988 用例**全绿(+1 文件 +11 例,既有 977 零改动),typecheck/lint 基线干净。
 - 阶段 2 伏笔(仅注释):预设转权威、比较方向反转、onSaved 镜像与回退分支随迁移退役。
+
+## 预设权威化 阶段 2:host 写路径重定向(2026-08-31,L 级,翻转主体)
+
+按评估文档 §6 与拍板要点落地,**client 测试零改动通过**(API 形状不变的证明)。54 文件 / **1015 用例**全绿(+27),typecheck/lint 基线干净,build 成功。
+
+### 骨架
+
+- **v1→v2 boot 迁移** `src/host/migrate-v2.ts`:同步/幂等/绝不删旧数据/永不抛;切片严格校验后推入 activePetId 预设(顺带治愈历史镜像滞后)→ 备份 `config.v1.backup.json` → config.json 重写为 v2 全局文档;null/悬空指针建默认宠物「未命名宠物(可改名)」;首跑同样保证默认宠物;v2 指针修复(repaired/provisioned/skipped/failed 四态)。
+- **协调器 `src/host/view-store.ts`(ConfigViewStore)**:所有影响视图的写(全局段/切片/指针)汇入同一 funnel——B3 预检(409 不孤儿出宠物)→ 两段严格预校验(400 零半应用)→ 一次 updateGlobals(每次 funnel 恰好 bump 一次 revision)→ writeSlice → 返回 loadView()。独立 viewLock(非 B10 共享锁,防 onSaved 式死锁)。裸切=纯指针写(悬空 404);指针+切片同包写目标宠物(等价旧 expandPetSwitchPatch 语义,后者已随 shim 退役);mountsStatesPatch 的 states 合并语义照常。
+- **关键认知**:host 侧本无 config 推送通道——client「广播」= config-hub 轮询 GET /config 做 diff + 保存后立即 publish。故「统一出口」= funnel 总让一切写返回同一视图,PUT 响应即视图,轮询 diff 自然捕获;未新建任何 SSE。
+- **onSaved 镜像删除**;`PetsStore.writeSlice` 严格权威切片写(合并语义/显式 null 清空/无变化跳过/切片外字段存活),saveSlice 降为读取/导入修复用。
+- **apply/from:'blank'/包导入指针化**;导入回滚先防御性复位指针再删宠物(风险 #6);**C5-C 落地**:DELETE 生效宠物 → resolvePetFallback(最近 updatedAt 剩余,无剩余建默认)→ 指针写,响应带视图一轮落地,409 禁令解除。
+- **双可读**:loader 吃 v1/v2(repairConfig 缺省补切片),writer 只写 v2 投影;`/meta` features +`config.preset-authority`。
+
+### 实施者的有意判断(主代理已复核认可)
+
+1. 迁移切片校验**形状级严格、不注入 animationLookup**——避免「引用已删动画的 v1 config 永远卡死 v1」;悬空 id 运行时本有 dangling fallback,无害微差。
+2. PUT 显式 `activePetId: null` = **容忍 no-op**(400 会破坏旧 client 全文档 roundtrip——createDefaultPetweenConfig 自带 null,直接违反「旧 client 响亮工作」);validation 注释与用例锁定。
+3. 「未知字段照旧拒绝」与现状不符(现状是静默剔除)——保持剔除,最小变更。
+4. `meta.configVersion` 仍报 1(它是视图 schema 版本,形状未变;持久化 v2 与否留阶段 4 拍板)。
+
+### 遗留与伏笔
+
+- 阶段 3(client 语义):editor-store 草稿语义/C5 落点 UI;DELETE 响应已带视图、feature 位可探测,对接面已备好。
+- 阶段 4(清理):v1 读取路径/saveSlice/shim 切片路由均按「可退役」标注;config.v1.backup.json 与迁移代码至少保留一个版本。
+- 真机走查待执行:裸切往返回归(2026-08-29 事故场景)、C5-C 删除落地、v1 真实数据迁移;e2e/ 旧脚本涉及 DELETE 409 与裸切展开的预期需更新后再跑。
+
+## UX 打磨批 + 预设权威化阶段 3(2026-08-31)
+
+### UX 打磨(用户真机反馈驱动)
+
+- **按钮瘦身**:创建按钮回短动词(「复制」「新建空白」),语义搬进 tooltip;管理列表生效行行内说明移除改禁用钮 tooltip。依据同类工具惯例(VS Code/Chrome profiles、游戏 loadout:短动词,切换隐式)。
+- **统一 tooltip 系统**:CSS-only `data-tooltip`(hover/focus-visible/focus-within 三触发,键盘可达,零 JS);controls.tsx 七个共享控件加可选 `tooltip` 通道;**15 条教学性小灰字转为控件 tooltip**(逐条清单见实现报告),常驻保留仅限状态/警告/后果/空态引导/画布图例(逐条理由同上)。+1 用例,全仓 1016 绿。
+
+### 阶段 3:client 语义收敛(+12 用例)
+
+- **特性探测**:`getMeta` 以真实调用方身份回归(G2 删除时注明「有调用方再加」);`PRESET_AUTHORITY_FEATURE` 常量单一事实源;每次 load() 探测一次、失败/旧 host 一律 feature-off(探测永不拖垮加载);overlay 不探测。
+- **C5-C UI**:生效行删除钮 feature-on 解禁,确认文案三分支(有剩余「删除后将切换到『Y』」/无剩余「将为你新建未命名宠物」/feature-off 维持禁用);利用 DELETE 响应携带的视图一轮落地(adoptPetConfig,无额外 GET);工具栏恒禁用冗余删除按钮下线。
+- **「未命名配置」路径 feature-on 退休**(选择器首项/保存按钮无归属分支/署名 hint 门控);feature-off 路径原样保留,既有用例固定在 feature-off。
+- **草稿语义审计**:以「draft 恒属于当前活跃宠物」逐条复核 dirty 门/adoptPublished/另存为/导入 revert——并发机制零改动即语义成立;仅修失真注释。
+- 验证:**54 文件 / 1028 用例**全绿,typecheck/lint 基线,build 成功。
+- 范围外登记:跨界面竞态(他端删除/切换生效宠物时本编辑器 dirty 保存会落进「别的」预设,生产恒有 hub 故窗口极窄;真修复=revision 守卫保存,超出最小改动)→ backlog。

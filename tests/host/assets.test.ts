@@ -176,7 +176,7 @@ describe('shared WriteLock (B10 cross-store serialization)', () => {
       await probeGate
       return true // IN_USE; the probe's verdict is irrelevant to this test
     })
-    const update = config.update({ poses: { idle: { assetId: meta.id } } }).then(() => {
+    const update = config.updateGlobals({ enabled: false }).then(() => {
       updateFinished = true
     })
 

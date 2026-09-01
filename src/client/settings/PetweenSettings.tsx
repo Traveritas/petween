@@ -147,16 +147,21 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
           {revertButton(true)}
         </span>
       )
-    case 'dirty':
+    case 'dirty': {
+      // §5.2-2: the dirty save button names its target — the active pet (the
+      // save mirrors into its preset) or the unnamed config (config only).
+      const activePet = snapshot.pets.find((pet) => pet.id === snapshot.config?.activePetId)
+      const saveLabel = activePet !== undefined ? `保存到「${activePet.name}」` : '保存修改（未命名配置）'
       return (
         <span className={`${styles.saveState} ${styles.saveBusy}`}>
           <span>有未保存修改</span>
           <button type="button" className={styles.button} onClick={() => void store.saveConfig()}>
-            保存修改
+            {saveLabel}
           </button>
           {revertButton(false)}
         </span>
       )
+    }
     case 'saved':
       return (
         <span className={`${styles.saveState} ${styles.saveOk}`}>
@@ -196,6 +201,12 @@ function NoticeBar(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX
       role={notice.kind === 'error' ? 'alert' : 'status'}
     >
       <span>{notice.text}</span>
+      {/* §3.3: the dirty gate's warn offers its lossless exit inline. */}
+      {notice.action === 'save-draft-as-new-pet' ? (
+        <button type="button" className={styles.button} onClick={() => void store.promptSaveDraftAsNewPet()}>
+          另存草稿为新宠物
+        </button>
+      ) : null}
       <button type="button" className={styles.noticeDismiss} aria-label="关闭提示" onClick={() => store.clearNotice()}>
         ✕
       </button>
@@ -218,12 +229,6 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
     return value === undefined || value === '' ? null : value
   }
 
-  const saveDraftAs = async (): Promise<void> => {
-    const base = active === undefined ? '新宠物' : `${active.name} 变体`
-    const name = await askName('把当前配置（含未保存修改）另存为新宠物', base)
-    if (name !== null) await store.saveDraftAsNewPet(name)
-  }
-
   const createCopy = async (): Promise<void> => {
     const name = await askName('新建当前宠物的副本', active === undefined ? '新宠物' : `${active.name} 副本`)
     if (name !== null) await store.createPetCurrent(name)
@@ -242,7 +247,9 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
 
   const deleteActive = async (): Promise<void> => {
     if (active === undefined) return
-    if (!(await confirmDialog({ message: `确认删除宠物「${active.name}」？此操作不可恢复。` }))) return
+    // §5.2-4 consequence triple (same copy as the manage list's delete).
+    const message = `确认删除宠物「${active.name}」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
+    if (!(await confirmDialog({ message }))) return
     await store.deletePet(active.id)
   }
 
@@ -259,7 +266,7 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
               if (event.target.value !== '') void store.applyPet(event.target.value)
             }}
           >
-            <option value="">未保存的当前配置</option>
+            <option value="">未命名配置（不属于任何宠物）</option>
             {snapshot.pets.map((pet) => (
               <option key={pet.id} value={pet.id}>
                 {pet.name}
@@ -268,14 +275,17 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           </select>
         </label>
         <div className={styles.petActions}>
-          <button type="button" className={styles.button} onClick={() => void saveDraftAs()}>
+          {/* The prompt + fork live in the store: the dirty gate's notice
+              action (§3.3) offers the same 另存 shortcut. */}
+          <button type="button" className={styles.button} onClick={() => void store.promptSaveDraftAsNewPet()}>
             另存草稿为新宠物
           </button>
+          {/* §5.2-1: button names carry the switch semantics. */}
           <button type="button" className={styles.button} onClick={() => void createCopy()}>
-            新建副本
+            复制当前宠物并切换
           </button>
           <button type="button" className={styles.button} onClick={() => void createBlank()}>
-            新建空白
+            新建空白宠物并切换
           </button>
           <button
             type="button"
@@ -315,10 +325,87 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
         </div>
       </div>
       <p className={styles.hint}>
-        点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。生效中的宠物不能删除，请先切换到其他宠物。
+        保存把当前配置写回所选宠物预设（未命名配置不属于任何宠物，只写入配置本身）；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。生效中的宠物不能删除，请先切换到其他宠物。
       </p>
+      <ManagePetsSection snapshot={snapshot} store={store} />
       <AttributionSection active={active} store={store} />
     </section>
+  )
+}
+
+/**
+ * §2.4 管理宠物: every stored preset as a row — name, active badge, rename,
+ * export and delete — under the same disclosure interaction as the 来源与署名
+ * block. The active row's delete stays disabled (C5: the host refuses the
+ * ACTIVE_PET delete with 409) and says why inline; deleting a non-active
+ * preset confirms through the C2 modal with the consequence triple (its
+ * credit goes with it; images and animations stay in the library). Rows never
+ * touch the draft — the store's non-active rename/delete/export paths skip
+ * the dirty gate.
+ */
+function ManagePetsSection(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
+  const { snapshot, store } = props
+  const [open, setOpen] = useState(false)
+  const activePetId = snapshot.config?.activePetId ?? null
+
+  const renamePet = async (pet: PetPreset): Promise<void> => {
+    const name = (await promptDialog({ title: '重命名宠物', initial: pet.name }))?.trim()
+    if (name !== undefined && name !== '') await store.renamePet(pet.id, name)
+  }
+
+  const deletePet = async (pet: PetPreset): Promise<void> => {
+    // §5.2-4: a destructive confirm names the object and the consequence triple.
+    const message = `确认删除宠物「${pet.name}」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。`
+    if (!(await confirmDialog({ message }))) return
+    await store.deletePet(pet.id)
+  }
+
+  return (
+    <div className={styles.managePets}>
+      <div className={styles.managePetsHeader}>
+        <span className={styles.groupTitle}>管理宠物</span>
+        <button
+          type="button"
+          className={styles.button}
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? '收起' : '展开'}
+        </button>
+      </div>
+      {open ? (
+        snapshot.pets.length === 0 ? (
+          <p className={styles.hint}>还没有已保存的宠物——用上方按钮另存或新建。</p>
+        ) : (
+          <ul className={styles.petRows}>
+            {snapshot.pets.map((pet) => {
+              const isActive = pet.id === activePetId
+              return (
+                <li key={pet.id} className={styles.petRow}>
+                  <span className={styles.petRowName}>{pet.name}</span>
+                  {isActive ? <span className={styles.badge}>生效中</span> : null}
+                  <button type="button" className={styles.button} onClick={() => void renamePet(pet)}>
+                    重命名
+                  </button>
+                  <button type="button" className={styles.button} onClick={() => void store.exportPetPackage(pet.id)}>
+                    导出
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={isActive}
+                    onClick={() => void deletePet(pet)}
+                  >
+                    删除
+                  </button>
+                  {isActive ? <span className={styles.hint}>生效中——切换到其他宠物后可删除</span> : null}
+                </li>
+              )
+            })}
+          </ul>
+        )
+      ) : null}
+    </div>
   )
 }
 
@@ -443,7 +530,7 @@ function AttributionSection(props: { active: PetPreset | undefined; store: Edito
           </div>
           <p className={styles.hint}>
             {active === undefined
-              ? '当前是未保存配置，选中一只宠物后才能编辑署名。'
+              ? '当前是未命名配置，选中一只宠物后才能编辑署名。'
               : '署名保存在宠物预设上，导出宠物包时会一并带上，方便分享时注明出处。'}
           </p>
           <button

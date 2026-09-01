@@ -2,9 +2,9 @@
 /**
  * PetweenCard tests: the settings.section entry card — status summary
  * (imported poses · enabled state), the enable toggle and scale slider saving
- * through the editor store's explicit-save discipline, the save prompt on
- * dialog close (unmount with a dirty draft), the no-image hint, and the link
- * to the standalone full-page editor.
+ * through the editor store's explicit-save discipline, the resident discard
+ * hint while dirty (§3.4: the unmount alert is gone), the no-image hint, and
+ * the link to the standalone full-page editor.
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -119,6 +119,18 @@ const moveSlider = (input: HTMLInputElement, value: string): void => {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+/**
+ * The enabled dirty save button. §5.2-2: its label carries the target — the
+ * card never has an active pet, so it is always 保存修改（未命名配置）.
+ */
+const saveButton = (): HTMLButtonElement => {
+  const button = [...container.querySelectorAll('button')].find(
+    (candidate) => candidate.textContent?.startsWith('保存修改') === true && !candidate.disabled,
+  )
+  if (button === undefined) throw new Error('save button missing')
+  return button as HTMLButtonElement
+}
+
 describe('PetweenCard', () => {
   it('renders the summary, quick controls and the editor link', async () => {
     const { api } = makeApi(true)
@@ -150,13 +162,17 @@ describe('PetweenCard', () => {
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
     expect(mocks.patchConfig).not.toHaveBeenCalled()
-    const save = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存修改' && !button.disabled)
-    if (save === undefined) throw new Error('save button missing')
-    await act(async () => save.click())
+    // §5.2-2: no active pet in the card — the dirty save button says so
+    expect(saveButton().textContent).toBe('保存修改（未命名配置）')
+    // §3.4: the discard consequence is resident while dirty…
+    expect(container.textContent).toContain('关闭卡片将丢弃未保存修改')
+    await act(async () => saveButton().click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).enabled).toBe(false)
     expect(container.textContent).toContain('已导入 1/6 张图 · 已停用')
     expect(container.textContent).toContain('已保存')
+    // …and gone again once the draft is saved
+    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存修改')
   })
 
   it('the scale slider spans 0.3..4, aligned with the full editor and host validation', async () => {
@@ -174,28 +190,30 @@ describe('PetweenCard', () => {
     const range = container.querySelector<HTMLInputElement>('input[type="range"]')
     if (range === null) throw new Error('scale slider missing')
     act(() => moveSlider(range, '1.5'))
-    const save = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存修改' && !button.disabled)
-    if (save === undefined) throw new Error('save button missing')
-    await act(async () => save.click())
+    await act(async () => saveButton().click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).global?.scale).toBe(1.5)
   })
 
-  it('closing with unsaved edits warns (alert) and discards — never fires a save', async () => {
+  it('closing with unsaved edits discards WITHOUT an alert — the resident hint replaces it (§3.4)', async () => {
     const { api, mocks } = makeApi(true)
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
     await render(api)
+    // clean boot: no hint, nothing to discard
+    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存修改')
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
+    // dirty: the consequence is visible BEFORE the decision to close
+    expect(container.textContent).toContain('关闭卡片将丢弃未保存修改')
     await act(async () => {
       root.unmount()
     })
     mounted = false
-    expect(alertSpy).toHaveBeenCalledTimes(1)
-    expect(alertSpy.mock.calls[0][0]).toContain('未保存的修改')
+    // §3.4 (方案 i): the post-hoc alert is gone (dead in the IAB).
+    expect(alertSpy).not.toHaveBeenCalled()
     // Closing never saves: a post-dispose PUT could fail with nobody left to
-    // see it — the discard notice is the honest contract.
+    // see it — the discard is the honest contract.
     expect(mocks.patchConfig).not.toHaveBeenCalled()
     alertSpy.mockRestore()
   })

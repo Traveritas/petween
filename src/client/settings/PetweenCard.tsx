@@ -33,14 +33,11 @@ export function PetweenCard(props: PetweenCardProps): JSX.Element {
     void store.load()
     return () => {
       // DSH tears its settings dialog down without a vetoable close event, so
-      // this cleanup is the card's only hook — the teardown cannot be stopped.
-      // Closing NEVER saves: a save fired here would run after dispose() with
-      // nobody left to see it fail (silent loss). Instead, tell the user the
-      // draft is gone and how to keep it next time (the full-page editor
-      // guards tab close via beforeunload; this guards the dialog close).
-      if (store.getSnapshot().saveState === 'dirty') {
-        window.alert('Petween 卡片有未保存的修改，已随卡片关闭丢弃。如需保留，请在关闭前点击保存。')
-      }
+      // closing NEVER saves: a save fired here would run after dispose() with
+      // nobody left to see it fail (silent loss). §3.4 (方案 i): the post-hoc
+      // window.alert is gone — dead in the IAB — and the discard consequence
+      // is shown inline below the SaveIndicator for the whole dirty period
+      // instead (the full-page editor guards tab close via beforeunload).
       store.dispose()
     }
   }, [store])
@@ -102,6 +99,9 @@ export function PetweenCard(props: PetweenCardProps): JSX.Element {
         打开完整编辑器 →
       </a>
       <SaveIndicator snapshot={snapshot} store={store} />
+      {/* §3.4 (方案 i): the dialog close cannot be vetoed, so while a draft is
+          dirty the discard consequence stays visible BEFORE the decision. */}
+      {snapshot.saveState === 'dirty' ? <p className={styles.hint}>关闭卡片将丢弃未保存修改</p> : null}
       {/* C2 modal host: the SaveIndicator's revert confirm renders here (this
           card is its own browsing context — it cannot use the editor page's
           host; see modals.tsx mount contract). */}

@@ -26,6 +26,9 @@ export function adoptConfigFields(config: PetweenConfig, draft: PetweenConfig): 
   config.overlay = snapshot.overlay
   config.advanced = snapshot.advanced
   config.interactions = snapshot.interactions
+  // Pet identity is session state too (the extension snapshot reports it):
+  // a switch/import/apply publish must move it or the copy goes stale.
+  config.activePetId = snapshot.activePetId
 }
 
 /**

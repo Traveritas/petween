@@ -210,6 +210,26 @@ export interface PetAttribution {
   license?: string
 }
 
+/**
+ * §12 宠物包: one companion-plugin config blob. petween validates the envelope
+ * (shape and sizes) only — the content is NEVER interpreted here ("capability,
+ * not policy"); the owning plugin validates, rewrites and applies it through
+ * its own API after user confirmation.
+ */
+export interface PetPluginConfigEntry {
+  config: unknown
+  /**
+   * Host-injected from the import's collision plan (requestedId → finalId,
+   * identical entries included). The blob itself is never rewritten by
+   * petween — using the map to fix animation ids inside `config` is the
+   * owning plugin's job at apply time.
+   */
+  animationIdRemap?: Record<string, string>
+}
+
+/** §12 宠物包: companion-plugin blobs keyed by the plugin's cordis name. */
+export type PetPluginConfigs = Record<string, PetPluginConfigEntry>
+
 /** A stored pet preset: the character slice plus identity and timestamps. */
 export interface PetPreset extends PetSlice {
   id: string
@@ -218,6 +238,11 @@ export interface PetPreset extends PetSlice {
   updatedAt: string
   /** §12 宠物包: absent = no credit recorded (never required by validation). */
   attribution?: PetAttribution
+  /**
+   * §12 宠物包: companion-plugin blobs carried by pet packages. Lives OUTSIDE
+   * the slice, so the saveSlice config mirror never touches it.
+   */
+  pluginConfigs?: PetPluginConfigs
 }
 
 export type MotionTargetReason =

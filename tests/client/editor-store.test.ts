@@ -1062,6 +1062,15 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(mocks.getPets).toHaveBeenCalledTimes(1) // no refresh after a failure
   })
 
+  it('promptSaveDraftAsNewPet settles as cancelled with no ModalHost mounted (dialog-queue contract, §3.3)', async () => {
+    const { api, mocks } = makeApi()
+    await loadStore(api)
+    // No ModalHost exists in this environment: the C2 prompt resolves null,
+    // so the fork never fires — a draft flow never proceeds unanswered.
+    expect(await store.promptSaveDraftAsNewPet()).toBe(false)
+    expect(mocks.createPetFromDraft).not.toHaveBeenCalled()
+  })
+
   it('apply replaces the draft with the host config and publishes it through the hub', async () => {
     const targetPet = preset('pet_target', '目标', 2.25)
     const targetConfig = createDefaultPetweenConfig()
@@ -1133,7 +1142,9 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(await store.applyPet(target.id)).toBe(false)
     expect(mocks.patchConfig).not.toHaveBeenCalled()
     expect(mocks.applyPet).not.toHaveBeenCalled()
-    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+    // §3.3: the blocked warn names the exits and offers the lossless one.
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'warn', action: 'save-draft-as-new-pet' })
+    expect(store.getSnapshot().notice?.text).toContain('另存草稿为新宠物')
   })
 
   it('rename/delete of a NON-active preset works while the draft is dirty (UX relaxation)', async () => {
@@ -1162,7 +1173,8 @@ describe('EditorStore — pet presets (V1.1)', () => {
     // the ACTIVE pet still refuses while dirty
     expect(await store.renamePet(active.id, '改名当前')).toBe(false)
     expect(mocks.renamePet).toHaveBeenCalledTimes(1)
-    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+    expect(store.getSnapshot().notice?.text).toContain('另存草稿为新宠物')
+    expect(store.getSnapshot().notice?.action).toBe('save-draft-as-new-pet')
   })
 
   it('a failed save blocks pet actions with an explicit notice instead of silence', async () => {
@@ -1188,7 +1200,7 @@ describe('EditorStore — pet presets (V1.1)', () => {
     // so the clean-draft gate fires with its own notice)
     expect(await store.renamePet(active.id, '改名当前')).toBe(false)
     expect(mocks.renamePet).not.toHaveBeenCalled()
-    expect(store.getSnapshot().notice?.text).toContain('请先点击保存')
+    expect(store.getSnapshot().notice?.text).toContain('另存草稿为新宠物')
     // a NON-active target never touches the draft, so a failed save does not block it
     expect(await store.renamePet(other.id, '改名备用')).toBe(true)
     expect(mocks.renamePet).toHaveBeenCalledWith(other.id, '改名备用')
@@ -1295,7 +1307,7 @@ describe('EditorStore — Motion Pack import/export (P2)', () => {
     expect(snap.pendingMounts).toBeNull()
     expect(snap.config?.states.idle.ambient.customAnimationId).toBe('manga:sway')
     expect(snap.saveState).toBe('dirty') // §11: applied into the DRAFT, saved explicitly
-    expect(snap.notice?.text).toContain('保存修改')
+    expect(snap.notice?.text).toContain('保存后生效')
   })
 
   it('dismissPendingMounts drops the banner without touching the draft', async () => {
@@ -1379,6 +1391,42 @@ describe('EditorStore — pet package import/export (§12)', () => {
       expect(downloads).toEqual(['pet-蓝猫.zip'])
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
       expect(store.getSnapshot().notice).toMatchObject({ kind: 'info', text: '已导出宠物包「蓝猫」。' })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('exportPetPackage(id) exports a NON-active stored preset — the manage list per-row export (§2.4)', async () => {
+    const active = preset('pet_a', '蓝猫')
+    const other = preset('pet_b', '白猫')
+    const { api, mocks } = makeApi({
+      getPets: vi.fn(async () => ({
+        pets: [structuredClone(active), structuredClone(other)],
+        activePetId: active.id,
+        warnings: [],
+      })),
+      exportPetPackage: vi.fn(async () => new ArrayBuffer(8)),
+    })
+    await loadStore(api)
+    // Node test env: stub the download probes like the active-pet case above.
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
+    const downloads: string[] = []
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        href: '',
+        download: '',
+        click(this: { download: string }): void {
+          downloads.push(this.download)
+        },
+      }),
+    })
+    try {
+      expect(await store.exportPetPackage(other.id)).toBe(true)
+      expect(mocks.exportPetPackage).toHaveBeenCalledWith('pet_b')
+      expect(downloads).toEqual(['pet-白猫.zip'])
+      expect(store.getSnapshot().notice).toMatchObject({ kind: 'info', text: '已导出宠物包「白猫」。' })
+      // exporting a non-active preset never re-points the active identity
+      expect(store.getSnapshot().config?.activePetId).toBe('pet_a')
     } finally {
       vi.unstubAllGlobals()
     }

@@ -39,11 +39,12 @@ import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '.
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPreset } from './pets'
+import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset } from './pets'
 import {
   buildPetPackageExport,
   buildPetPackageZip,
   finalIdMapOf,
+  injectAnimationIdRemap,
   PetPackageError,
   PET_PACKAGE_BODY_LIMIT,
   rewritePetSliceAnimations,
@@ -155,10 +156,12 @@ export interface RoutesDeps {
   /** Pet presets (V1.1): live directory scan plus identity/slice mutations. */
   listPets(): Promise<{ pets: PetPreset[]; warnings: string[] }>
   /**
-   * Create a preset; the optional attribution (pet-package import, §12) is
-   * written into the SAME atomic record as the rest of the pet.
+   * Create a preset; the optional attribution and pluginConfigs (pet-package
+   * import, §12) are written into the SAME atomic record as the rest of the
+   * pet. pluginConfigs blobs are carried verbatim (remap already injected by
+   * the caller) — never interpreted.
    */
-  createPet(name: unknown, slice: unknown, attribution?: PetAttribution): Promise<PetPreset>
+  createPet(name: unknown, slice: unknown, attribution?: PetAttribution, pluginConfigs?: PetPluginConfigs): Promise<PetPreset>
   readPet(id: string): Promise<PetPreset>
   /**
    * PUT /pets/&lt;id&gt; meta updates: rename and/or attribution with partial
@@ -774,14 +777,20 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
     throw error
   }
   // Creation is the last write: the slice's animation references point at
-  // the FINAL ids, attribution rides in the same atomic record. Creation and
-  // the immediate apply sit inside the rollback scope too (defense in depth:
-  // validation already guarantees the apply passes strict re-validation, but
-  // a dead half-imported pet must never survive a disk/config failure).
-  const slice = rewritePetSliceAnimations(plan.pet, finalIdMapOf(entries), mounts)
+  // the FINAL ids, attribution and the companion blobs ride in the same
+  // atomic record — each blob's animationIdRemap is injected from THIS
+  // import's collision plan (the blob content itself is never rewritten).
+  // Creation and the immediate apply sit inside the rollback scope too
+  // (defense in depth: validation already guarantees the apply passes strict
+  // re-validation, but a dead half-imported pet must never survive a
+  // disk/config failure).
+  const finalIds = finalIdMapOf(entries)
+  const slice = rewritePetSliceAnimations(plan.pet, finalIds, mounts)
+  const pluginConfigs =
+    plan.pluginConfigs === undefined ? undefined : injectAnimationIdRemap(plan.pluginConfigs, finalIds)
   let pet: PetPreset
   try {
-    pet = await deps.createPet(plan.name, slice, plan.attribution)
+    pet = await deps.createPet(plan.name, slice, plan.attribution, pluginConfigs)
   } catch (error) {
     await rollback()
     throw error
@@ -796,7 +805,16 @@ async function handlePetPackageImport(req: IncomingMessage, res: ServerResponse,
   sendJson(res, 200, {
     pet,
     config,
-    report: { assetsAdded, assetsReused, entries, mounts, warnings: plan.warnings },
+    report: {
+      assetsAdded,
+      assetsReused,
+      entries,
+      mounts,
+      warnings: plan.warnings,
+      // §12: namespaces of the blobs this import carried (absent when none —
+      // old packages keep the byte-identical report shape).
+      ...(pet.pluginConfigs === undefined ? {} : { pluginConfigs: Object.keys(pet.pluginConfigs).sort() }),
+    },
   })
 }
 

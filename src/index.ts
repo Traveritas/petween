@@ -82,7 +82,7 @@ export function apply(ctx: Context) {
     // segment (freshest library, atomic persist — host/packs.ts policy).
     importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
-    createPet: (name, slice, attribution) => petsStore.create(name, slice, attribution),
+    createPet: (name, slice, attribution, pluginConfigs) => petsStore.create(name, slice, attribution, pluginConfigs),
     readPet: (id) => petsStore.read(id),
     updatePetMeta: (id, changes) => petsStore.updateMeta(id, changes),
     deletePet: (id) => petsStore.delete(id),

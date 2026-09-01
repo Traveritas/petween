@@ -107,6 +107,8 @@ export interface ExtensionSurfaceHost {
   /** §27 position domain — the session owns persistence; the driver borrows. */
   positionPx(): { x: number; y: number }
   currentScale(): number
+  /** The session config's active pet preset id (null = unsaved edits). */
+  activePetId(): string | null
   /** Clamp (visible-size basis) + store + apply to the stage. */
   applyExternalPosition(x: number, y: number): boolean
   cancelPendingPositionSave(): void
@@ -286,6 +288,7 @@ export class ExtensionSurface {
       reducedMotion: this.host.stage.reducedMotion,
       poseKey: target?.poseKey ?? null,
       bodyRect,
+      activePetId: this.host.activePetId(),
     }
   }
 

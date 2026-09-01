@@ -52,6 +52,16 @@ export interface StageSnapshot {
    * margins by a typical 30-60% on real assets. Null before the first swap.
    */
   bodyRect: { x: number; y: number; width: number; height: number } | null
+  /**
+   * The session config's active pet preset id (`pet_*`; null when the live
+   * poses/states/scale are unsaved edits belonging to no preset). Additive
+   * (2026-09-01, pet-package pluginConfigs P2) — version stays 1. This is how
+   * a companion learns WHICH pet is in effect so it can pull its own config
+   * blob off that pet's record; the value rides the same hub-driven snapshot
+   * rebuild as every config-backed field above, so a pet switch / package
+   * import / preset apply pushes it like any other config change.
+   */
+  activePetId: string | null
 }
 
 export interface PositionDriver {

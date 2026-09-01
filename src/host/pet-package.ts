@@ -23,8 +23,8 @@ import { POSE_KEYS } from '../core/types'
 import { ASSET_MIME_TYPES, isAssetMimeType, MAX_ASSET_DIMENSION, type AssetMimeType } from '../core/assets-contract'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import { detectImage } from './assets'
-import type { PetAttribution, PetPreset } from './pets'
-import { validatePetAttribution } from './pets'
+import type { PetAttribution, PetPluginConfigs, PetPreset } from './pets'
+import { validatePetAttribution, validatePluginConfigs } from './pets'
 import {
   MIXED_NAMESPACE,
   buildMotionPackExport,
@@ -83,6 +83,8 @@ export interface PetPackageManifest {
   /** Present iff the pet's states reference custom animations (§12). */
   motionPack?: MotionPackManifest
   attribution?: PetAttribution
+  /** Companion-plugin blobs carried verbatim (§12; still version 1 — additive). */
+  pluginConfigs?: PetPluginConfigs
 }
 
 /** Read-only import plan: everything validated, nothing persisted yet. */
@@ -91,6 +93,7 @@ export interface PetPackageImportPlan {
   pet: PetSlice
   attribution?: PetAttribution
   motionPack?: ValidatedMotionPack
+  pluginConfigs?: PetPluginConfigs
   /** Referenced assets only, in manifest order; hashes already verified. */
   assets: Array<{ id: string; mimeType: string; data: Buffer }>
   warnings: string[]
@@ -333,6 +336,16 @@ export async function validatePetPackage(body: Buffer): Promise<PetPackageImport
     else if (Object.keys(attributionResult.attribution).length > 0) attribution = attributionResult.attribution
   }
 
+  // §12 companion blobs: the envelope is validated (id charset, count and
+  // byte caps, a present config, the remap shape); the config CONTENT is
+  // never inspected — the schema belongs to the companion plugin.
+  let pluginConfigs: PetPluginConfigs | undefined
+  if (raw.pluginConfigs !== undefined) {
+    const pluginConfigsResult = validatePluginConfigs(raw.pluginConfigs)
+    if (!pluginConfigsResult.ok) errors.push(...pluginConfigsResult.errors)
+    else if (Object.keys(pluginConfigsResult.pluginConfigs).length > 0) pluginConfigs = pluginConfigsResult.pluginConfigs
+  }
+
   if (errors.length > 0 || pet === null) {
     throw new PetPackageError('PET_PACKAGE_INVALID', 'invalid Pet Package manifest', errors.length > 0 ? errors : ['"pet" must be an object with the character slice'])
   }
@@ -443,7 +456,15 @@ export async function validatePetPackage(body: Buffer): Promise<PetPackageImport
     throw new PetPackageError('PET_PACKAGE_INVALID', 'state animation mounts must match the animation kind', kindErrors)
   }
 
-  return { name, pet, ...(attribution === undefined ? {} : { attribution }), ...(motionPack === undefined ? {} : { motionPack }), assets, warnings }
+  return {
+    name,
+    pet,
+    ...(attribution === undefined ? {} : { attribution }),
+    ...(motionPack === undefined ? {} : { motionPack }),
+    ...(pluginConfigs === undefined ? {} : { pluginConfigs }),
+    assets,
+    warnings,
+  }
 }
 
 /** Zip entry name for an asset id on export (`assets/<id>.<ext>`). */
@@ -530,7 +551,27 @@ export function buildPetPackageExport(
     assets,
     ...(motionPack === undefined ? {} : { motionPack }),
     ...(pet.attribution === undefined ? {} : { attribution: pet.attribution }),
+    // §12: companion blobs ride verbatim — the record is their home, and the
+    // stored remap (if any) is part of the blob envelope, never reinterpreted.
+    ...(pet.pluginConfigs === undefined ? {} : { pluginConfigs: pet.pluginConfigs }),
   }
+}
+
+/**
+ * Inject THIS import's collision plan (requestedId → finalId, identical
+ * entries included — the full table, so a blob referencing any old id can be
+ * fixed) into every blob entry's `animationIdRemap`, REPLACING any manifest-
+ * carried value: the fresh table is this installation's truth. The blob
+ * `config` itself is never touched — rewriting animation ids inside it is
+ * the companion plugin's job at apply time (§12). A package without
+ * animation entries leaves the entries (and any stale remap) as-is.
+ */
+export function injectAnimationIdRemap(pluginConfigs: PetPluginConfigs, finalIds: ReadonlyMap<string, string>): PetPluginConfigs {
+  if (finalIds.size === 0) return pluginConfigs
+  const remap = Object.fromEntries(finalIds)
+  return Object.fromEntries(
+    Object.entries(pluginConfigs).map(([id, entry]) => [id, { ...entry, animationIdRemap: { ...remap } }]),
+  )
 }
 
 /**

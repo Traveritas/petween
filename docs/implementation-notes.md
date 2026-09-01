@@ -940,3 +940,48 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 ### 验证
 
 主插件 **51 文件 / 951 用例**全绿(净 +1),typecheck 干净,lint 10 警告基线,build 成功;physics 产物一并重建(含 G3/E2/卡片修复)。真机复验项:Live Preview ambient 参数热更新、模态框各流程、生效宠物删除禁用。
+
+## UX 先行项 + 宠物包 pluginConfigs P1(2026-08-31 第四批,双智能体并行)
+
+两批均已拍板(UX 设计文档 §8 十项、评估二四项),按「规格先行 + 并行实现」落地。
+
+### UX 先行项(全部零 host 改动,+23 用例)
+
+- **「管理宠物」折叠列表**(M):宠物卡选择器下方折叠区(交互复刻「来源与署名」),逐行 名字/生效标记/重命名/导出/删除;生效行删除禁用+行内说明,非生效删除走 C2 模态(三元组文案「署名一并删除;图片与动画保留在库中」);`exportPetPackage(id?)` 扩为可导出任意预设(host 路由本就按 id 可读)。
+- **dirty 阻止给出路**(S):`EditorNotice` 增声明式 `action` 字段(snapshot 保持纯数据),dirty 门 warn 携带「另存草稿为新宠物」快捷按钮;`promptSaveDraftAsNewPet()` 下沉 store,卡片按钮与门出口共用。
+- **卡片卸载 alert 移除**(S):PetweenCard 卸载清理的 window.alert 删除,dirty 期间常驻「关闭卡片将丢弃未保存修改」——至此 src 下原生弹窗(alert/confirm/prompt)真正清零。
+- **文案批**(S):「未保存的当前配置」→「未命名配置(不属于任何宠物)」全局同步;创建按钮→「复制当前宠物并切换」「新建空白宠物并切换」;保存按钮带目标名(「保存到『X』」/「保存修改(未命名配置)」);createPetBlank 旧注释改写实。
+- 新观察登记 backlog:工具栏原「删除」按钮因 C5 恒禁用不可达,建议下线。
+
+### 宠物包 pluginConfigs P1(主仓承载,+15 用例)
+
+- **规格先行**:motion-format.md §12 新增附属插件配置小节(形状/校验/remap 覆盖注入语义/version 1 纯增量/切片外存储/分享卫生约定条款)。
+- **host**:`core/types.ts` 增 `PetPluginConfigEntry`/`PetPluginConfigs` 类型(纯类型);`pets.ts` 持 `validatePluginConfigs`(键 charset ≤64/≤8 条/config ≤16KiB/归一化后整体 ≤64KiB)+ `normalizePluginConfigs`(读时全有或全无容忍,对齐 attribution 范式)+ `toPreset` 显式携带(堵住白名单静默丢弃坑)+ `create` 第 4 参写同一原子记录;`pet-package.ts` 校验接入/导出携带/`injectAnimationIdRemap`(finalIds 全集覆盖注入、config 零触碰);`routes.ts` 导入落记录、`report.pluginConfigs` 排序命名空间(无 blob 时键缺席,旧包响应逐字节不变);`index.ts` 一行接线。
+- 关键属性:saveSlice 展开式镜像下切片外字段天然存活(用例锁定),两种架构下都成立。
+
+### 验证
+
+主插件 **51 文件 / 974 用例**全绿(+23),typecheck 干净,lint 10 警告基线,build 成功。真机复验项:管理宠物列表交互、dirty 出口、卡片常驻提示、保存按钮动态文案;pluginConfigs 为承载层,P2(physics 消费)落地前无真机可见面。
+
+## pluginConfigs P2:快照扩项 + physics 消费侧(2026-08-31 第五批,双智能体并行)
+
+评估二 P2 按拍板落地(确认 UX 归附属、v1 启动时+活跃宠物变化拉取、卫生约定),端到端链路闭合:分享包含附属配置 → 导入落宠物记录 → 附属拉取 → 改号 → 用户确认 → 自有 API 应用。
+
+### 主仓:StageSnapshot additive `activePetId`(+3 用例)
+
+- `session-surface.ts` 快照类型加 `activePetId: string | null`(additive,version 1 不动);`extension-surface.ts` host seam + 快照组装;`overlay-session.ts` 读 session config 副本。
+- **顺手修 V1.1 潜伏 bug**:`adoptConfigFields` 采纳清单一直缺 `activePetId`——不补则切换宠物后 session 副本永远陈旧,快照发的是旧值;PreviewSession 行为中性。
+- 更新触发核实:切宠物/导包/应用全部经 config 广播→hub→updateConfig→notifySnapshot 链路,天然覆盖,用例锁定(boot 初始/切换/清除三分支)。
+
+### physics:消费侧(+24 用例)
+
+- **校验同源**:host/config.ts 的两个校验 walker **逐字迁入** client/config.ts(本就声明零 node 依赖的单一事实源),host 转 re-export——浏览器预检与 host PUT 的 REJECT 策略是同一份代码,零漂移。
+- `api.ts`:`getPetPluginConfigShare(petId, pluginId)` 防御式解析(旧主插件无字段/无口袋/畸形均 null,HTTP 错误抛给调用方静默)。
+- 新模块 `shared-pet-config.ts`:`canonicalize`(key 排序确定 JSON,兼作 deep-equal 与去重记账键,上限 16 条,localStorage 不可用退化为内存 Set)、`rewriteSharedAnimationIds`(只重写 slideAnimationId 与 bounceAnimation.id,其余零触碰)、`SharedPetConfigCenter`(同 petId 短路、pullSeq 最新胜、五道静默门)。
+- `index.ts`:hub.load 后启动一次 + subscribeStage 活跃宠物变化触发;dispose 退订。
+- `PhysicsCard`:确认横幅(「宠物『X』分享了物理配置」+ 21 条路径中文标签的变更摘要 旧→新 + 应用/忽略);应用 = 严格校验后 blob 原样 PUT(缺席字段保持现状,host 二次把关),成功采纳服务端配置为新草稿;失败横幅保留重试。
+- 刻意语义:activePetId 变 null 不清横幅(保留用户决策权)。
+
+### 验证
+
+主仓 **51 文件 / 977 用例**全绿、typecheck/lint 基线干净、产物重建;physics **10 文件 / 161 用例**全绿、typecheck/lint 干净、build 成功(client bundle 无 node 依赖泄漏)。真机复验项(规格 P2 验收):导出含 physics 配置的宠物包 → 删除宠物 → 导入 → 卡片确认横幅 → 应用 → 重力生效;旧主插件无 activePetId 字段时按契约静默(用例已锁)。

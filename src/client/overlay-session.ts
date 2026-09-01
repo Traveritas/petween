@@ -235,6 +235,10 @@ export class OverlaySession {
     return this.config.global.scale
   }
 
+  activePetId(): string | null {
+    return this.config.activePetId
+  }
+
   /**
    * Driver position write: clamp BEFORE storing (§27) — the stage re-clamps
    * on apply, but this.position must never hold an off-screen value a later

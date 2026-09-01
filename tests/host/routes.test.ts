@@ -69,7 +69,7 @@ beforeEach(async () => {
     deleteAnimation: (id, referencedBy) => animationsStore.delete(id, referencedBy),
     importPack: (pack) => animationsStore.importAnimations((existing) => planMotionPackImport(pack, existing)),
     listPets: () => petsStore.list(),
-    createPet: (name, slice, attribution) => petsStore.create(name, slice, attribution),
+    createPet: (name, slice, attribution, pluginConfigs) => petsStore.create(name, slice, attribution, pluginConfigs),
     readPet: (id) => petsStore.read(id),
     updatePetMeta: (id, changes) => petsStore.updateMeta(id, changes),
     deletePet: (id) => petsStore.delete(id),
@@ -1303,6 +1303,36 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
   const postImport = (body: Buffer): Promise<Response> =>
     fetch(`${base}/api/petween/pets/import`, { method: 'POST', body: new Uint8Array(body) })
 
+  /**
+   * A hand-built package body with companion blobs (§12): one idle pose,
+   * user:pop mounted on idle enter, and the given pluginConfigs verbatim.
+   */
+  function blobPackage(pluginConfigs: unknown): { body: Buffer; assetId: string } {
+    const pose = makePng(2, 3)
+    const sha256 = createHash('sha256').update(pose).digest('hex')
+    const assetId = sha256.slice(0, 16)
+    const manifest = {
+      format: 'pet-package',
+      version: 1,
+      name: 'Blob Cat',
+      pet: { scale: 1, poses: { idle: { assetId } }, states: { idle: { enter: { animationId: 'user:pop' } } } },
+      assets: [{ id: assetId, sha256, file: `assets/${assetId}.png`, mimeType: 'image/png', width: 2, height: 3 }],
+      motionPack: {
+        format: 'motion-pack',
+        version: 1,
+        name: 'Blob 动画',
+        namespace: 'user',
+        animations: [makeTransition('user:pop')],
+        mounts: { idle: { enter: 'user:pop' } },
+      },
+      pluginConfigs,
+    }
+    const body = Buffer.from(
+      zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), [`assets/${assetId}.png`]: new Uint8Array(pose) }),
+    )
+    return { body, assetId }
+  }
+
   it('GET <id>/export streams a complete zip: manifest, both assets, derived mounts, attribution', async () => {
     const { pet, idleId, thinkId } = await seedShareablePet()
     const zip = unzipSync(new Uint8Array(await exportZip(pet.id)))
@@ -1386,6 +1416,58 @@ describe('/api/petween/pets import/export (Pet Package §12)', () => {
       customs: AnimationDefinition[]
     }
     expect(customs.map((definition) => definition.id).sort()).toEqual(['user:float', 'user:pop', 'user:pop-2'])
+  })
+
+  it('import carries pluginConfigs into the record, injects the collision remap, never rewrites the blob', async () => {
+    // Claim user:pop with DIFFERENT content so the import remaps it.
+    const claim = await fetch(`${base}/api/petween/animations/user:pop`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(makeTransition('user:pop', 500)),
+    })
+    expect(claim.status).toBe(200)
+    const config = { gravity: 2400, slideAnimationId: 'user:pop' }
+    const { body } = blobPackage({
+      'petween-physics': { config, animationIdRemap: { 'user:stale': 'user:stale-2' } },
+    })
+    const res = await postImport(body)
+    expect(res.status).toBe(200)
+    const { pet, report } = (await res.json()) as { pet: PetPreset; report: Record<string, unknown> }
+    expect(report.pluginConfigs).toEqual(['petween-physics'])
+    expect(report.entries).toEqual([{ requestedId: 'user:pop', finalId: 'user:pop-2', status: 'remapped' }])
+    // The record carries the blob VERBATIM — the id inside is NOT rewritten…
+    expect(pet.pluginConfigs?.['petween-physics']?.config).toEqual(config)
+    // …while THIS import's collision plan replaces the stale manifest remap.
+    expect(pet.pluginConfigs?.['petween-physics']?.animationIdRemap).toEqual({ 'user:pop': 'user:pop-2' })
+    // The single-pet read (the companion's pull path) exposes the same blob.
+    const single = (await (await fetch(`${base}/api/petween/pets/${pet.id}`)).json()) as { pet: PetPreset }
+    expect(single.pet.pluginConfigs).toEqual(pet.pluginConfigs)
+    // The apply's onSaved mirror rewrote only the slice: the blob survives on disk.
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${pet.id}.json`), 'utf8'))
+    expect(onDisk.pluginConfigs['petween-physics'].config).toEqual(config)
+  })
+
+  it('pluginConfigs round trip: export carries the record blob, re-import lands it field-equal', async () => {
+    const { body } = blobPackage({ 'petween-physics': { config: { gravity: 2400, bounce: { restitution: 0.82 } } } })
+    const first = await postImport(body)
+    expect(first.status).toBe(200)
+    const { pet: imported, report: firstReport } = (await first.json()) as { pet: PetPreset; report: Record<string, unknown> }
+    expect(firstReport.pluginConfigs).toEqual(['petween-physics'])
+    // No collision: the injected remap is this entry's identical mapping.
+    expect(imported.pluginConfigs?.['petween-physics']?.animationIdRemap).toEqual({ 'user:pop': 'user:pop' })
+
+    // Export the imported pet: the manifest carries the record blob verbatim.
+    const zip = unzipSync(new Uint8Array(await exportZip(imported.id)))
+    const manifest = JSON.parse(strFromU8(zip['manifest.json'] as Uint8Array)) as { pluginConfigs?: unknown }
+    expect(manifest.pluginConfigs).toEqual(imported.pluginConfigs)
+
+    // Re-import: the blob lands field-equal on the new record (the identical
+    // remap re-injects to the same table).
+    const second = await postImport(await exportZip(imported.id))
+    expect(second.status).toBe(200)
+    const { pet: reimported, report: secondReport } = (await second.json()) as { pet: PetPreset; report: Record<string, unknown> }
+    expect(secondReport.pluginConfigs).toEqual(['petween-physics'])
+    expect(reimported.pluginConfigs).toEqual(imported.pluginConfigs)
   })
 
   it('a structurally invalid package is a 400 and nothing is written', async () => {

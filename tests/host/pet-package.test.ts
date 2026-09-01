@@ -14,11 +14,12 @@ import {
   buildPetPackageExport,
   buildPetPackageZip,
   finalIdMapOf,
+  injectAnimationIdRemap,
   mountsFromPetStates,
   rewritePetSliceAnimations,
   validatePetPackage,
 } from '../../src/host/pet-package'
-import { mergePetAttribution, normalizePetSlice, validatePetAttribution, type PetPreset } from '../../src/host/pets'
+import { mergePetAttribution, normalizePetSlice, validatePetAttribution, validatePluginConfigs, type PetPluginConfigs, type PetPreset } from '../../src/host/pets'
 import { makePng, makeSvg } from './fixtures'
 
 /** Content-addressed PNG asset: id = sha256 prefix, exactly like the library. */
@@ -484,6 +485,28 @@ describe('buildPetPackageExport', () => {
     expect(manifest.assets).toHaveLength(1)
   })
 
+  it('carries pluginConfigs from the record; the zipped export revalidates field-equal', async () => {
+    const asset = pngAsset()
+    const slice = normalizePetSlice({})
+    slice.poses.idle.assetId = asset.id
+    const pet = petPreset(slice)
+    pet.pluginConfigs = {
+      'petween-physics': { config: { gravity: 2400, slideAnimationId: 'user:pop' }, animationIdRemap: { 'user:pop': 'user:pop-2' } },
+    }
+    const manifest = buildPetPackageExport(pet, { assets: { [asset.id]: assetMetaFor(asset) }, animations: [] })
+    expect(manifest.pluginConfigs).toEqual(pet.pluginConfigs)
+    const plan = await validatePetPackage(Buffer.from(buildPetPackageZip(manifest, { [asset.id]: asset.data })))
+    expect(plan.pluginConfigs).toEqual(pet.pluginConfigs)
+  })
+
+  it('omits pluginConfigs when the record has none', () => {
+    const asset = pngAsset()
+    const slice = normalizePetSlice({})
+    slice.poses.idle.assetId = asset.id
+    const manifest = buildPetPackageExport(petPreset(slice), { assets: { [asset.id]: assetMetaFor(asset) }, animations: [] })
+    expect(manifest.pluginConfigs).toBeUndefined()
+  })
+
   it('throws EXPORT_INCOMPLETE naming the missing assets or animations', () => {
     const slice = normalizePetSlice({})
     const asset = pngAsset()
@@ -591,5 +614,121 @@ describe('attribution validation (host/pets.ts)', () => {
     expect(mergePetAttribution(current, { character: null, creators: null, sourceUrl: null })).toEqual({ ok: true, attribution: undefined })
     expect(mergePetAttribution(undefined, { license: 'MIT' })).toEqual({ ok: true, attribution: { license: 'MIT' } })
     expect(mergePetAttribution(current, { creators: 'nope' }).ok).toBe(false)
+  })
+})
+
+describe('pluginConfigs validation (§12 companion blobs)', () => {
+  it('accepts well-formed blobs into the import plan; the config content is never inspected', async () => {
+    const blob = {
+      'petween-physics': {
+        config: {
+          // Zero interpretation: strings that LOOK like animation ids, odd
+          // nesting and nulls all pass through untouched.
+          gravity: 2400,
+          slideAnimationId: 'user:pop',
+          nested: { list: [1, 'two', null, { deep: true }] },
+        },
+        animationIdRemap: { 'user:pop': 'user:pop-2' },
+      },
+    }
+    const plan = await validatePetPackage(makePackage({ pluginConfigs: blob }))
+    expect(plan.pluginConfigs).toEqual(blob)
+  })
+
+  it('an absent or empty pluginConfigs stays absent in the plan (old packages behave as before)', async () => {
+    expect((await validatePetPackage(makePackage({}))).pluginConfigs).toBeUndefined()
+    expect((await validatePetPackage(makePackage({ pluginConfigs: {} }))).pluginConfigs).toBeUndefined()
+  })
+
+  it('rejects envelope violations field-wise', async () => {
+    // Top level must be an object.
+    let error = await expectInvalid(makePackage({ pluginConfigs: ['not-an-object'] }))
+    expect(error.details?.join(' ')).toContain('pluginConfigs must be an object')
+    // Plugin id charset `^[a-z0-9][a-z0-9-]*$`, ≤64 characters.
+    error = await expectInvalid(
+      makePackage({
+        pluginConfigs: {
+          UPPERCASE: { config: {} },
+          '-leading-dash': { config: {} },
+          under_score: { config: {} },
+          ['x'.repeat(65)]: { config: {} },
+        },
+      }),
+    )
+    const details = error.details?.join('\n') ?? ''
+    for (const bad of ['UPPERCASE', '-leading-dash', 'under_score', 'x'.repeat(65)]) {
+      expect(details).toContain(`pluginConfigs.${bad}: plugin id must match`)
+    }
+    // Each entry must be an object carrying a `config`.
+    error = await expectInvalid(makePackage({ pluginConfigs: { 'petween-physics': 'nope' } }))
+    expect(error.details?.join(' ')).toContain('pluginConfigs.petween-physics: expected an object with a "config" field')
+    error = await expectInvalid(makePackage({ pluginConfigs: { 'petween-physics': {} } }))
+    expect(error.details?.join(' ')).toContain('pluginConfigs.petween-physics.config: required')
+    // animationIdRemap must be a string→string map.
+    error = await expectInvalid(
+      makePackage({ pluginConfigs: { 'petween-physics': { config: {}, animationIdRemap: { 'user:a': 2 } } } }),
+    )
+    expect(error.details?.join(' ')).toContain('pluginConfigs.petween-physics.animationIdRemap must be a string→string map')
+    error = await expectInvalid(
+      makePackage({ pluginConfigs: { 'petween-physics': { config: {}, animationIdRemap: ['user:a'] } } }),
+    )
+    expect(error.details?.join(' ')).toContain('pluginConfigs.petween-physics.animationIdRemap must be a string→string map')
+  })
+
+  it('rejects the entry-count and byte caps', async () => {
+    // More than 8 entries.
+    const tooMany = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`plugin-${index}`, { config: {} }]))
+    let error = await expectInvalid(makePackage({ pluginConfigs: tooMany }))
+    expect(error.details?.join(' ')).toContain('pluginConfigs exceeds 8 entries')
+    // One config over the 16KiB serialized cap.
+    error = await expectInvalid(
+      makePackage({ pluginConfigs: { 'petween-physics': { config: { payload: 'x'.repeat(16 * 1024) } } } }),
+    )
+    expect(error.details?.join(' ')).toContain('pluginConfigs.petween-physics.config exceeds 16KiB serialized')
+    // The whole block over 64KiB while every entry stays under the per-config cap.
+    const fat = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`plugin-${index}`, { config: { payload: 'x'.repeat(9 * 1024) } }]))
+    error = await expectInvalid(makePackage({ pluginConfigs: fat }))
+    expect(error.details?.join(' ')).toContain('pluginConfigs exceeds 64KiB serialized')
+  })
+
+  it('validatePluginConfigs unit checks: JSON-value configs pass, non-serializable ones fail', () => {
+    // `null` is a JSON value; the envelope only requires a PRESENT config.
+    expect(validatePluginConfigs({ 'petween-physics': { config: null } })).toEqual({
+      ok: true,
+      pluginConfigs: { 'petween-physics': { config: null } },
+    })
+    expect(validatePluginConfigs({ 'petween-physics': { config: BigInt(1) } })).toEqual({
+      ok: false,
+      errors: ['pluginConfigs.petween-physics.config must be JSON-serializable'],
+    })
+    expect(validatePluginConfigs('nope')).toEqual({ ok: false, errors: ['pluginConfigs must be an object'] })
+  })
+})
+
+describe('injectAnimationIdRemap (§12)', () => {
+  it('injects the full requestedId→finalId table into every entry, replacing stale remaps, config untouched', () => {
+    const configs: PetPluginConfigs = {
+      'petween-physics': {
+        config: { slideAnimationId: 'user:pop', gravity: 2400 },
+        animationIdRemap: { 'user:stale': 'user:stale-9' },
+      },
+      'petween-other': { config: {} },
+    }
+    const finalIds = finalIdMapOf([
+      { requestedId: 'user:pop', finalId: 'user:pop-2', status: 'remapped' },
+      { requestedId: 'user:float', finalId: 'user:float', status: 'identical' },
+    ])
+    const injected = injectAnimationIdRemap(configs, finalIds)
+    expect(injected['petween-physics']!.animationIdRemap).toEqual({ 'user:pop': 'user:pop-2', 'user:float': 'user:float' })
+    expect(injected['petween-other']!.animationIdRemap).toEqual({ 'user:pop': 'user:pop-2', 'user:float': 'user:float' })
+    // The blob itself is never rewritten — id fixup is the companion's job.
+    expect(injected['petween-physics']!.config).toEqual({ slideAnimationId: 'user:pop', gravity: 2400 })
+    // Non-mutating: the input entry keeps its stale remap.
+    expect(configs['petween-physics']!.animationIdRemap).toEqual({ 'user:stale': 'user:stale-9' })
+  })
+
+  it('a package without animation entries leaves the blobs (and any stale remap) as-is', () => {
+    const configs: PetPluginConfigs = { 'petween-physics': { config: {}, animationIdRemap: { 'user:a': 'user:b' } } }
+    expect(injectAnimationIdRemap(configs, new Map())).toBe(configs)
   })
 })

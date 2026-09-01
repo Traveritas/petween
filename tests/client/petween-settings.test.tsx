@@ -120,11 +120,21 @@ const render = async (api: EditorApi, wide = false): Promise<void> => {
 }
 
 const saveChanges = async (): Promise<void> => {
+  // §5.2-2: the dirty save button is 保存到「<name>」 with an active pet and
+  // 保存修改（未命名配置） without one — match either label.
   const button = [...container.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent === '保存修改' && !candidate.disabled,
+    (candidate) => candidate.textContent !== null && /^保存(修改|到「)/.test(candidate.textContent) && !candidate.disabled,
   )
   if (button === undefined) throw new Error('enabled save button missing')
   await act(async () => button.click())
+}
+
+/** The 展开/收起 toggle of a collapsible pet-card block, found via its group title. */
+const collapseToggle = (title: string): HTMLButtonElement => {
+  const span = [...container.querySelectorAll('span')].find((el) => el.textContent === title)
+  const button = span?.parentElement?.querySelector('button')
+  if (button == null) throw new Error(`collapse toggle missing: ${title}`)
+  return button as HTMLButtonElement
 }
 
 const findControlRow = (labelText: string): HTMLLabelElement => {
@@ -383,7 +393,7 @@ describe('PetweenSettings', () => {
 
     await render(api, true)
     expect(container.textContent).toContain('有未保存修改时无法切换宠物')
-    expect(container.textContent).toContain('新建副本')
+    expect(container.textContent).toContain('复制当前宠物并切换')
 
     const select = findControlRow('当前宠物').querySelector('select')
     if (select === null) throw new Error('pet select missing')
@@ -392,15 +402,15 @@ describe('PetweenSettings', () => {
     expect(applyPet).toHaveBeenCalledWith('pet_b')
     expect(select.value).toBe('pet_b')
 
-    // 新建空白 declined in the prompt modal: nothing is created.
-    act(() => clickButton('新建空白'))
+    // 新建空白宠物并切换 declined in the prompt modal: nothing is created.
+    act(() => clickButton('新建空白宠物并切换'))
     expect(modalDialog()?.textContent).toContain('新建空白宠物')
     await act(async () => modalButton('取消').click())
     expect(modalDialog()).toBeNull()
     expect(createPet).not.toHaveBeenCalled()
 
     // confirmed: the typed name goes to createPet.
-    act(() => clickButton('新建空白'))
+    act(() => clickButton('新建空白宠物并切换'))
     act(() => typeInput(modalInput(), '空白猫'))
     await act(async () => modalButton('确定').click())
     await flushActions()
@@ -569,7 +579,7 @@ describe('PetweenSettings', () => {
     await render(api, true)
 
     // Escape cancels: the modal closes and nothing is created.
-    act(() => clickButton('新建空白'))
+    act(() => clickButton('新建空白宠物并切换'))
     expect(document.activeElement).toBe(modalInput()) // prompt input autofocused
     act(() => typeInput(modalInput(), '逃跑猫'))
     act(() => pressKey(modalInput(), 'Escape'))
@@ -577,7 +587,7 @@ describe('PetweenSettings', () => {
     expect(createPet).not.toHaveBeenCalled()
 
     // Enter inside the input confirms with the typed name.
-    act(() => clickButton('新建空白'))
+    act(() => clickButton('新建空白宠物并切换'))
     act(() => typeInput(modalInput(), '回车猫'))
     await act(async () => pressKey(modalInput(), 'Enter'))
     await flushActions()
@@ -859,7 +869,7 @@ describe('PetweenSettings — pet package & attribution (§12)', () => {
     // collapsed: the badge shows, the fields do not
     expect(container.textContent).toContain('已带署名')
     expect(container.textContent).not.toContain('角色形象')
-    act(() => clickButton('展开'))
+    act(() => collapseToggle('来源与署名').click())
     expect(container.textContent).toContain('角色形象')
 
     // prefilled from the preset's stored attribution (creators joined)
@@ -887,10 +897,201 @@ describe('PetweenSettings — pet package & attribution (§12)', () => {
     const api = makeApi(true)
     await render(api, true)
     expect(container.textContent).not.toContain('已带署名')
-    act(() => clickButton('展开'))
+    act(() => collapseToggle('来源与署名').click())
     expect(findControlRow('角色形象').querySelector('input')?.disabled).toBe(true)
     const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存署名')
     expect(save?.disabled).toBe(true)
-    expect(container.textContent).toContain('当前是未保存配置，选中一只宠物后才能编辑署名')
+    expect(container.textContent).toContain('当前是未命名配置，选中一只宠物后才能编辑署名')
+  })
+})
+
+
+describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)', () => {
+  const makePet = (id: string, name: string, config: PetweenConfig): PetPreset => ({
+    id,
+    name,
+    createdAt: '2026-08-21T00:00:00.000Z',
+    updatedAt: '2026-08-21T00:00:00.000Z',
+    scale: 1,
+    poses: structuredClone(config.poses),
+    states: structuredClone(config.states),
+  })
+
+  /** Two stored presets (蓝猫 active, 白猫 not); delete/rename mutate the list. */
+  const twoPetApi = async (): Promise<EditorApi> => {
+    const api = makeApi(true)
+    const { config } = await api.getConfig()
+    config.activePetId = 'pet_a'
+    let pets = [makePet('pet_a', '蓝猫', config), makePet('pet_b', '白猫', config)]
+    api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: config.activePetId, warnings: [] }))
+    api.deletePet = vi.fn(async (id: string) => {
+      pets = pets.filter((pet) => pet.id !== id)
+    })
+    api.renamePet = vi.fn(async (id: string, name: string) => {
+      pets = pets.map((pet) => (pet.id === id ? { ...pet, name } : pet))
+    })
+    api.exportPetPackage = vi.fn(async () => new ArrayBuffer(8))
+    return api
+  }
+
+  const petSection = (): HTMLElement => {
+    const section = container.querySelector('section[aria-label="宠物预设"]')
+    if (section === null) throw new Error('pet preset section missing (render with wide)')
+    return section as HTMLElement
+  }
+
+  /** Rows of the manage list — li elements live only there inside the pet section. */
+  const manageRows = (): HTMLElement[] => [...petSection().querySelectorAll('li')] as HTMLElement[]
+
+  const rowNamed = (name: string): HTMLElement => {
+    const row = manageRows().find((candidate) => candidate.textContent?.includes(name))
+    if (row === undefined) throw new Error(`manage row missing: ${name}`)
+    return row
+  }
+
+  const rowButton = (row: HTMLElement, text: string): HTMLButtonElement => {
+    const button = [...row.querySelectorAll('button')].find((candidate) => candidate.textContent === text)
+    if (button === undefined) throw new Error(`row button missing: ${text}`)
+    return button as HTMLButtonElement
+  }
+
+  it('管理宠物 is collapsed by default; expanding lists every preset with the active row marked (§2.4)', async () => {
+    const api = await twoPetApi()
+    await render(api, true)
+    // collapsed: no rows render at all
+    expect(manageRows()).toEqual([])
+    act(() => collapseToggle('管理宠物').click())
+    expect(manageRows()).toHaveLength(2)
+
+    const activeRow = rowNamed('蓝猫')
+    expect(activeRow.textContent).toContain('生效中')
+    expect(rowButton(activeRow, '删除').disabled).toBe(true)
+    expect(activeRow.textContent).toContain('生效中——切换到其他宠物后可删除')
+    // rename/export stay available on the active row (same as the toolbar)
+    expect(rowButton(activeRow, '重命名').disabled).toBe(false)
+    expect(rowButton(activeRow, '导出').disabled).toBe(false)
+
+    const otherRow = rowNamed('白猫')
+    expect(otherRow.textContent).not.toContain('生效中')
+    expect(rowButton(otherRow, '删除').disabled).toBe(false)
+  })
+
+  it('deleting a non-active preset confirms with the consequence triple; cancel keeps it, confirm deletes (§2.4)', async () => {
+    const api = await twoPetApi()
+    await render(api, true)
+    act(() => collapseToggle('管理宠物').click())
+
+    // declined in the C2 modal: nothing is deleted
+    act(() => rowButton(rowNamed('白猫'), '删除').click())
+    expect(modalDialog()?.textContent).toContain(
+      '确认删除宠物「白猫」？该宠物的署名将一并删除；图片与动画保留在库中。此操作不可恢复。',
+    )
+    await act(async () => modalButton('取消').click())
+    await flushActions()
+    expect(modalDialog()).toBeNull()
+    expect(api.deletePet).not.toHaveBeenCalled()
+    expect(manageRows()).toHaveLength(2)
+
+    // confirmed: the store's non-active delete path runs and the list refreshes
+    act(() => rowButton(rowNamed('白猫'), '删除').click())
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(api.deletePet).toHaveBeenCalledWith('pet_b')
+    expect(manageRows()).toHaveLength(1)
+    expect(rowNamed('蓝猫').textContent).toContain('生效中')
+    // the draft and the active identity are untouched by a non-active delete
+    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_a')
+    // …and the draft never became dirty (the hint text itself mentions
+    // 有未保存修改, so probe the dirty-branch save label instead)
+    expect(container.textContent).not.toContain('保存到「')
+    expect(container.textContent).not.toContain('保存修改（未命名配置）')
+  })
+
+  it('renames and exports a non-active preset straight from its row (§2.4)', async () => {
+    const api = await twoPetApi()
+    await render(api, true)
+    act(() => collapseToggle('管理宠物').click())
+
+    // rename: the C2 prompt prefills the row's current name
+    act(() => rowButton(rowNamed('白猫'), '重命名').click())
+    expect(modalInput().value).toBe('白猫')
+    act(() => typeInput(modalInput(), '改名白猫'))
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(api.renamePet).toHaveBeenCalledWith('pet_b', '改名白猫')
+    expect(rowNamed('改名白猫')).toBeDefined()
+
+    // export: the store targets the row's id (the jsdom download fallback is
+    // covered by the active-pet export test above)
+    await act(async () => rowButton(rowNamed('改名白猫'), '导出').click())
+    await flushActions()
+    expect(api.exportPetPackage).toHaveBeenCalledWith('pet_b')
+  })
+
+  it('the dirty save button names its target: 保存到「name」with an active pet (§5.2-2)', async () => {
+    const api = await twoPetApi()
+    await render(api, true)
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存到「蓝猫」')
+    expect(save?.disabled).toBe(false)
+    await act(async () => save?.click())
+    expect(api.patchConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('the dirty save button reads 保存修改（未命名配置）when no pet is active (§5.2-2)', async () => {
+    const api = makeApi(true)
+    await render(api)
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存修改（未命名配置）')
+    expect(save?.disabled).toBe(false)
+  })
+
+  it('a dirty-blocked switch offers 另存草稿为新宠物 inline, which forks the draft without switching (§3.3)', async () => {
+    const api = makeApi(true)
+    const { config } = await api.getConfig()
+    config.activePetId = 'pet_a'
+    let pets = [makePet('pet_a', '蓝猫', config), makePet('pet_b', '白猫', config)]
+    api.getPets = vi.fn(async () => ({ pets: structuredClone(pets), activePetId: config.activePetId, warnings: [] }))
+    const applyPet = vi.spyOn(api, 'applyPet')
+    const createPetFromDraft = vi.fn(async (name: string, slice: PetSlice) => {
+      const created = { ...makePet('pet_fork', name, config), scale: slice.scale }
+      pets = [...pets, created]
+      return { pet: created }
+    })
+    api.createPetFromDraft = createPetFromDraft
+    await render(api, true)
+
+    // dirty the draft, then try to switch — the gate blocks with the §3.3 warn
+    const toggle = findControlRow('活跃状态内切换姿势').querySelector('input')
+    if (toggle === null) throw new Error('change-pose toggle missing')
+    act(() => toggle.click())
+    const select = findControlRow('当前宠物').querySelector('select')
+    if (select === null) throw new Error('pet select missing')
+    act(() => choose(select, 'pet_b'))
+    await flushActions()
+    expect(applyPet).not.toHaveBeenCalled()
+    const status = container.querySelector('[role="status"]')
+    expect(status?.textContent).toContain('有未保存修改——先保存，或「另存草稿为新宠物」保住它。')
+    const shortcut = [...(status?.querySelectorAll('button') ?? [])].find(
+      (candidate) => candidate.textContent === '另存草稿为新宠物',
+    )
+    expect(shortcut).toBeDefined()
+
+    // the shortcut asks for a name (prefilled «active» 变体) and forks losslessly
+    act(() => shortcut?.click())
+    expect(modalInput().value).toBe('蓝猫 变体')
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(createPetFromDraft).toHaveBeenCalledTimes(1)
+    expect(createPetFromDraft.mock.calls[0]![0]).toBe('蓝猫 变体')
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('已另存为新宠物「蓝猫 变体」')
+    // no switch, no implicit save — the draft keeps editing pet_a, still dirty
+    expect(select.value).toBe('pet_a')
+    expect(api.patchConfig).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('有未保存修改')
   })
 })

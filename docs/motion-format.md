@@ -358,7 +358,8 @@ pet-package.zip
   "pet": { "scale": 1.1, "poses": { "……六个槽位……": {完整 PoseConfig} }, "states": { "……六个状态……": {完整 StateAppearance} } },
   "assets": [ { "id": "16-hex", "sha256": "64-hex", "file": "assets/<id>.<ext>", "mimeType": "image/png", "width": 1254, "height": 1254 } ],
   "motionPack": { "format": "motion-pack", "version": 1, "name": "…", "namespace": "mixed", "animations": [ "……§11 内联定义……" ], "mounts": { "idle": { "ambient": "ns:x" } } },
-  "attribution": { "character": "DeepSeek 女仆鲸鱼娘（溟月）", "creators": ["上善无形（原型）", "ZipZipPipe（女仆装）"], "sourceUrl": "https://…", "license": "CC BY-NC-SA 4.0" }
+  "attribution": { "character": "DeepSeek 女仆鲸鱼娘（溟月）", "creators": ["上善无形（原型）", "ZipZipPipe（女仆装）"], "sourceUrl": "https://…", "license": "CC BY-NC-SA 4.0" },
+  "pluginConfigs": { "petween-physics": { "config": { "……opaque：附属自己的配置……" }, "animationIdRemap": { "user:wall-bounce": "user:wall-bounce-2" } } }
 }
 ```
 
@@ -368,14 +369,35 @@ pet-package.zip
 | `assets` | `id` 为内容 sha256 前 16 hex（与资产库同一命名法，天然去重）；`poses` 引用的每个 assetId 必须在清单内且文件存在于包中；未被引用的清单条目冗余，导入忽略并 warning。 |
 | `motionPack` | 可选。完整 §11 Motion Pack v1 对象。**与纯动画包导出相反，宠物包的 mounts 必须携带**——导出时从 `pet.states` 的动画引用推导（`enter.animationId`→`mounts.<槽>.enter`，`ambient.customAnimationId`→`mounts.<槽>.ambient`；`builtin:*` 不入包），导入时经碰撞规划改号后重写进新宠物的 states。 |
 | `attribution` | 可选。角色形象署名/来源/许可，导出端从宠物预设的 attribution 字段带入，导入端原样存到新建宠物上；编辑器宠物区可编辑。分享传播时署名随包走。 |
+| `pluginConfigs` | 可选。附属插件配置 blob（形状与纪律见「附属插件配置」小节），导出端从宠物记录原样携带，导入端存到新建宠物记录上。petween 只做形状/大小校验，对内容**零校验、零解释**。 |
 
 ### 校验（导入拒绝，逐字段错误）
 
-zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路径白名单（`manifest.json` 或 `assets/<16hex>.<ext>`，拒绝穿越/绝对路径/反斜杠）；图片走资产侧同一套校验（magic bytes 与 MIME 一致、尺寸 ≤ 4096、拒绝 SVG），sha256 与清单一致；`version > 1` 明确拒绝并提示升级插件（B1 seam 同款规则）。states 引用的包内动画另做 kind 交叉检查（enter 必须 transition、ambient 必须 ambient），同样拒绝在任何落盘之前。
+zip 条目数 ≤ 64、解压总大小 ≤ 60MB、单文件 ≤ 12MB；条目路径白名单（`manifest.json` 或 `assets/<16hex>.<ext>`，拒绝穿越/绝对路径/反斜杠）；图片走资产侧同一套校验（magic bytes 与 MIME 一致、尺寸 ≤ 4096、拒绝 SVG），sha256 与清单一致；`version > 1` 明确拒绝并提示升级插件（B1 seam 同款规则）。states 引用的包内动画另做 kind 交叉检查（enter 必须 transition、ambient 必须 ambient），同样拒绝在任何落盘之前。`pluginConfigs` 逐字段校验：键必须匹配 `^[a-z0-9][a-z0-9-]*$` 且 ≤64 字符，条目数 ≤ 8，每条必含 `config`（任意 JSON 值、序列化 ≤16KiB），整体序列化 ≤64KiB，`animationIdRemap` 必须是 string→string 映射。
 
 ### 导入语义（原子性）
 
-全部校验（含 states 引用的 kind 交叉检查）与碰撞规划**先行只读**，随后才落盘：图片按内容哈希幂等入库（已有同内容资产直接复用原 id）→ 动画走 §11 既有三选一规划（单锁段事务）→ **宠物创建是最后一步**（states 引用改写为最终 id，attribution 原样带入）→ 创建后立即 apply。任何一步失败（含建宠与 apply）都会**尽力回滚**本次写入：先删宠物文件，再按引用探针回滚动画与资产，且只删除本次真正新建的资产（去重复用的共享资产不动）。回滚自身再失败时最多留下可清理的未引用资产/动画，绝无「半只宠物」被激活。导入即用：apply 切换为激活宠物，响应携带完整报告（资产 新增/复用、动画 新增/相同/改号、挂载映射、新宠物与配置）。
+全部校验（含 states 引用的 kind 交叉检查）与碰撞规划**先行只读**，随后才落盘：图片按内容哈希幂等入库（已有同内容资产直接复用原 id）→ 动画走 §11 既有三选一规划（单锁段事务）→ **宠物创建是最后一步**（states 引用改写为最终 id，attribution 与 pluginConfigs 原样带入同一原子记录，pluginConfigs 每条注入本次改号表）→ 创建后立即 apply。任何一步失败（含建宠与 apply）都会**尽力回滚**本次写入：先删宠物文件，再按引用探针回滚动画与资产，且只删除本次真正新建的资产（去重复用的共享资产不动）。回滚自身再失败时最多留下可清理的未引用资产/动画，绝无「半只宠物」被激活。导入即用：apply 切换为激活宠物，响应携带完整报告（资产 新增/复用、动画 新增/相同/改号、挂载映射、新宠物与配置）。
+
+### 附属插件配置（pluginConfigs）
+
+宠物包可携带**附属插件**（如 petween-physics）的配置 blob，让接收方获得完整的「宠物性格」。纪律是「主插件提供能力不做策略」：petween 只搬运、存盘、做命名空间与大小校验，**对 blob 内容零校验、零解释**——schema 归各附属自己（物理参数范围只有附属知道）；应用（重写 blob 内的动画 id、弹确认 UI、写入自己的配置）也永远由附属在用户确认后经自己的 API 完成，导入流程对附属数据目录零接触。
+
+```json
+"pluginConfigs": {
+  "<plugin-id>": {
+    "config": "……任意 JSON：附属自己的完整或部分配置……",
+    "animationIdRemap": { "<旧动画 id>": "<最终动画 id>" }
+  }
+}
+```
+
+- 键 = 附属插件 cordis 名（如 `petween-physics`），charset 与上限见上「校验」；每条必含 `config`；`animationIdRemap` 可选，string→string 映射。
+- **改号表注入**：导入时 host 用本次动画改号表（§11 碰撞规划的 `requestedId → finalId` 全集，含 identical 恒等项）**覆盖注入**每条的 `animationIdRemap`；host 只注入映射、**不重写 blob 内容**——它不知道 blob 里哪些字符串是动画 id，用映射重写自己的 blob 是附属应用时的事。本次导入无动画条目时保留包内原值（petween 不解释，也不删）。
+- `version` 保持 1：纯增量字段，旧导入端对顶层未知字段本就静默忽略，新构建读取；与 API_FEATURES「只增不减」同规。
+- 存储：随新建宠物记录持久化（**切片外**字段，与 name/attribution 同层——config 镜像只重写切片三键，不动它）；附属之后可随时经 `GET /api/petween/pets/<id>` 拉取自己命名空间的 blob，附属缺席时 blob 静卧记录等待后装。
+- **分享卫生约定**：附属 provider 只放**可公开的可调参数**（重力/弹性这类「性格」数值）；秘密、令牌、个人数据**不得进包**——包会被原样转发给接收方。
+- 导入响应 `report.pluginConfigs` 附带本次携带的命名空间列表（无 blob 时该键缺席）。
 
 ### HTTP
 

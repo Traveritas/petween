@@ -96,6 +96,46 @@
   margin: 4px 0;
 }
 
+/* §2.4 管理宠物: one row per stored preset — collapsed by default, the same
+   disclosure interaction as the attribution block above. */
+.managePets {
+  margin-top: 8px;
+}
+
+.managePetsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.managePetsHeader .groupTitle {
+  margin-bottom: 0;
+}
+
+.petRows {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.petRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.petRowName {
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Fallback host for the SaveIndicator when no portal target is provided. */
 .saveRow {
   display: flex;

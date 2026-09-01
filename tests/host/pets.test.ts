@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPetweenConfig, createDefaultPoseConfigs, createDefaultStateAppearances } from '../../src/core/defaults'
 import { ConfigStore } from '../../src/host/config'
-import { PetError, PetsStore, petSliceFromConfig, validatePetId, type PetSlice } from '../../src/host/pets'
+import { PetError, PetsStore, petSliceFromConfig, validatePetId, type PetPluginConfigs, type PetSlice } from '../../src/host/pets'
 
 let dir: string
 let store: PetsStore
@@ -220,6 +220,62 @@ describe('PetsStore.rename / saveSlice / delete', () => {
     const reloaded = await store.read(a.id)
     expect([1.1, 1.2]).toContain(reloaded.scale)
     expect(b.id).not.toBe(c.id)
+  })
+})
+
+describe('pluginConfigs (§12 companion blobs)', () => {
+  const blob = (): PetPluginConfigs => ({
+    'petween-physics': { config: { gravity: 2400, slideAnimationId: 'user:pop' }, animationIdRemap: { 'user:pop': 'user:pop-2' } },
+  })
+
+  it('create writes them into the same atomic record; read/list carry them', async () => {
+    const preset = await store.create('Kitty', makeSlice(), undefined, blob())
+    expect(preset.pluginConfigs).toEqual(blob())
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8'))
+    expect(onDisk.pluginConfigs).toEqual(blob())
+    expect((await store.read(preset.id)).pluginConfigs).toEqual(blob())
+    const { pets, warnings } = await store.list()
+    expect(warnings).toEqual([])
+    expect(pets[0]!.pluginConfigs).toEqual(blob())
+  })
+
+  it('toPreset round trip: a raw file keeps the field (explicit whitelist carry)', async () => {
+    // A record written by an import (or a newer/older build) must not lose the
+    // field on the read path — toPreset whitelists keys, so it must be picked
+    // up explicitly or the next saveSlice mirror would drop it from disk.
+    const preset = await store.create('Kitty', makeSlice())
+    const path = join(dir, 'pets', `${preset.id}.json`)
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.pluginConfigs = blob()
+    await writeFile(path, JSON.stringify(raw))
+    expect((await store.read(preset.id)).pluginConfigs).toEqual(blob())
+    const { pets, warnings } = await store.list()
+    expect(warnings).toEqual([])
+    expect(pets[0]!.pluginConfigs).toEqual(blob())
+  })
+
+  it('load tolerance: an unusable pluginConfigs is dropped, the preset still loads', async () => {
+    const preset = await store.create('Kitty', makeSlice())
+    const path = join(dir, 'pets', `${preset.id}.json`)
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.pluginConfigs = { 'Bad Id': { config: {} } } // charset violation
+    await writeFile(path, JSON.stringify(raw))
+    const reloaded = await store.read(preset.id)
+    expect(reloaded.name).toBe('Kitty')
+    expect(reloaded.pluginConfigs).toBeUndefined()
+  })
+
+  it('saveSlice mirror leaves the out-of-slice field alive', async () => {
+    const preset = await store.create('Kitty', makeSlice(), undefined, blob())
+    const updated = await store.saveSlice(preset.id, makeSlice(2.5))
+    expect(updated.scale).toBe(2.5)
+    expect(updated.pluginConfigs).toEqual(blob())
+    const onDisk = JSON.parse(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8'))
+    expect(onDisk.pluginConfigs).toEqual(blob())
+    // The unchanged-slice skip also never strips it: no write, same bytes.
+    const before = await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')
+    await store.saveSlice(preset.id, makeSlice(2.5))
+    expect(await readFile(join(dir, 'pets', `${preset.id}.json`), 'utf8')).toBe(before)
   })
 })
 

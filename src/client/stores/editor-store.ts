@@ -49,7 +49,7 @@ import {
   type UploadedAsset,
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
-import { confirmDialog } from '../dialog-queue'
+import { confirmDialog, promptDialog } from '../dialog-queue'
 import { STATE_LABELS } from '../settings/state-labels'
 
 /** The API surface the store needs; the default adapter hits the real HTTP API. */
@@ -121,9 +121,17 @@ export type EditorStatus = 'loading' | 'ready' | 'error'
 export type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 export type NoticeKind = 'info' | 'warn' | 'error'
 
+/**
+ * §3.3: a notice may offer one shortcut action next to its message. Kept as
+ * a declarative id (the NoticeBar maps it to the store call) so the snapshot
+ * stays plain data. Currently only the dirty gate's lossless exit uses one.
+ */
+export type NoticeAction = 'save-draft-as-new-pet'
+
 export interface EditorNotice {
   kind: NoticeKind
   text: string
+  action?: NoticeAction
 }
 
 export interface EditorSnapshot {
@@ -651,7 +659,7 @@ export class EditorStore {
       configRevision: this.snapshot.configRevision + 1,
       saveState: this.saveInFlight ? 'saving' : 'dirty',
       saveError: null,
-      notice: { kind: 'info', text: '挂载已并入当前草稿，点击「保存修改」后生效。' },
+      notice: { kind: 'info', text: '挂载已并入当前草稿，保存后生效。' },
     })
   }
 
@@ -702,21 +710,23 @@ export class EditorStore {
   // --- §12 宠物包 (pet package) ---------------------------------------------
 
   /**
-   * §12 宠物包 export: the ACTIVE preset as a zip download. Only a stored
-   * pet can be exported — an unsaved config has no preset to package, so the
-   * guard is the same "select a pet first" warn as the other identity ops.
-   * The zip reflects the SAVED preset (a dirty draft is not packaged).
+   * §12 宠物包 export: a stored preset as a zip download. The default target
+   * is the ACTIVE preset; the manage list (§2.4) passes an explicit id to
+   * export a NON-active one — either way only a stored pet can be packaged,
+   * so an unnamed config with no active pet gets the same "select a pet
+   * first" warn as the other identity ops. The zip reflects the SAVED preset
+   * (a dirty draft is not packaged).
    */
-  async exportPetPackage(): Promise<boolean> {
+  async exportPetPackage(id?: string): Promise<boolean> {
     if (this.disposed || this.snapshot.status !== 'ready') return false
-    const activePetId = this.snapshot.config?.activePetId ?? null
-    if (activePetId === null) {
-      this.emit({ notice: { kind: 'warn', text: '当前是未保存配置，选中一只宠物后再导出。' } })
+    const petId = id ?? this.snapshot.config?.activePetId ?? null
+    if (petId === null) {
+      this.emit({ notice: { kind: 'warn', text: '当前是未命名配置，选中一只宠物后再导出。' } })
       return false
     }
     let data: ArrayBuffer
     try {
-      data = await this.api.exportPetPackage(activePetId)
+      data = await this.api.exportPetPackage(petId)
     } catch (error) {
       if (!this.disposed) this.emit({ notice: { kind: 'error', text: `导出宠物包失败：${describeError(error)}` } })
       return false
@@ -726,11 +736,11 @@ export class EditorStore {
       this.emit({ notice: { kind: 'warn', text: '当前环境不支持自动下载，宠物包已生成但未能保存。' } })
       return false
     }
-    const petName = this.snapshot.pets.find((pet) => pet.id === activePetId)?.name ?? activePetId
+    const petName = this.snapshot.pets.find((pet) => pet.id === petId)?.name ?? petId
     // Filesystem-hostile characters in a free-form pet name must not reach
     // anchor.download; strip them (the display name itself is untouched).
     // \p{Cc} covers the C0/C1 control characters without spelling them out.
-    const fileName = `pet-${petName.replace(/[\\/:*?"<>|\p{Cc}]/gu, '').trim() || activePetId}.zip`
+    const fileName = `pet-${petName.replace(/[\\/:*?"<>|\p{Cc}]/gu, '').trim() || petId}.zip`
     const blob = new Blob([data], { type: 'application/zip' })
     const url = URL.createObjectURL(blob)
     try {
@@ -824,7 +834,7 @@ export class EditorStore {
     if (this.disposed || this.snapshot.status !== 'ready') return false
     const activePetId = this.snapshot.config?.activePetId ?? null
     if (activePetId === null) {
-      this.emit({ notice: { kind: 'warn', text: '当前是未保存配置，选中一只宠物后再保存署名。' } })
+      this.emit({ notice: { kind: 'warn', text: '当前是未命名配置，选中一只宠物后再保存署名。' } })
       return false
     }
     try {
@@ -856,7 +866,11 @@ export class EditorStore {
     return this.createPet(name, 'current')
   }
 
-  /** Protect any unsaved character host-side, then create and apply a blank one. */
+  /**
+   * Create and apply a blank preset. Nothing is forked host-side — the dirty
+   * gate in preparePetAction is what protects an unsaved draft before this
+   * runs (from:'blank' creates no implicit preset; see the design doc §0.9).
+   */
   createPetBlank(name: string): Promise<boolean> {
     return this.createPet(name, 'blank')
   }
@@ -890,6 +904,21 @@ export class EditorStore {
       if (!this.disposed) this.emit({ notice: { kind: 'error', text: `另存宠物失败：${describeError(error)}` } })
       return false
     }
+  }
+
+  /**
+   * §3.3 dirty-gate exit (also the pet card's 另存草稿 button): ask for a
+   * name through the C2 prompt, then fork the CURRENT DRAFT into a new
+   * preset. The default name is «active name» 变体, or 新宠物 for an unnamed
+   * config. With no ModalHost mounted the prompt settles as cancelled.
+   */
+  async promptSaveDraftAsNewPet(): Promise<boolean> {
+    if (this.disposed || this.snapshot.config === null) return false
+    const active = this.snapshot.pets.find((pet) => pet.id === this.snapshot.config?.activePetId)
+    const initial = active === undefined ? '新宠物' : `${active.name} 变体`
+    const name = (await promptDialog({ title: '把当前配置（含未保存修改）另存为新宠物', initial }))?.trim()
+    if (name === undefined || name === '') return false
+    return this.saveDraftAsNewPet(name)
   }
 
   private async createPet(name: string, from: 'current' | 'blank'): Promise<boolean> {
@@ -958,7 +987,16 @@ export class EditorStore {
     if (this.disposed || this.snapshot.config === null) return false
     const touchesActive = target === undefined || target === this.snapshot.config.activePetId
     if (touchesActive && this.dirty) {
-      this.emit({ notice: { kind: 'warn', text: '有未保存修改，请先点击保存再操作宠物预设。' } })
+      // §3.3: a blocked entry names the exits and carries the lossless one as
+      // a notice action — the NoticeBar renders it as a 另存草稿为新宠物
+      // shortcut that forks the draft without saving or switching.
+      this.emit({
+        notice: {
+          kind: 'warn',
+          text: '有未保存修改——先保存，或「另存草稿为新宠物」保住它。',
+          action: 'save-draft-as-new-pet',
+        },
+      })
       return false
     }
     await this.saveChain

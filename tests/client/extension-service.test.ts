@@ -767,6 +767,54 @@ describe('extension service — snapshot enrichment (v1 widening)', () => {
   })
 })
 
+describe('extension service — snapshot activePetId (pluginConfigs P2)', () => {
+  it('carries the session config activePetId, null for unsaved edits, pre-boot and post-boot', async () => {
+    const context = setup()
+    setActivePetSession(context.session)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBeNull()
+    await boot(context)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBeNull()
+  })
+
+  it('reports the preset id of the booted config', async () => {
+    const context = setup((config) => {
+      config.activePetId = 'pet_maid'
+    })
+    setActivePetSession(context.session)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBe('pet_maid')
+    await boot(context)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBe('pet_maid')
+  })
+
+  it('a pet switch (config publish changing only activePetId) pushes an updated snapshot', async () => {
+    const context = setup((config) => {
+      config.activePetId = 'pet_a'
+    })
+    setActivePetSession(context.session)
+    await boot(context)
+    const seen: Array<StageSnapshot | null> = []
+    serviceUnsubscribers.push(petweenClientService.subscribeStage((snapshot) => seen.push(snapshot)))
+    expect(seen[seen.length - 1]?.activePetId).toBe('pet_a')
+
+    // The switch path (editor apply / package import / bare activePetId PUT)
+    // always lands as a hub config publish; updateConfig notifies at its end.
+    const next = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
+    next.activePetId = 'pet_b'
+    publish(context.hub, next, context.assets)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBe('pet_b')
+    expect(seen.some((snapshot) => snapshot?.activePetId === 'pet_b')).toBe(true)
+
+    // Clearing the active pet (unsaved edits again) propagates the same way.
+    const cleared = structuredClone(context.hub.getCurrent()?.config) as PetweenConfig
+    cleared.activePetId = null
+    publish(context.hub, cleared, context.assets)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(petweenClientService.getStageSnapshot()?.activePetId).toBeNull()
+    expect(seen[seen.length - 1]?.activePetId).toBeNull()
+  })
+})
+
 describe('extension service — isPlaying', () => {
   it('null without a session; quiet after boot', async () => {
     expect(petweenClientService.isPlaying()).toBeNull()

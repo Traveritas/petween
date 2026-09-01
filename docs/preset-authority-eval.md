@@ -223,8 +223,8 @@ physics 仓：**零改动**（只经 cordis 服务与 HTTP 消费，不触碰 co
 
 ### 6. 分阶段落地路径
 
-- **P1（主仓，格式 + 承载）**：§12 文档增量 → manifest 校验 → `PetPreset.pluginConfigs` + `toPreset` → 导入存记录/响应/report 携带 namespaces → 导出从记录携带。验收：含 blob 的 zip 导出→导入→记录逐字段一致；旧构建导入新包静默忽略（兼容用例）。
-- **P2（physics 仓 + 主仓 additive  widening）**：StageSnapshot 加 `activePetId`（additive，version 1 不动）；physics client 拉取 → remap → 确认卡片 → 自有 PUT 应用；真机走查「分享含 physics 配置的女仆包 → 接收方确认 → 重力生效」。验收：physics 侧新用例 + 真机。
+- **P1（主仓，格式 + 承载）【已落地 2026-08-31】**：§12 文档增量 → manifest 校验 → `PetPreset.pluginConfigs` + `toPreset` → 导入存记录/响应/report 携带 namespaces → 导出从记录携带。验收：含 blob 的 zip 导出→导入→记录逐字段一致；旧构建导入新包静默忽略（兼容用例）。
+- **P2（physics 仓 + 主仓 additive  widening）【已落地 2026-08-31】**：StageSnapshot 加 `activePetId`（additive，version 1 不动）；physics client 拉取 → remap → 确认卡片 → 自有 PUT 应用；真机走查「分享含 physics 配置的女仆包 → 接收方确认 → 重力生效」。验收：physics 侧新用例 + 真机。
 - **P3（可选，主仓）**：导出时收集 `collectSharedPluginConfigs()` 能力 + 编辑器导出流程接线；缺席时落回记录快照。
 
 ### 7. 开放问题（待拍板）【2026-08-31 已拍板：用户授权主代理代定，全按推荐】

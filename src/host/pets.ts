@@ -17,12 +17,12 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { PetweenConfig, PetAttribution, PetPreset, PetSlice } from '../core/types'
+import type { PetweenConfig, PetAttribution, PetPluginConfigs, PetPreset, PetSlice } from '../core/types'
 import { POSE_KEYS } from '../core/types'
 import { createWriteLock, writeJsonAtomic, type WriteLock } from './storage'
 import { repairConfig } from './validation'
 
-export type { PetAttribution, PetPreset, PetSlice } from '../core/types'
+export type { PetAttribution, PetPluginConfigEntry, PetPluginConfigs, PetPreset, PetSlice } from '../core/types'
 
 /**
  * Attribution bounds (pet-package §12): all fields optional, strings bounded,
@@ -176,6 +176,91 @@ function normalizeAttribution(raw: unknown): PetAttribution | undefined {
   return result.ok && Object.keys(result.attribution).length > 0 ? result.attribution : undefined
 }
 
+/**
+ * pluginConfigs bounds (pet-package §12): companion-plugin blobs stay small
+ * shareable snippets — the per-config cap mirrors the companions' own PUT
+ * body limits (16KiB), the rest keeps manifests and preset files lean.
+ */
+export const PLUGIN_CONFIG_LIMITS = {
+  entries: 8,
+  pluginIdLength: 64,
+  configBytes: 16 * 1024,
+  totalBytes: 64 * 1024,
+} as const
+
+/** Companion plugin ids are cordis names: lowercase, dash-separated. */
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/
+
+export type PluginConfigsValidation = { ok: true; pluginConfigs: PetPluginConfigs } | { ok: false; errors: string[] }
+
+/** Serialized byte size of a JSON value; null when the value is not JSON-serializable. */
+function jsonByteSize(value: unknown): number | null {
+  try {
+    const text = JSON.stringify(value)
+    return text === undefined ? null : Buffer.byteLength(text, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Validate a FULL pluginConfigs object (package import, record load): the
+ * envelope is checked field-wise — plugin id charset/count, a present and
+ * JSON-serializable `config` per entry, the remap shape, and the byte caps.
+ * The total cap sizes the NORMALIZED block (what actually gets persisted —
+ * unknown entry fields are dropped here) and only when the entries passed.
+ * The `config` CONTENT is never validated or interpreted (§12: capability,
+ * not policy — the schema belongs to the companion plugin).
+ */
+export function validatePluginConfigs(raw: unknown): PluginConfigsValidation {
+  if (!isRecord(raw)) return { ok: false, errors: ['pluginConfigs must be an object'] }
+  const errors: string[] = []
+  if (Object.keys(raw).length > PLUGIN_CONFIG_LIMITS.entries) errors.push(`pluginConfigs exceeds ${PLUGIN_CONFIG_LIMITS.entries} entries`)
+  const pluginConfigs: PetPluginConfigs = {}
+  for (const [id, value] of Object.entries(raw)) {
+    if (!PLUGIN_ID_RE.test(id) || id.length > PLUGIN_CONFIG_LIMITS.pluginIdLength) {
+      errors.push(`pluginConfigs.${id}: plugin id must match ^[a-z0-9][a-z0-9-]*$ and be ≤${PLUGIN_CONFIG_LIMITS.pluginIdLength} characters`)
+      continue
+    }
+    if (!isRecord(value)) {
+      errors.push(`pluginConfigs.${id}: expected an object with a "config" field`)
+      continue
+    }
+    if (!('config' in value) || value.config === undefined) {
+      errors.push(`pluginConfigs.${id}.config: required (any JSON value)`)
+      continue
+    }
+    const configBytes = jsonByteSize(value.config)
+    if (configBytes === null) {
+      errors.push(`pluginConfigs.${id}.config must be JSON-serializable`)
+      continue
+    }
+    if (configBytes > PLUGIN_CONFIG_LIMITS.configBytes) {
+      errors.push(`pluginConfigs.${id}.config exceeds ${PLUGIN_CONFIG_LIMITS.configBytes / 1024}KiB serialized`)
+      continue
+    }
+    const remap = value.animationIdRemap
+    if (remap !== undefined && (!isRecord(remap) || Object.values(remap).some((mapped) => typeof mapped !== 'string'))) {
+      errors.push(`pluginConfigs.${id}.animationIdRemap must be a string→string map`)
+      continue
+    }
+    pluginConfigs[id] = { config: value.config, ...(remap === undefined ? {} : { animationIdRemap: remap as Record<string, string> }) }
+  }
+  if (errors.length === 0) {
+    const totalBytes = jsonByteSize(pluginConfigs)
+    if (totalBytes !== null && totalBytes > PLUGIN_CONFIG_LIMITS.totalBytes) {
+      errors.push(`pluginConfigs exceeds ${PLUGIN_CONFIG_LIMITS.totalBytes / 1024}KiB serialized`)
+    }
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, pluginConfigs }
+}
+
+/** Load-time tolerance: drop unusable pluginConfigs instead of failing. */
+function normalizePluginConfigs(raw: unknown): PetPluginConfigs | undefined {
+  const result = validatePluginConfigs(raw)
+  return result.ok && Object.keys(result.pluginConfigs).length > 0 ? result.pluginConfigs : undefined
+}
+
 export type PetErrorCode = 'INVALID_PRESET' | 'NOT_FOUND'
 
 /** Pet-store failure with a stable code; the routes layer maps it to HTTP. */
@@ -308,6 +393,11 @@ function toPreset(raw: Record<string, unknown>): PetPreset {
   }
   const attribution = normalizeAttribution(raw.attribution)
   if (attribution !== undefined) preset.attribution = attribution
+  // §12: carried explicitly — toPreset whitelists known keys, so without this
+  // line a record's pluginConfigs would silently vanish on the next read
+  // (and with it on the next saveSlice mirror write).
+  const pluginConfigs = normalizePluginConfigs(raw.pluginConfigs)
+  if (pluginConfigs !== undefined) preset.pluginConfigs = pluginConfigs
   return preset
 }
 
@@ -370,11 +460,12 @@ export class PetsStore {
   }
 
   /**
-   * Create a preset from a name, a raw slice (repaired field-wise) and an
-   * optional pre-validated attribution (pet-package import writes the whole
-   * record — attribution included — in ONE atomic file, §12).
+   * Create a preset from a name, a raw slice (repaired field-wise) and the
+   * optional pre-validated attribution / pluginConfigs (pet-package import
+   * writes the whole record — slice, attribution and companion blobs — in
+   * ONE atomic file, §12).
    */
-  create(name: unknown, slice: unknown, attribution?: PetAttribution): Promise<PetPreset> {
+  create(name: unknown, slice: unknown, attribution?: PetAttribution, pluginConfigs?: PetPluginConfigs): Promise<PetPreset> {
     return this.enqueue(async () => {
       const now = this.now()
       const preset: PetPreset = {
@@ -385,6 +476,7 @@ export class PetsStore {
         updatedAt: now,
       }
       if (attribution !== undefined && Object.keys(attribution).length > 0) preset.attribution = attribution
+      if (pluginConfigs !== undefined && Object.keys(pluginConfigs).length > 0) preset.pluginConfigs = pluginConfigs
       await writeJsonAtomic(this.filePathFor(preset.id), preset)
       return preset
     })

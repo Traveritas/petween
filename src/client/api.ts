@@ -11,7 +11,8 @@
  * - GET    /api/petween/animations     → { customs, warnings } (V1.1)
  * - PUT    /api/petween/animations/<id>    → { animation } | 400 INVALID_ANIMATION / ID_MISMATCH
  * - DELETE /api/petween/animations/<id>    → { deleted } | 404 | 409 ANIMATION_IN_USE
- * - GET/POST /api/petween/pets and GET/PUT/DELETE/apply subpaths (V1.1 presets)
+ * - GET/POST /api/petween/pets and GET/PUT/DELETE/apply subpaths (V1.1 presets;
+ *   DELETE of the active pet → 409 ACTIVE_PET, C5)
  * - GET    /api/petween/pets/<id>/export → application/zip (§12 pet package)
  * - POST   /api/petween/pets/import      → { pet, config, report } | 400 PACK_INVALID (§12)
  * - PUT    /api/petween/pets/<id>        → { pet } (partial {name?, attribution?})

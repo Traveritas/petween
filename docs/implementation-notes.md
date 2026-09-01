@@ -911,3 +911,32 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **G1 once 时间线末帧语义 → 拍板维持现状**。运行时不改(scheduler 收尾 cancel 段动画、末帧不保留);内容侧约定「once / interaction 定义的末帧应回归属性默认值」写入 motion-format.md §5;backlog §8 记录重开条件(出现真实需要末帧滞留的自定义内容)。
 - **G2 getMeta 死代码 → 拍板删除**。`src/client/api.ts` 的 `MetaResponse`/`getMeta` 与 `META_URL` 常量移除(host `GET /meta` 端点保留,属公共能力发现 API;有真实调用方再加客户端助手)。全仓 950 用例与 typecheck 复验不变。
 - **G3 physics 滑动动画 interrupt → 拍板做成配置项**。扁平字段 `slideInterrupt: boolean`(默认 true 保持现状,与 slideAnimationId 对称、不做 section 重构):client config 类型/DEFAULT_CONFIG、host 校验(strict 拒非 boolean、lenient 回落 true、旧文件缺席走默认)、throw-controller 透传配置值、设置卡片滑动区新增开关(选「不播放」时禁用,镜像 bounce 惯例;`Toggle` 控件补 disabled 对齐姊妹控件)、physics README 配置表同步。physics 9 文件 / **135 用例**全绿。
+
+## 收尾批 + CI 修复(2026-08-31,四组并行)
+
+### CI 修复(两仓,已推送)
+
+评审修复推送后发现 CI 红:用户贴的 typecheck 报错来自旧 commit(0325d8a 引入、评审轮已修);新 commit 暴露出更早就存在的 Node 20 暗病——tsdown 0.22 在 Node ≥22 用原生 type stripping 加载 tsdown.config.ts,Node 20 回退 `unrun`(optional peer 未安装;装上后其内部又用了 Node 22+ 的 Promise.withResolvers)。tsdown 0.22 的 engines 实为 `^22.18.0 || >=24.11.0`,事实上放弃了 Node 20。修法:两仓补 `unrun` devDep + workflow 的 build/pack 步骤门控到 Node ≥22(typecheck/tests 保留 Node 20 作运行时兼容信号) + README Node 要求改 ≥22.18。两仓三矩阵腿全绿。另:CI 加 `pnpm run lint` 步骤(physics 仓补齐 oxlint 配套,基线 4 警告——与主仓同款的 listener 扇出防御性 spread,有意保留)。
+
+### 收尾批
+
+- **routes.ts 领域逻辑下沉**:`applyPatchFor`/`expandPetSwitchPatch` → `pets.ts`、`mountsStatesPatch` → `packs.ts`,纯搬家零行为变化(routes 1086→1028 行);editor-store 拆分仍排队。
+- **上传校验常量单一事实源**:新增 `src/core/assets-contract.ts`(MIME `as const` 数组派生类型联合——漂移构造上不可能、10MB/60MB/4096、accept 派生串、`isAssetMimeType` guard),assets.ts/pet-package.ts/editor-store.ts/controls.tsx/types.ts 五处硬编码全改 import;包炸弹护栏与运动像素边界有意不收拢(不同旋钮)。
+- **physics E2**:config-hub `update()` 加 `updateSeq` 代际守卫,过期响应(含 saving/saveError)整体丢弃,+2 用例。
+- **测试加固两条**:preview-demo-definition 的 doc 正则容忍 CRLF(Windows autocrlf 下 git 操作会把工作树转 CRLF,CI Linux 不受影响故此前不可见);editor-entry 整编辑器启动测试 timeout 提到 20s(jsdom 全量启动在高负载机器上超 5s 默认值,本地 flaky)。
+
+### 验证
+
+主插件 **51 文件 / 950 用例**全绿、typecheck 干净、lint 10 警告基线;physics **9 文件 / 137 用例**全绿(+E2 两条)、typecheck 干净、lint 4 警告基线。
+
+## C2 模态化 + C5(方案a) 落地、预设权威化评估文档(2026-08-31 第三批)
+
+用户真机走查反馈「循环动画参数热更新仍无效、减少动态正常」——排查结论:**代码链路在 HEAD 完好**(store  revision→LivePreview effect→PreviewSession clone 后 states-JSON diff→refreshAmbient→AmbientEngine 值键逐通道重启,回归测试覆盖),症状指向用户跑的是 2026-08-28 旧构建;本轮两仓产物已重建,待用户重启 dsh web 复验。
+
+- **C2 编辑器弹窗模态化**:新增 `src/client/dialog-queue.ts`(React-free 模态队列;无宿主挂载按取消结案、宿主卸载排空挂起请求——破坏性流程绝不在无人应答的确认上继续)+ `src/client/settings/modals.tsx`(ModalHost:Enter/Escape/autofocus/遮罩);8 处原生 prompt/confirm 调用点全部替换(AnimationLibrary 4、PetweenSettings 3、editor-store 导入确认 1),PetweenSettings 四处返回与 PetweenCard 各自挂载宿主(两处活在不同浏览上下文);src 下不再有任何 window.prompt/confirm。行为变化一处:headless 下 importPetPackage 遇脏草稿从「跳过确认直接导入」变为「按取消中止」(安全方向)。测试:原生弹窗 mock 全部改走模态 UI,各流程补取消/确认双分支,净 +1 用例。
+- **C5 方案 a 禁止删除生效宠物**:host DELETE 对 activePetId 返回 409 `ACTIVE_PET`(删除旧的「清空 activePetId 保留配置」分支);宠物卡删除按钮对生效宠物禁用+提示;describeError 补文案。**遗留 UX 缺口登记 backlog**:卡片删除按钮按构造只能作用于生效宠物→方案 a 下 UI 删除入口全无,待拍板是否做非生效宠物删除目标。内部流程核实:包导入回滚走 store 层 deletePet 绕路由守卫且无冲突。
+- **评估文档产出**:`docs/preset-authority-eval.md`(约 28KB)——评估一:预设权威化翻转可行,难点在 client 草稿语义而非 host,推荐形态 (i)「纯预设权威+首跑自动建默认宠物」(config.json 收缩为全局文档、GET /config 变物化视图),四阶段落地+6 个待拍板开放问题;评估二:宠物包携带附属插件配置推荐「(b) 存储+(a) 式应用」——opaque `pluginConfigs` 存宠物记录(能力,落自己目录零解释),附属经 HTTP 拉取、用户确认后自行应用(策略归附属),与评估一互不阻塞可先行,含 §12 格式增量草案+4 个开放问题。
+
+### 验证
+
+主插件 **51 文件 / 951 用例**全绿(净 +1),typecheck 干净,lint 10 警告基线,build 成功;physics 产物一并重建(含 G3/E2/卡片修复)。真机复验项:Live Preview ambient 参数热更新、模态框各流程、生效宠物删除禁用。

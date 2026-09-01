@@ -1036,17 +1036,32 @@ describe('/api/petween/pets (V1.1 pet presets)', () => {
     expect((await empty.json()).error.code).toBe('INVALID_PRESET')
   })
 
-  it('DELETE removes the preset; deleting the active one clears only activePetId', async () => {
+  it('DELETE removes an inactive preset but refuses the ACTIVE one with 409 ACTIVE_PET (C5)', async () => {
     await seedConfig()
     const { pet } = (await (await postPets({ name: 'Kitty', from: 'current' })).json()) as { pet: PetPreset }
+    // The active pet is undeletable: the preset, the pointer and the live
+    // config all survive untouched (the old "clear only activePetId" landing
+    // spot is gone — switch to another pet first).
+    const refused = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
+    expect(refused.status).toBe(409)
+    expect(await refused.json()).toEqual({ error: 'ACTIVE_PET' })
+    let listed = await (await fetch(`${base}/api/petween/pets`)).json()
+    expect(listed.pets.map((candidate: PetPreset) => candidate.id)).toEqual([pet.id])
+    expect(listed.activePetId).toBe(pet.id)
+    let got = await (await fetch(`${base}/api/petween/config`)).json()
+    expect(got.config.activePetId).toBe(pet.id)
+    expect(got.config.global.scale).toBe(1.5)
+
+    // Switch away (detach); the now-inactive preset deletes normally and the
+    // config content stays — the pet keeps showing as unsaved edits.
+    await putConfig({ activePetId: null })
     const res = await fetch(`${base}/api/petween/pets/${pet.id}`, { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ deleted: pet.id })
-    const listed = await (await fetch(`${base}/api/petween/pets`)).json()
+    listed = await (await fetch(`${base}/api/petween/pets`)).json()
     expect(listed.pets).toEqual([])
     expect(listed.activePetId).toBeNull()
-    // the config content stays: the pet keeps showing as unsaved edits
-    const got = await (await fetch(`${base}/api/petween/config`)).json()
+    got = await (await fetch(`${base}/api/petween/config`)).json()
     expect(got.config.global.scale).toBe(1.5)
     expect(got.config.poses.idle.assetId).toBe('0123456789abcdef')
     expect(got.config.activePetId).toBeNull()

@@ -29,6 +29,7 @@ import type {
 } from '../../motion/animation-definition'
 import { isCustomAnimationId, validateAnimationDefinition } from '../../motion/animation-definition'
 import { MOTION_PROPERTIES } from '../../motion/motion-properties'
+import { confirmDialog } from '../dialog-queue'
 import { TimelineEditor } from '../timeline/TimelineEditor'
 import { addTrack, validateTimelineDraft } from '../timeline/timeline-model'
 import { PetRenderer } from '../overlay/PetRenderer'
@@ -225,9 +226,14 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   const draftDirty =
     draft !== null && selected !== undefined && draftDivergesFromBaseline(selected, evaluation?.definition ?? null)
 
-  /** Refuse to silently discard unsaved timeline edits; false = aborted. */
-  const guardUnsavedDraft = (): boolean =>
-    !draftDirty || window.confirm('当前动画有未保存的修改，继续将丢弃这些修改。')
+  /**
+   * Refuse to silently discard unsaved timeline edits; false = aborted. The
+   * C2 modal answers via a promise (the native confirm is dead in the IAB),
+   * so this is async — list clicks keep a synchronous fast path through
+   * selectWithGuard instead.
+   */
+  const guardUnsavedDraft = async (): Promise<boolean> =>
+    !draftDirty || (await confirmDialog({ message: '当前动画有未保存的修改，继续将丢弃这些修改。' }))
 
   // Page-close protection for the timeline draft, mirroring PetweenSettings'
   // config-draft guard: unsaved edits may only leave through an explicit
@@ -251,6 +257,20 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     setTimelineErrors(validateTimelineDraft(definition.kind, definition.tracks, definition.events ?? []))
     setJsonDraft(null)
     setPreviewStrength(definition.parameters?.strength?.default ?? 1)
+  }
+
+  /**
+   * List clicks keep their synchronous fast path (a clean selection must not
+   * defer a microtask); only a dirty draft detours through the modal guard.
+   */
+  const selectWithGuard = (definition: AnimationDefinition): void => {
+    if (!draftDirty) {
+      applySelection(definition)
+      return
+    }
+    void guardUnsavedDraft().then((ok) => {
+      if (ok) applySelection(definition)
+    })
   }
 
   const patchDraft = (patch: Partial<DraftState>): void => {
@@ -302,7 +322,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   }
 
   const handleNew = async (): Promise<void> => {
-    if (!guardUnsavedDraft()) return
+    if (!(await guardUnsavedDraft())) return
     setBusy(true)
     try {
       const definition = newAnimationTemplate()
@@ -339,7 +359,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     // Unlike switching/deleting, a clone KEEPS the unsaved edits (they ride
     // into the copy), so it gets its own accurate wording instead of the
     // discard guard.
-    if (draftDirty && !window.confirm('当前动画有未保存的修改，副本将包含这些修改。是否继续？')) return
+    if (draftDirty && !(await confirmDialog({ message: '当前动画有未保存的修改，副本将包含这些修改。是否继续？' }))) return
     setBusy(true)
     try {
       const clone: AnimationDefinition = {
@@ -357,8 +377,8 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
     if (selected === undefined || readOnly) return
     // Two explicit gates: the unsaved-edit warning first (the edits die with
     // the animation), then the irreversible delete itself.
-    if (draftDirty && !window.confirm('当前动画有未保存的修改，继续将丢弃这些修改。')) return
-    if (!window.confirm(`确认删除动画「${draft?.name ?? selected.name}」？此操作不可恢复。`)) return
+    if (draftDirty && !(await confirmDialog({ message: '当前动画有未保存的修改，继续将丢弃这些修改。' }))) return
+    if (!(await confirmDialog({ message: `确认删除动画「${draft?.name ?? selected.name}」？此操作不可恢复。` }))) return
     setBusy(true)
     try {
       if (await store.deleteAnimation(selected.id)) {
@@ -519,9 +539,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 className={
                   definition.id === selectedId ? `${styles.stateItem} ${styles.stateItemSelected}` : styles.stateItem
                 }
-                onClick={() => {
-                  if (guardUnsavedDraft()) applySelection(definition)
-                }}
+                onClick={() => selectWithGuard(definition)}
               >
                 <span>{definition.name}</span>
                 {definition.id === selectedId && draftDirty ? (
@@ -541,9 +559,7 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
                 className={
                   definition.id === selectedId ? `${styles.stateItem} ${styles.stateItemSelected}` : styles.stateItem
                 }
-                onClick={() => {
-                  if (guardUnsavedDraft()) applySelection(definition)
-                }}
+                onClick={() => selectWithGuard(definition)}
               >
                 <span>{definition.name}</span>
                 {definition.id === selectedId && draftDirty ? (

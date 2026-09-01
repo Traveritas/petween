@@ -4,6 +4,7 @@
  * Pure data only: no runtime, no DSH, no DOM. Everything here must stay
  * JSON-serializable (Motion Pack forward compatibility, spec §8.18).
  */
+import type { AssetMimeType } from './assets-contract'
 
 /** The six user-facing pose slots (spec §7.1). */
 export type PoseKey = 'idle' | 'thinking' | 'working' | 'waiting' | 'success' | 'error'
@@ -20,7 +21,7 @@ export type ActivityMode = 'thinking' | 'working' | 'coding' | 'command'
 export interface AssetMeta {
   id: string
   fileName: string
-  mimeType: 'image/png' | 'image/webp' | 'image/jpeg'
+  mimeType: AssetMimeType
   width: number
   height: number
   sizeBytes: number

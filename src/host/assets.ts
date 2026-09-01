@@ -16,12 +16,11 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { AssetMeta } from '../core/types'
+import { MAX_ASSET_BYTES, MAX_ASSET_DIMENSION, MAX_TOTAL_ASSET_BYTES } from '../core/assets-contract'
 import { createWriteLock, readJsonFile, writeJsonAtomic, type WriteLock } from './storage'
 import { validateAssetId } from './validation'
 
-export const MAX_ASSET_BYTES = 10 * 1024 * 1024 // spec §20
-export const MAX_TOTAL_ASSET_BYTES = 60 * 1024 * 1024 // spec §20
-export const MAX_ASSET_DIMENSION = 4096 // spec §20
+export { MAX_ASSET_BYTES, MAX_ASSET_DIMENSION, MAX_TOTAL_ASSET_BYTES }
 
 export type AssetErrorCode =
   | 'PAYLOAD_TOO_LARGE'

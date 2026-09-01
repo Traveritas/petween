@@ -242,6 +242,20 @@ const libraryControlRow = (labelText: string): HTMLLabelElement => {
   return label
 }
 
+/**
+ * The C2 editor modal (settings/modals.tsx) renders at the PetweenSettings
+ * root — OUTSIDE the library section — at most one dialog at a time.
+ */
+const modalDialog = (): HTMLElement | null => container.querySelector('[role="dialog"]')
+
+const modalButton = (text: string): HTMLButtonElement => {
+  const button = [...(modalDialog()?.querySelectorAll('button') ?? [])].find(
+    (candidate) => candidate.textContent === text,
+  )
+  if (button === undefined) throw new Error(`modal button missing: ${text}`)
+  return button as HTMLButtonElement
+}
+
 /** React reads select edits through the native 'change' event. */
 const choose = (select: HTMLSelectElement, value: string): void => {
   const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
@@ -640,12 +654,13 @@ describe('AnimationLibrary — editing, validation, save', () => {
         config.states.thinking.enter.animationId = 'user:t1'
       },
     })
-    vi.stubGlobal('confirm', vi.fn(() => true)) // the delete confirmation
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     await act(async () => {
       libraryButton('删除').click()
     })
+    // the irreversible-delete confirm fires first; accept it through the modal
+    await act(async () => modalButton('确定').click())
     expect(mocks.deleteAnimation).not.toHaveBeenCalled()
     expect(container.textContent).toContain('无法删除')
     expect(container.textContent).toContain('思考')
@@ -797,27 +812,26 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
 
   it('a built-in entry edited for audition also counts as dirty and is guarded', async () => {
     const { api } = makeApi()
-    const confirm = vi.fn().mockReturnValueOnce(false)
-    vi.stubGlobal('confirm', confirm)
     await render(api, true)
     act(() => libraryButton('Comic Pop').click())
     renameDraft('Comic Pop tweaked')
     expect(libraryButton('Comic Pop').textContent).toContain('●')
 
-    act(() => libraryButton('Jelly').click()) // declined: the tweaks survive
-    expect(confirm).toHaveBeenCalledTimes(1)
+    act(() => libraryButton('Jelly').click()) // the discard guard opens as a modal
+    expect(modalDialog()?.textContent).toContain('未保存的修改')
+    await act(async () => modalButton('取消').click()) // declined: the tweaks survive
+    expect(modalDialog()).toBeNull()
     expect(nameInput().value).toBe('Comic Pop tweaked')
 
-    confirm.mockReturnValueOnce(true)
-    act(() => libraryButton('Jelly').click()) // accepted: the draft resets
+    act(() => libraryButton('Jelly').click())
+    await act(async () => modalButton('确定').click()) // accepted: the draft resets
+    expect(modalDialog()).toBeNull()
     expect(nameInput().value).toBe('Jelly')
     expect(libraryButton('Comic Pop').textContent).not.toContain('●')
   })
 
   it('新建空白 and 克隆为自定义 guard the dirty draft', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
-    const confirm = vi.fn().mockReturnValue(false)
-    vi.stubGlobal('confirm', confirm)
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     renameDraft('Renamed')
@@ -825,21 +839,21 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
     await act(async () => {
       libraryButton('新建空白').click()
     })
-    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(modalDialog()?.textContent).toContain('未保存的修改')
+    await act(async () => modalButton('取消').click())
     expect(mocks.putAnimation).not.toHaveBeenCalled()
 
     await act(async () => {
       libraryButton('克隆为自定义').click()
     })
-    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(modalDialog()?.textContent).toContain('副本将包含这些修改')
+    await act(async () => modalButton('取消').click())
     expect(mocks.putAnimation).not.toHaveBeenCalled()
     expect(nameInput().value).toBe('Renamed') // still on the dirty draft
   })
 
   it('克隆 keeps the unsaved edits and says the copy will include them', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
-    const confirm = vi.fn().mockReturnValueOnce(true)
-    vi.stubGlobal('confirm', confirm)
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     renameDraft('My Pop v2')
@@ -848,8 +862,8 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
       libraryButton('克隆为自定义').click()
     })
     // not the discard wording: the edits ride into the copy
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(confirm.mock.calls[0][0]).toContain('副本将包含这些修改')
+    expect(modalDialog()?.textContent).toContain('副本将包含这些修改')
+    await act(async () => modalButton('确定').click())
     expect(mocks.putAnimation).toHaveBeenCalledTimes(1)
     const clone = mocks.putAnimation.mock.calls[0][0] as AnimationDefinition
     expect(clone.name).toBe('My Pop v2 副本')
@@ -900,47 +914,49 @@ describe('AnimationLibrary — unsaved draft protection (UX-2)', () => {
 
   it('删除 asks for an irreversible confirmation naming the animation', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
-    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
-    vi.stubGlobal('confirm', confirm)
     await render(api, true)
     act(() => libraryButton('My Pop').click())
 
     await act(async () => {
-      libraryButton('删除').click() // declined
+      libraryButton('删除').click()
     })
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(confirm.mock.calls[0][0]).toContain('My Pop')
-    expect(confirm.mock.calls[0][0]).toContain('不可恢复')
+    expect(modalDialog()?.textContent).toContain('My Pop')
+    expect(modalDialog()?.textContent).toContain('不可恢复')
+    await act(async () => modalButton('取消').click()) // declined
+    expect(modalDialog()).toBeNull()
     expect(mocks.deleteAnimation).not.toHaveBeenCalled()
 
     await act(async () => {
-      libraryButton('删除').click() // accepted
+      libraryButton('删除').click()
     })
+    await act(async () => modalButton('确定').click()) // accepted
+    expect(modalDialog()).toBeNull()
     expect(mocks.deleteAnimation).toHaveBeenCalledWith('user:t1')
     expect(librarySection().textContent).not.toContain('My Pop')
   })
 
   it('deleting a dirty draft requires the discard AND the delete confirmation', async () => {
     const { api, mocks } = makeApi({ customs: [transitionCustom('user:t1', 'My Pop')] })
-    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true).mockReturnValueOnce(true)
-    vi.stubGlobal('confirm', confirm)
     await render(api, true)
     act(() => libraryButton('My Pop').click())
     renameDraft('Renamed')
 
     await act(async () => {
-      libraryButton('删除').click() // discard declined → nothing happens
+      libraryButton('删除').click()
     })
-    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(modalDialog()?.textContent).toContain('未保存的修改')
+    await act(async () => modalButton('取消').click()) // discard declined → nothing happens
+    expect(modalDialog()).toBeNull()
     expect(mocks.deleteAnimation).not.toHaveBeenCalled()
     expect(nameInput().value).toBe('Renamed')
 
     await act(async () => {
-      libraryButton('删除').click() // discard + delete accepted
+      libraryButton('删除').click()
     })
-    expect(confirm).toHaveBeenCalledTimes(3)
-    expect(confirm.mock.calls[1][0]).toContain('未保存的修改')
-    expect(confirm.mock.calls[2][0]).toContain('不可恢复')
+    await act(async () => modalButton('确定').click()) // discard accepted → second gate
+    expect(modalDialog()?.textContent).toContain('不可恢复')
+    await act(async () => modalButton('确定').click()) // delete accepted
+    expect(modalDialog()).toBeNull()
     expect(mocks.deleteAnimation).toHaveBeenCalledWith('user:t1')
   })
 })

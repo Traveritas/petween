@@ -730,3 +730,50 @@
 .cardLink:hover {
   background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
 }
+
+/* --- C2 editor modals (modals.tsx; replaces window.prompt/confirm) --- */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(360px, calc(100vw - 48px));
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, #ffffff);
+  color: var(--dsw-alias-label-primary, #111827);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.18);
+}
+
+.modalMessage {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.modalField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modalTitle {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

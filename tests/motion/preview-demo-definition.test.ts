@@ -19,7 +19,9 @@ const docPath = fileURLToPath(new URL('../../docs/motion-format.md', import.meta
 /** The §10 slam-land example block from the docs (the only block using that id). */
 function docExample(): Record<string, unknown> {
   const markdown = readFileSync(docPath, 'utf8')
-  const blocks = [...markdown.matchAll(/```json\n([\s\S]*?)```/g)].map((match) => match[1]!)
+  // Tolerate CRLF checkouts (Windows core.autocrlf): the fence regex must not
+  // care about line-ending style; JSON.parse already ignores \r.
+  const blocks = [...markdown.matchAll(/```json\r?\n([\s\S]*?)```/g)].map((match) => match[1]!)
   const slam = blocks.find((block) => block.includes('"user:slam-land"'))
   if (slam === undefined) throw new Error('motion-format.md no longer contains the slam-land example')
   return JSON.parse(slam) as Record<string, unknown>

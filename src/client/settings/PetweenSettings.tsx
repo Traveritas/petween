@@ -32,6 +32,7 @@ import type {
 import { POSE_KEYS } from '../../core/types'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { configHub } from '../config-hub'
+import { confirmDialog, promptDialog } from '../dialog-queue'
 import type { PetStage } from '../overlay/pet-stage'
 import { PreviewSession } from '../preview-session'
 import {
@@ -44,6 +45,7 @@ import { AmbientEditor } from './AmbientEditor'
 import { AnimationLibrary } from './AnimationLibrary'
 import { FileImportButton, NumberField, SelectRow, Slider, Toggle } from './controls'
 import { LivePreview } from './LivePreview'
+import { ModalHost } from './modals'
 import { PoseEditor } from './PoseEditor'
 import { StateList, STATE_LABELS } from './StateList'
 import { TransitionEditor } from './TransitionEditor'
@@ -123,12 +125,14 @@ const FLASH_POSE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
   const { snapshot, store } = props
   // UX: 撤回修改 drops the unsaved draft and returns to the last saved
-  // config — the same confirm pattern as pet deletion. Offered in the dirty
+  // config — the same confirm pattern as the animation guards (C2 modal; the
+  // native confirm is dead in the IAB). Offered in the dirty
   // AND error branches (a failed save may be exactly what the user wants to
   // give up on); disabled while a save is in flight (the PUT may still land).
   const revert = (): void => {
-    if (!window.confirm('放弃所有未保存的修改，恢复到上次保存的状态？')) return
-    void store.revertConfig()
+    void confirmDialog({ message: '放弃所有未保存的修改，恢复到上次保存的状态？' }).then((ok) => {
+      if (ok) void store.revertConfig()
+    })
   }
   const revertButton = (disabled: boolean): JSX.Element => (
     <button type="button" className={styles.button} disabled={disabled} onClick={revert}>
@@ -206,9 +210,40 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
   if (config === null) return <></>
   const active = snapshot.pets.find((pet) => pet.id === config.activePetId)
 
-  const askName = (title: string, initial: string): string | null => {
-    const value = window.prompt(title, initial)?.trim()
+  // C2: the name-asking goes through the in-page modal (the native prompt is
+  // dead in the IAB); the answers arrive asynchronously, so every button
+  // below is an async handler. Empty/blank input resolves to null = cancelled.
+  const askName = async (title: string, initial: string): Promise<string | null> => {
+    const value = (await promptDialog({ title, initial }))?.trim()
     return value === undefined || value === '' ? null : value
+  }
+
+  const saveDraftAs = async (): Promise<void> => {
+    const base = active === undefined ? '新宠物' : `${active.name} 变体`
+    const name = await askName('把当前配置（含未保存修改）另存为新宠物', base)
+    if (name !== null) await store.saveDraftAsNewPet(name)
+  }
+
+  const createCopy = async (): Promise<void> => {
+    const name = await askName('新建当前宠物的副本', active === undefined ? '新宠物' : `${active.name} 副本`)
+    if (name !== null) await store.createPetCurrent(name)
+  }
+
+  const createBlank = async (): Promise<void> => {
+    const name = await askName('新建空白宠物', '新宠物')
+    if (name !== null) await store.createPetBlank(name)
+  }
+
+  const renameActive = async (): Promise<void> => {
+    if (active === undefined) return
+    const name = await askName('重命名宠物', active.name)
+    if (name !== null) await store.renamePet(active.id, name)
+  }
+
+  const deleteActive = async (): Promise<void> => {
+    if (active === undefined) return
+    if (!(await confirmDialog({ message: `确认删除宠物「${active.name}」？此操作不可恢复。` }))) return
+    await store.deletePet(active.id)
   }
 
   return (
@@ -233,57 +268,33 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           </select>
         </label>
         <div className={styles.petActions}>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => {
-              const base = active === undefined ? '新宠物' : `${active.name} 变体`
-              const name = askName('把当前配置（含未保存修改）另存为新宠物', base)
-              if (name !== null) void store.saveDraftAsNewPet(name)
-            }}
-          >
+          <button type="button" className={styles.button} onClick={() => void saveDraftAs()}>
             另存草稿为新宠物
           </button>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => {
-              const name = askName('新建当前宠物的副本', active === undefined ? '新宠物' : `${active.name} 副本`)
-              if (name !== null) void store.createPetCurrent(name)
-            }}
-          >
+          <button type="button" className={styles.button} onClick={() => void createCopy()}>
             新建副本
           </button>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => {
-              const name = askName('新建空白宠物', '新宠物')
-              if (name !== null) void store.createPetBlank(name)
-            }}
-          >
+          <button type="button" className={styles.button} onClick={() => void createBlank()}>
             新建空白
           </button>
           <button
             type="button"
             className={styles.button}
             disabled={active === undefined}
-            onClick={() => {
-              if (active === undefined) return
-              const name = askName('重命名宠物', active.name)
-              if (name !== null) void store.renamePet(active.id, name)
-            }}
+            onClick={() => void renameActive()}
           >
             重命名
           </button>
+          {/* C5 方案 a: the host refuses to delete the ACTIVE pet (409
+              ACTIVE_PET) — deleting it used to clear only the pointer while
+              the live config kept the deleted pet's values. The button
+              targets the active pet by construction, so it stays disabled
+              while one is active; the hint says to switch away first. */}
           <button
             type="button"
             className={styles.button}
-            disabled={active === undefined}
-            onClick={() => {
-              if (active === undefined || !window.confirm(`确认删除宠物「${active.name}」？当前配置会继续保留。`)) return
-              void store.deletePet(active.id)
-            }}
+            disabled={active === undefined || config.activePetId === active.id}
+            onClick={() => void deleteActive()}
           >
             删除
           </button>
@@ -304,7 +315,7 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
         </div>
       </div>
       <p className={styles.hint}>
-        点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。
+        点击“保存修改”后，当前配置会写入所选宠物预设；有未保存修改时无法切换宠物。想无损开分支试验时，用「另存草稿为新宠物」把当前修改（含未保存部分）存成新预设，当前宠物与草稿原样保留。生效中的宠物不能删除，请先切换到其他宠物。
       </p>
       <AttributionSection active={active} store={store} />
     </section>
@@ -757,6 +768,8 @@ export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
       <>
         {saveIndicator}
         <div className={styles.status}>正在加载 Petween 配置…</div>
+        {/* C2 modal host: mounted in EVERY gate (see modals.tsx mount contract). */}
+        <ModalHost />
       </>
     )
   }
@@ -770,6 +783,7 @@ export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
             重试
           </button>
         </div>
+        <ModalHost />
       </>
     )
   }
@@ -793,6 +807,8 @@ export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
           />
         </div>
         <NoticeBar snapshot={snapshot} store={store} />
+        {/* The empty state's pet card can still prompt for a name — host required. */}
+        <ModalHost />
       </div>
     )
   }
@@ -852,6 +868,7 @@ export function PetweenSettings(props: PetweenSettingsProps): JSX.Element {
           pendingMounts={snapshot.pendingMounts}
         />
       ) : null}
+      <ModalHost />
     </div>
   )
 }

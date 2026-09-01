@@ -39,7 +39,7 @@ import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '.
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { PetError, petSliceFromConfig, validatePetId, type PetAttribution, type PetPreset } from './pets'
+import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPreset } from './pets'
 import {
   buildPetPackageExport,
   buildPetPackageZip,
@@ -51,6 +51,7 @@ import {
 } from './pet-package'
 import {
   buildMotionPackExport,
+  mountsStatesPatch,
   validateMotionPack,
   type PackImportPlan,
   type PackImportEntry,
@@ -401,21 +402,6 @@ async function handlePackImport(req: IncomingMessage, res: ServerResponse, deps:
 }
 
 /**
- * §11 挂载应用: the minimal per-slot states patch — only the mounted fields,
- * everything else falls back to the live config through patch semantics.
- */
-function mountsStatesPatch(mounts: PackMounts): Record<string, Record<string, unknown>> {
-  const states: Record<string, Record<string, unknown>> = {}
-  for (const [slot, mount] of Object.entries(mounts)) {
-    const state: Record<string, unknown> = {}
-    if (mount.enter !== undefined) state.enter = { animationId: mount.enter }
-    if (mount.ambient !== undefined) state.ambient = { customAnimationId: mount.ambient }
-    states[slot] = state
-  }
-  return states
-}
-
-/**
  * P2 Motion Pack export: GET /api/petween/packs/export?ids=a,b,c → the pack
  * manifest (single-file JSON, animations inline). Unknown ids are a 400
  * listing them; exports never carry mounts (they are author intent, not the
@@ -647,50 +633,6 @@ async function handleAnimations(
     return
   }
   throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'expected PUT or DELETE')
-}
-
-/** Config patch that applies a preset: the character slice plus the active pointer. */
-function applyPatchFor(pet: PetPreset): Record<string, unknown> {
-  // Optional animation references use patch semantics where an absent field
-  // means "keep current". A preset application is authoritative, so encode
-  // absent references as null to clear ids owned by the previous pet.
-  const states = Object.fromEntries(
-    POSE_KEYS.map((key) => {
-      const state = pet.states[key]
-      return [
-        key,
-        {
-          ...state,
-          enter: { ...state.enter, animationId: state.enter.animationId ?? null },
-          ambient: { ...state.ambient, customAnimationId: state.ambient.customAnimationId ?? null },
-        },
-      ]
-    }),
-  )
-  return { activePetId: pet.id, poses: pet.poses, states, global: { scale: pet.scale } }
-}
-
-/**
- * Pet-switch patch base (bare-switch guard): the target preset's full
- * character slice, so the onSaved mirror can only ever write the preset's
- * own data back into it. Caller slice fields win field-by-field; `global`
- * merges scale-only — a caller `global` without `scale` must not resurrect
- * the previous pet's scale through the merge-onto-current patch semantics.
- */
-function expandPetSwitchPatch(raw: Record<string, unknown>, pet: PetPreset): Record<string, unknown> {
-  const base = applyPatchFor(pet)
-  const callerGlobal =
-    typeof raw.global === 'object' && raw.global !== null ? (raw.global as Record<string, unknown>) : undefined
-  const callerScale = callerGlobal?.scale
-  return {
-    ...raw,
-    poses: raw.poses !== undefined ? raw.poses : base.poses,
-    states: raw.states !== undefined ? raw.states : base.states,
-    global:
-      callerGlobal !== undefined
-        ? { ...callerGlobal, scale: callerScale !== undefined ? callerScale : (base.global as { scale: number }).scale }
-        : { scale: (base.global as { scale: number }).scale },
-  }
 }
 
 async function handlePetsIndex(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
@@ -952,10 +894,17 @@ async function handlePets(
     return
   }
   if (req.method === 'DELETE') {
-    await deps.deletePet(id)
-    // The pet keeps showing as unsaved edits: drop only the active pointer.
+    // C5 方案 a: the ACTIVE preset cannot be deleted. The old behavior
+    // silently cleared only activePetId while the live config kept the
+    // deleted pet's values — a confusing landing spot (the pet then showed
+    // as "unsaved edits" nobody remembered forking). The caller must switch
+    // to another pet first. Same 409 shape as ASSET_IN_USE/ANIMATION_IN_USE.
     const config = await deps.loadConfig()
-    if (config.activePetId === id) await deps.updateConfig({ activePetId: null })
+    if (config.activePetId === id) {
+      sendJson(res, 409, { error: 'ACTIVE_PET' })
+      return
+    }
+    await deps.deletePet(id)
     sendJson(res, 200, { deleted: id })
     return
   }

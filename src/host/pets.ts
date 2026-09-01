@@ -18,6 +18,7 @@ import { readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { PetweenConfig, PetAttribution, PetPreset, PetSlice } from '../core/types'
+import { POSE_KEYS } from '../core/types'
 import { createWriteLock, writeJsonAtomic, type WriteLock } from './storage'
 import { repairConfig } from './validation'
 
@@ -203,6 +204,50 @@ export function defaultPetsDir(): string {
 /** The preset-owned slice of a config (poses/states/global scale). */
 export function petSliceFromConfig(config: PetweenConfig): PetSlice {
   return { scale: config.global.scale, poses: config.poses, states: config.states }
+}
+
+/** Config patch that applies a preset: the character slice plus the active pointer. */
+export function applyPatchFor(pet: PetPreset): Record<string, unknown> {
+  // Optional animation references use patch semantics where an absent field
+  // means "keep current". A preset application is authoritative, so encode
+  // absent references as null to clear ids owned by the previous pet.
+  const states = Object.fromEntries(
+    POSE_KEYS.map((key) => {
+      const state = pet.states[key]
+      return [
+        key,
+        {
+          ...state,
+          enter: { ...state.enter, animationId: state.enter.animationId ?? null },
+          ambient: { ...state.ambient, customAnimationId: state.ambient.customAnimationId ?? null },
+        },
+      ]
+    }),
+  )
+  return { activePetId: pet.id, poses: pet.poses, states, global: { scale: pet.scale } }
+}
+
+/**
+ * Pet-switch patch base (bare-switch guard): the target preset's full
+ * character slice, so the onSaved mirror can only ever write the preset's
+ * own data back into it. Caller slice fields win field-by-field; `global`
+ * merges scale-only — a caller `global` without `scale` must not resurrect
+ * the previous pet's scale through the merge-onto-current patch semantics.
+ */
+export function expandPetSwitchPatch(raw: Record<string, unknown>, pet: PetPreset): Record<string, unknown> {
+  const base = applyPatchFor(pet)
+  const callerGlobal =
+    typeof raw.global === 'object' && raw.global !== null ? (raw.global as Record<string, unknown>) : undefined
+  const callerScale = callerGlobal?.scale
+  return {
+    ...raw,
+    poses: raw.poses !== undefined ? raw.poses : base.poses,
+    states: raw.states !== undefined ? raw.states : base.states,
+    global:
+      callerGlobal !== undefined
+        ? { ...callerGlobal, scale: callerScale !== undefined ? callerScale : (base.global as { scale: number }).scale }
+        : { scale: (base.global as { scale: number }).scale },
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -16,6 +16,7 @@ import { EDITOR_PAGE_URL } from '../api'
 import { configHub } from '../config-hub'
 import { EditorStore, type EditorApi } from '../stores/editor-store'
 import { Slider, Toggle } from './controls'
+import { ModalHost } from './modals'
 import { SaveIndicator } from './PetweenSettings'
 import styles from './settings.module.css'
 
@@ -101,6 +102,10 @@ export function PetweenCard(props: PetweenCardProps): JSX.Element {
         打开完整编辑器 →
       </a>
       <SaveIndicator snapshot={snapshot} store={store} />
+      {/* C2 modal host: the SaveIndicator's revert confirm renders here (this
+          card is its own browsing context — it cannot use the editor page's
+          host; see modals.tsx mount contract). */}
+      <ModalHost />
     </div>
   )
 }

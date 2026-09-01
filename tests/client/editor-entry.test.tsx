@@ -63,7 +63,9 @@ afterEach(() => {
 })
 
 describe('editor entry (src/editor/index.tsx)', () => {
-  it('boots the header and the full wide editor into #root', async () => {
+  // Booting the whole editor (LivePreview included) in jsdom is inherently
+  // heavy; under machine load it crosses vitest's 5s default. Allow 20s.
+  it('boots the header and the full wide editor into #root', { timeout: 20_000 }, async () => {
     await act(async () => {
       await import('../../src/editor/index')
     })

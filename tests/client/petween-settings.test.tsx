@@ -171,6 +171,29 @@ const clickButton = (text: string): void => {
   button.click()
 }
 
+/** The C2 editor modal (settings/modals.tsx) renders at most one dialog. */
+const modalDialog = (): HTMLElement | null => container.querySelector('[role="dialog"]')
+
+const modalButton = (text: string): HTMLButtonElement => {
+  const button = [...(modalDialog()?.querySelectorAll('button') ?? [])].find(
+    (candidate) => candidate.textContent === text,
+  )
+  if (button === undefined) throw new Error(`modal button missing: ${text}`)
+  return button as HTMLButtonElement
+}
+
+/** The prompt modal's single-line text field. */
+const modalInput = (): HTMLInputElement => {
+  const input = modalDialog()?.querySelector('input[type="text"]') ?? null
+  if (input === null) throw new Error('prompt input missing')
+  return input as HTMLInputElement
+}
+
+/** Fires a keydown the modal's explicit Enter/Escape handling listens for. */
+const pressKey = (target: Element, key: string): void => {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+}
+
 /** StateList rows carry ●/○ markers + hints, so match by containment. */
 const clickStateRow = (label: string): void => {
   const nav = container.querySelector('nav[aria-label="状态列表"]')
@@ -309,7 +332,7 @@ describe('PetweenSettings', () => {
     })
   })
 
-  it('wide editor switches, creates blank, renames and confirms deletion through the pet card', async () => {
+  it('wide editor switches, creates blank, renames through the C2 modals; the active pet cannot be deleted (C5)', async () => {
     const api = makeApi(true)
     const response = await api.getConfig()
     const config = response.config
@@ -357,10 +380,6 @@ describe('PetweenSettings', () => {
     api.createPet = createPet
     api.renamePet = renamePet
     api.deletePet = deletePet
-    const prompt = vi.fn().mockReturnValueOnce('空白猫').mockReturnValueOnce('改名猫')
-    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
-    vi.stubGlobal('prompt', prompt)
-    vi.stubGlobal('confirm', confirm)
 
     await render(api, true)
     expect(container.textContent).toContain('有未保存修改时无法切换宠物')
@@ -373,25 +392,42 @@ describe('PetweenSettings', () => {
     expect(applyPet).toHaveBeenCalledWith('pet_b')
     expect(select.value).toBe('pet_b')
 
+    // 新建空白 declined in the prompt modal: nothing is created.
     act(() => clickButton('新建空白'))
+    expect(modalDialog()?.textContent).toContain('新建空白宠物')
+    await act(async () => modalButton('取消').click())
+    expect(modalDialog()).toBeNull()
+    expect(createPet).not.toHaveBeenCalled()
+
+    // confirmed: the typed name goes to createPet.
+    act(() => clickButton('新建空白'))
+    act(() => typeInput(modalInput(), '空白猫'))
+    await act(async () => modalButton('确定').click())
     await flushActions()
+    expect(modalDialog()).toBeNull()
     expect(createPet).toHaveBeenCalledWith({ name: '空白猫', from: 'blank' })
     expect(container.textContent).toContain('空白猫')
     expect(container.textContent).toContain('请先导入至少一张图片')
 
+    // 重命名: the prompt modal prefills the current name.
     act(() => clickButton('重命名'))
+    expect(modalInput().value).toBe('空白猫')
+    act(() => typeInput(modalInput(), '改名猫'))
+    await act(async () => modalButton('确定').click())
     await flushActions()
     expect(renamePet).toHaveBeenCalledWith('pet_c', '改名猫')
     expect(container.textContent).toContain('改名猫')
 
-    act(() => clickButton('删除'))
+    // C5: the delete button targets the ACTIVE pet, which the host now
+    // refuses to delete — the card disables it outright and says why.
+    const deleteButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '删除')
+    if (deleteButton === undefined) throw new Error('delete button missing')
+    expect(deleteButton.disabled).toBe(true)
+    expect(container.textContent).toContain('生效中的宠物不能删除')
+    act(() => deleteButton.click())
     await flushActions()
+    expect(modalDialog()).toBeNull()
     expect(deletePet).not.toHaveBeenCalled()
-    act(() => clickButton('删除'))
-    await flushActions()
-    expect(deletePet).toHaveBeenCalledWith('pet_c')
-    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('')
-    expect(container.textContent).toContain('未保存的当前配置')
   })
 
   it('另存草稿为新宠物 forks the unsaved draft without switching pets or saving (A2)', async () => {
@@ -417,7 +453,6 @@ describe('PetweenSettings', () => {
     })
     api.createPetFromDraft = createPetFromDraft
     const patchConfig = vi.spyOn(api, 'patchConfig')
-    vi.stubGlobal('prompt', vi.fn().mockReturnValueOnce('变体猫'))
     await render(api, true)
 
     // An unsaved edit on the draft (toggle → updateConfig → dirty) — the
@@ -426,7 +461,11 @@ describe('PetweenSettings', () => {
     if (toggle === null) throw new Error('change-pose toggle missing')
     act(() => toggle.click())
 
+    // The name goes through the C2 prompt modal (prefilled with 变体 base).
     act(() => clickButton('另存草稿为新宠物'))
+    expect(modalInput().value).toBe('蓝猫 变体')
+    act(() => typeInput(modalInput(), '变体猫'))
+    await act(async () => modalButton('确定').click())
     await flushActions()
     expect(createPetFromDraft).toHaveBeenCalledTimes(1)
     expect(createPetFromDraft.mock.calls[0]![0]).toBe('变体猫')
@@ -465,8 +504,6 @@ describe('PetweenSettings', () => {
 
   it('撤回修改 reloads the saved config after confirmation; declining keeps the draft (UX-1b)', async () => {
     const api = makeApi(true)
-    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
-    vi.stubGlobal('confirm', confirm)
     await render(api)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
@@ -477,14 +514,17 @@ describe('PetweenSettings', () => {
 
     const revert = [...container.querySelectorAll('button')].find((b) => b.textContent === '撤回修改')
     if (revert === undefined) throw new Error('revert button missing')
-    act(() => revert.click()) // declined: the draft is kept
-    expect(confirm).toHaveBeenCalledTimes(1)
+    act(() => revert.click()) // the discard confirm goes through the C2 modal
+    expect(modalDialog()?.textContent).toContain('放弃所有未保存的修改')
+    await act(async () => modalButton('取消').click()) // declined: the draft is kept
+    expect(modalDialog()).toBeNull()
     expect(getConfig.mock.calls.length).toBe(callsBefore)
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false)
 
-    await act(async () => revert.click()) // confirmed: revert to the saved config
+    act(() => revert.click())
+    await act(async () => modalButton('确定').click()) // confirmed: revert to the saved config
     await flushActions()
-    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(modalDialog()).toBeNull()
     expect(getConfig.mock.calls.length).toBe(callsBefore + 1)
     expect(api.patchConfig).not.toHaveBeenCalled()
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true)
@@ -497,17 +537,52 @@ describe('PetweenSettings', () => {
     api.patchConfig = vi.fn(async () => {
       throw new Error('disk full')
     })
-    vi.stubGlobal('confirm', vi.fn(() => true))
     await render(api)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
     await saveChanges()
     expect(container.textContent).toContain('保存失败：disk full')
-    await act(async () => clickButton('撤回修改'))
+    act(() => clickButton('撤回修改'))
+    await act(async () => modalButton('确定').click())
     await flushActions()
     expect(container.textContent).toContain('已撤回未保存的修改')
     expect(container.textContent).not.toContain('保存失败')
+  })
+
+  it('C2 modal basics: the prompt input is autofocused, Enter confirms, Escape cancels', async () => {
+    const api = makeApi(true)
+    const blank = createDefaultPetweenConfig()
+    const createPet = vi.fn(async ({ name }: { name: string; from: 'current' | 'blank' }) => {
+      const pet: PetPreset = {
+        id: 'pet_new',
+        name,
+        createdAt: '2026-08-21T00:00:00.000Z',
+        updatedAt: '2026-08-21T00:00:00.000Z',
+        scale: 1,
+        poses: structuredClone(blank.poses),
+        states: structuredClone(blank.states),
+      }
+      return { pet, config: structuredClone(blank) }
+    })
+    api.createPet = createPet
+    await render(api, true)
+
+    // Escape cancels: the modal closes and nothing is created.
+    act(() => clickButton('新建空白'))
+    expect(document.activeElement).toBe(modalInput()) // prompt input autofocused
+    act(() => typeInput(modalInput(), '逃跑猫'))
+    act(() => pressKey(modalInput(), 'Escape'))
+    expect(modalDialog()).toBeNull()
+    expect(createPet).not.toHaveBeenCalled()
+
+    // Enter inside the input confirms with the typed name.
+    act(() => clickButton('新建空白'))
+    act(() => typeInput(modalInput(), '回车猫'))
+    await act(async () => pressKey(modalInput(), 'Enter'))
+    await flushActions()
+    expect(modalDialog()).toBeNull()
+    expect(createPet).toHaveBeenCalledWith({ name: '回车猫', from: 'blank' })
   })
 
   it('the global transition select offers 翻转 Flip and persists it', async () => {
@@ -702,6 +777,68 @@ describe('PetweenSettings — pet package & attribution (§12)', () => {
     await flushActions()
     expect(api.importPetPackage).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('导入宠物包失败')
+  })
+
+  it('导入宠物包 with a dirty draft confirms through the modal: declining aborts, confirming imports (C2)', async () => {
+    const api = makeApi(true)
+    const response = await api.getConfig()
+    const importedPet = makePet('pet_new', '鲸鱼娘', response.config)
+    const switched = structuredClone(response.config)
+    switched.activePetId = 'pet_new'
+    let imported = false
+    api.getConfig = vi.fn(async () => ({
+      config: structuredClone(imported ? switched : response.config),
+      assets: response.assets,
+    }))
+    api.getPets = vi.fn(async () =>
+      imported
+        ? { pets: [structuredClone(importedPet)], activePetId: importedPet.id, warnings: [] }
+        : { pets: [], activePetId: null, warnings: [] },
+    )
+    api.importPetPackage = vi.fn(async () => {
+      imported = true
+      return {
+        pet: structuredClone(importedPet),
+        config: structuredClone(switched),
+        report: { assetsAdded: [], assetsReused: [], entries: [], mounts: {}, warnings: [] },
+      }
+    })
+    await render(api, true)
+    const input = petSection().querySelector<HTMLInputElement>('input[type="file"][accept="application/zip,.zip"]')
+    if (input === null) throw new Error('pet package import input missing')
+
+    // An unsaved edit: importing must ask before discarding it.
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    if (checkbox === null) throw new Error('enable toggle missing')
+    act(() => checkbox.click())
+    expect(container.textContent).toContain('有未保存修改')
+
+    // Declined in the modal: no request, the dirty draft survives.
+    await act(async () => {
+      pickFile(input, new File([new Uint8Array([1])], 'pet.zip', { type: 'application/zip' }))
+    })
+    await flushActions()
+    expect(modalDialog()?.textContent).toContain('未保存的修改将被丢弃')
+    await act(async () => modalButton('取消').click())
+    await flushActions()
+    expect(modalDialog()).toBeNull()
+    expect(api.importPetPackage).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('有未保存修改')
+
+    // Confirmed: the import runs, lands clean and summarizes through the notice.
+    await act(async () => {
+      pickFile(input, new File([new Uint8Array([1])], 'pet.zip', { type: 'application/zip' }))
+    })
+    await flushActions()
+    await act(async () => modalButton('确定').click())
+    await flushActions()
+    expect(api.importPetPackage).toHaveBeenCalledTimes(1)
+    const status = container.querySelector('[role="status"]')
+    expect(status?.textContent).toContain('已导入宠物「鲸鱼娘」并切换')
+    expect(status?.textContent).not.toContain('动画') // no animations in the package
+    // the import IS the discard: the dirty enable-toggle edit is gone
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true)
+    expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_new')
   })
 
   it('来源与署名 is collapsed by default with the credit badge, prefills and saves through the store', async () => {

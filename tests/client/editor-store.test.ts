@@ -1090,29 +1090,27 @@ describe('EditorStore — pet presets (V1.1)', () => {
     expect(hub.getCurrent()?.config.global.scale).toBe(2.25)
   })
 
-  it('deleting the active preset keeps the current character and shows it as unsaved', async () => {
+  it('deleting the ACTIVE pet surfaces the host 409 as a friendly notice (C5)', async () => {
     const active = preset('pet_active', '当前', 1.8)
     const config = createDefaultPetweenConfig()
     config.activePetId = active.id
     config.global.scale = active.scale
-    let deleted = false
-    const { api, mocks } = makeApi({
+    const { api } = makeApi({
       getConfig: vi.fn(async () => ({ config: structuredClone(config), assets: {} })),
-      getPets: vi.fn(async () => ({
-        pets: deleted ? [] : [active],
-        activePetId: deleted ? null : active.id,
-        warnings: [],
-      })),
+      getPets: vi.fn(async () => ({ pets: [active], activePetId: active.id, warnings: [] })),
       deletePet: vi.fn(async () => {
-        deleted = true
+        // C5 方案 a: the host refuses to delete the active pet.
+        throw new ApiError(409, 'ACTIVE_PET', 'ACTIVE_PET')
       }),
     })
     await loadStore(api)
 
-    expect(await store.deletePet(active.id)).toBe(true)
-    expect(mocks.deletePet).toHaveBeenCalledWith(active.id)
-    expect(store.getSnapshot().pets).toEqual([])
-    expect(store.getSnapshot().config?.activePetId).toBeNull()
+    expect(await store.deletePet(active.id)).toBe(false)
+    expect(store.getSnapshot().notice).toMatchObject({ kind: 'error' })
+    expect(store.getSnapshot().notice?.text).toContain('生效中的宠物不能删除')
+    // nothing was deleted or re-pointed: the preset list and config survive
+    expect(store.getSnapshot().pets.map((candidate) => candidate.id)).toEqual([active.id])
+    expect(store.getSnapshot().config?.activePetId).toBe(active.id)
     expect(store.getSnapshot().config?.global.scale).toBe(1.8)
   })
 
@@ -1482,14 +1480,11 @@ describe('EditorStore — pet package import/export (§12)', () => {
     store.updateConfig((draft) => {
       draft.global.scale = 2
     })
-    const confirm = vi.fn(() => false)
-    vi.stubGlobal('window', { confirm })
-    try {
-      expect(await store.importPetPackage(new File([new Uint8Array([1])], 'p.zip'))).toBe(false)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-    expect(confirm).toHaveBeenCalledTimes(1)
+    // No ModalHost can be mounted in this (node) environment: the C2 dialog
+    // queue settles the discard confirm with the cancel answer — a draft is
+    // never dropped on an unanswered confirmation. The UI-driven accept
+    // branch lives in petween-settings.test.tsx.
+    expect(await store.importPetPackage(new File([new Uint8Array([1])], 'p.zip'))).toBe(false)
     expect(mocks.importPetPackage).not.toHaveBeenCalled()
     expect(mocks.getConfig).toHaveBeenCalledTimes(1) // no reload happened
     // The declined import leaves the dirty draft exactly as it was.
@@ -1497,48 +1492,9 @@ describe('EditorStore — pet package import/export (§12)', () => {
     expect(store.getSnapshot().saveState).toBe('dirty')
   })
 
-  it('importPetPackage proceeds after the discard confirm and lands clean', async () => {
-    const importedPet = preset('pet_new', '鲸鱼娘')
-    const switched = createDefaultPetweenConfig()
-    switched.activePetId = 'pet_new'
-    let imported = false
-    const { api } = makeApi({
-      getPets: vi.fn(async () =>
-        imported
-          ? { pets: [structuredClone(importedPet)], activePetId: importedPet.id, warnings: [] }
-          : { pets: [], activePetId: null, warnings: [] },
-      ),
-      getConfig: vi.fn(async () => ({
-        config: structuredClone(imported ? switched : createDefaultPetweenConfig()),
-        assets: {},
-      })),
-      importPetPackage: vi.fn(async (): Promise<PetPackageImportResponse> => {
-        imported = true
-        return {
-          pet: structuredClone(importedPet),
-          config: structuredClone(switched),
-          report: { assetsAdded: [], assetsReused: [], entries: [], mounts: {}, warnings: [] },
-        }
-      }),
-    })
-    await loadStore(api)
-    store.updateConfig((draft) => {
-      draft.global.scale = 2
-    })
-    vi.stubGlobal('window', { confirm: vi.fn(() => true) })
-    try {
-      expect(await store.importPetPackage(new File([new Uint8Array([1])], 'p.zip'))).toBe(true)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-    const snap = store.getSnapshot()
-    // The import IS the discard: the draft bookkeeping resets with the reload.
-    expect(snap.saveState).toBe('idle')
-    expect(snap.config?.activePetId).toBe('pet_new')
-    expect(snap.config?.global.scale).toBe(1) // the discarded edit is gone
-    expect(snap.notice?.text).toContain('已导入宠物「鲸鱼娘」并切换')
-    expect(snap.notice?.text).not.toContain('动画') // no animations in the package
-  })
+  // The accept branch of the dirty-draft discard confirm moved to
+  // petween-settings.test.tsx: with no ModalHost mountable in this node
+  // environment the C2 dialog queue can only settle as a decline.
 
   it('savePetAttribution writes credit onto the active pet and refreshes the list', async () => {
     const pet = preset('pet_a', '蓝猫')

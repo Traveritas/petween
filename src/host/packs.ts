@@ -320,6 +320,21 @@ export function planMotionPackImport(
 }
 
 /**
+ * §11 挂载应用: the minimal per-slot states patch — only the mounted fields,
+ * everything else falls back to the live config through patch semantics.
+ */
+export function mountsStatesPatch(mounts: PackMounts): Record<string, Record<string, unknown>> {
+  const states: Record<string, Record<string, unknown>> = {}
+  for (const [slot, mount] of Object.entries(mounts)) {
+    const state: Record<string, unknown> = {}
+    if (mount.enter !== undefined) state.enter = { animationId: mount.enter }
+    if (mount.ambient !== undefined) state.ambient = { customAnimationId: mount.ambient }
+    states[slot] = state
+  }
+  return states
+}
+
+/**
  * Build an export manifest from an existing selection. The namespace is the
  * shared one, or 'mixed' when the selection spans namespaces (import keeps
  * per-definition namespaces under 'mixed'). Exports carry no mounts — mounts

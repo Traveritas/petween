@@ -20,8 +20,9 @@ import { createHash } from 'node:crypto'
 import { unzip, zipSync, type UnzipFileInfo } from 'fflate'
 import type { AssetMeta, PetSlice, PoseKey, StateAppearance } from '../core/types'
 import { POSE_KEYS } from '../core/types'
+import { ASSET_MIME_TYPES, isAssetMimeType, MAX_ASSET_DIMENSION, type AssetMimeType } from '../core/assets-contract'
 import type { AnimationDefinition } from '../motion/animation-definition'
-import { detectImage, MAX_ASSET_DIMENSION } from './assets'
+import { detectImage } from './assets'
 import type { PetAttribution, PetPreset } from './pets'
 import { validatePetAttribution } from './pets'
 import {
@@ -46,9 +47,8 @@ const MAX_PACKAGE_NAME_LENGTH = 120
 /** Zip entry whitelist: `assets/<16-hex>.<png|webp|jpeg|jpg>` only. */
 const ASSET_ENTRY_RE = /^assets\/([0-9a-f]{16})\.(png|webp|jpe?g)$/
 const SHA256_RE = /^[0-9a-f]{64}$/
-const ASSET_MIME_TYPES: readonly string[] = ['image/png', 'image/webp', 'image/jpeg']
 /** Export-side extension per MIME (import additionally accepts `.jpg`). */
-const MIME_TO_EXT: Record<string, string> = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpeg' }
+const MIME_TO_EXT: Record<AssetMimeType, string> = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpeg' }
 
 export type PetPackageErrorCode = 'PET_PACKAGE_INVALID' | 'PACK_VERSION_NEWER' | 'EXPORT_INCOMPLETE'
 
@@ -69,7 +69,7 @@ export interface PetPackageAssetEntry {
   id: string
   sha256: string
   file: string
-  mimeType: 'image/png' | 'image/webp' | 'image/jpeg'
+  mimeType: AssetMimeType
   width: number
   height: number
 }
@@ -205,7 +205,7 @@ function validateAssetEntries(raw: unknown): { errors: string[]; entries: PetPac
       continue
     }
     const mimeType = candidate.mimeType
-    if (typeof mimeType !== 'string' || !ASSET_MIME_TYPES.includes(mimeType)) {
+    if (!isAssetMimeType(mimeType)) {
       errors.push(`assets[${index}].mimeType: expected one of ${ASSET_MIME_TYPES.join(' / ')}`)
       continue
     }
@@ -232,7 +232,7 @@ function validateAssetEntries(raw: unknown): { errors: string[]; entries: PetPac
       continue
     }
     seen.add(id)
-    entries.push({ id, sha256: String(candidate.sha256), file, mimeType: mimeType as PetPackageAssetEntry['mimeType'], width, height })
+    entries.push({ id, sha256: String(candidate.sha256), file, mimeType, width, height })
   }
   return { errors, entries }
 }
@@ -448,7 +448,7 @@ export async function validatePetPackage(body: Buffer): Promise<PetPackageImport
 
 /** Zip entry name for an asset id on export (`assets/<id>.<ext>`). */
 export function assetEntryPath(id: string, mimeType: string): string {
-  return `assets/${id}.${MIME_TO_EXT[mimeType] ?? 'bin'}`
+  return `assets/${id}.${MIME_TO_EXT[mimeType as AssetMimeType] ?? 'bin'}`
 }
 
 /** Build a zip archive: manifest plus the asset bytes the caller read. */

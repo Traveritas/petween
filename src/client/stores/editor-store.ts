@@ -16,6 +16,7 @@
  */
 import type { AssetMeta, PetAttribution, PetweenConfig, PetPreset, PetSlice, PoseKey } from '../../core/types'
 import { POSE_KEYS } from '../../core/types'
+import { isAssetMimeType, MAX_ASSET_BYTES } from '../../core/assets-contract'
 import type { AnimationDefinition } from '../../motion/animation-definition'
 import { validateAnimationDefinition } from '../../motion/animation-definition'
 import {
@@ -48,11 +49,8 @@ import {
   type UploadedAsset,
 } from '../api'
 import type { ConfigHub, ConfigSnapshot } from '../config-hub'
+import { confirmDialog } from '../dialog-queue'
 import { STATE_LABELS } from '../settings/state-labels'
-
-/** Client-side mirror of the host upload rules (spec §20; host re-validates). */
-const ACCEPTED_MIME_TYPES: ReadonlyArray<AssetMeta['mimeType']> = ['image/png', 'image/webp', 'image/jpeg']
-const MAX_ASSET_BYTES = 10 * 1024 * 1024
 
 /** The API surface the store needs; the default adapter hits the real HTTP API. */
 export interface EditorApi {
@@ -180,6 +178,8 @@ function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'TIMEOUT') return '请求超时，请稍后重试'
     if (error.code === 'NETWORK') return '网络连接失败，请检查网络'
+    // C5 方案 a: the host's bare `{error:'ACTIVE_PET'}` 409 has no message.
+    if (error.code === 'ACTIVE_PET') return '生效中的宠物不能删除，请先切换到其他宠物'
   }
   return error instanceof Error ? error.message : String(error)
 }
@@ -456,13 +456,13 @@ export class EditorStore {
       if (seq === this.importSeq) this.emit({ importing: null, ...patch })
       else this.emit(patch)
     }
-    const mimeType = file.type as AssetMeta['mimeType']
-    if (!ACCEPTED_MIME_TYPES.includes(mimeType)) {
+    const mimeType = file.type
+    if (!isAssetMimeType(mimeType)) {
       finishImport({ notice: { kind: 'error', text: '仅支持 PNG / WebP / JPEG 图片（SVG 已明确拒绝）。' } })
       return
     }
     if (file.size > MAX_ASSET_BYTES) {
-      finishImport({ notice: { kind: 'error', text: '图片超过 10MB 上限，请压缩后再导入。' } })
+      finishImport({ notice: { kind: 'error', text: `图片超过 ${MAX_ASSET_BYTES / (1024 * 1024)}MB 上限，请压缩后再导入。` } })
       return
     }
     if (mimeType === 'image/jpeg') {
@@ -758,8 +758,13 @@ export class EditorStore {
    */
   async importPetPackage(file: File): Promise<boolean> {
     if (this.disposed || this.snapshot.status !== 'ready') return false
-    if (this.dirty && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      if (!window.confirm('导入宠物包会创建并切换到新宠物，当前未保存的修改将被丢弃。要继续吗？')) return false
+    if (this.dirty) {
+      // C2: the discard confirm goes through the in-page modal (the native
+      // confirm is dead in the IAB). With no mounted ModalHost the queue
+      // settles as a decline — a draft is never dropped on an unanswered
+      // confirmation.
+      const message = '导入宠物包会创建并切换到新宠物，当前未保存的修改将被丢弃。要继续吗？'
+      if (!(await confirmDialog({ message }))) return false
     }
     await this.saveChain
     if (this.disposed) return false

@@ -19,6 +19,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
+      - run: pnpm run lint
       - run: pnpm vitest run
       # tsdown 0.22 requires Node ^22.18 / >=24.11 (Promise.withResolvers in its
       # Node-20 config fallback path); typecheck+tests still run on 20 to keep

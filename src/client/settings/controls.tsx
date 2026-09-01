@@ -4,6 +4,7 @@
  * Slider ranges mirror the host validation bounds (host/validation.ts).
  */
 import { useRef, useState, type JSX } from 'react'
+import { ASSET_ACCEPT_ATTRIBUTE } from '../../core/assets-contract'
 import styles from './settings.module.css'
 
 function clamp(value: number, min: number, max: number): number {
@@ -233,7 +234,7 @@ export function FileImportButton(props: {
       <input
         ref={inputRef}
         type="file"
-        accept={props.accept ?? 'image/png,image/webp,image/jpeg'}
+        accept={props.accept ?? ASSET_ACCEPT_ATTRIBUTE}
         style={{ display: 'none' }}
         onChange={(event) => {
           const file = event.target.files?.[0]

@@ -143,23 +143,25 @@ G3 配置化落地（implementation-notes 同日条目）。）
   活动面无开关。建议接 `playInteraction()` 按钮 + hold/terminalHold 控件，
   顺手改 `embedded` 模式。
 
-### C2. 原生 prompt/confirm 依赖宿主 modals 权限【2026-08-27 五维评审新增】
+### C2. 原生 prompt/confirm 依赖宿主 modals 权限【已落地 2026-08-31】
 
-- 新建/重命名宠物用 `window.prompt`、删除类确认用 `window.confirm`；若 DSH
-  把 settings.section 放进不带 `allow-modals` 的 sandbox iframe，它们会静默
-  失效（重命名点了没反应）。需真机确认一次 iframe 权限，无论结论如何，
-  主流程改内联输入框/自制对话框更稳。
-- **2026-08-28 真机走查实锤加重**：嵌入 webview（ZCode IAB）里
-  `window.prompt` 直接不可用，宠物新建/重命名/删除全流程瘫痪；仓内共 7 处
-  原生 prompt/confirm/alert 调用（宠物 4 + 动画删除 + 撤回 + 卡片关闭）。
-  建议升级为近期项：统一小型模态输入/确认组件。
+- 已落地：`src/client/dialog-queue.ts`（React-free 模态队列，promise 式
+  `confirmDialog`/`promptDialog`；无宿主挂载即按取消结案、宿主卸载排空
+  挂起请求——破坏性流程绝不在无人应答的确认上继续）+ `settings/modals.tsx`
+  （ModalHost：Enter/Escape/autofocus/遮罩），8 处原生调用点全部替换，
+  PetweenSettings 四处返回与 PetweenCard 各自挂载宿主。
+- 残余：`PetweenCard.tsx` 卸载清理对脏草稿的 `window.alert`（组件拆除中
+  模态无法替代；IAB 中同样静默失效）→ 待拍板：改挂载时 notice 或其他方案。
 
-### C5. 删除「当前生效宠物」后的落点【2026-08-28 真机走查新增】
+### C5. 删除「当前生效宠物」后的落点【已拍板落地 2026-08-31，方案 a】
 
-- 切到某宠物再删除它：`activePetId` 变 null，运行时配置**保留已删宠物的
-  数值**（如 scale）。确认文案「当前配置会继续保留」技术上正确，但用户
-  预期更可能是「回退到上一个宠物」。低成本改进：删除确认文案写明后果，
-  或删除后把 activePetId 指向剩余最近预设（需拍板）。
+- 拍板 (a) 禁止删除生效宠物：host `DELETE /pets/<id>` 对当前 activePetId
+  返回 409 `ACTIVE_PET`；宠物卡删除按钮对生效宠物禁用并提示「生效中的
+  宠物不能删除，请先切换到其他宠物」；`describeError` 补 ACTIVE_PET 文案。
+- **遗留 UX 缺口（新登记，待拍板）**：宠物卡的删除按钮按构造只能作用于
+  生效宠物，方案 a 下它恒禁用——**UI 里删除宠物已无入口**（host API 对
+  非生效宠物仍可用）。若意图是「切走后再删」，卡片需要非生效宠物的删除
+  目标（如宠物列表逐行删除按钮）。
 
 ### C3. 编辑器性能化与代码卫生小项【2026-08-27 五维评审新增】
 
@@ -239,24 +241,25 @@ G3 配置化落地（implementation-notes 同日条目）。）
   legacy 永远不再重试」——真正解法不变：copy 先落唯一临时目录再 rename
   【2026-08-27 五维评审新增，2026-08-30 描述同步；physics 仓同款冗余
   检查已删并指向本条】。
-- `routes.ts`（1030+ 行）把配置领域逻辑（`applyPatchFor`/
-  `expandPetSwitchPatch`/`mountsStatesPatch`）留在 HTTP 编排层；其属主是
-  pets/config 模块。`editor-store.ts`（1132 行）同待拆【2026-08-30 新增】。
-- 校验常量双源硬编码：`MAX_ASSET_BYTES`（host/assets.ts 与
-  client/stores/editor-store.ts）与 MIME 白名单散见四处（core/types.ts、
-  pet-package.ts、editor-store.ts、controls.tsx）——任一侧调整不同步即
-  「客户端放行、host 拒绝」体验断裂 → 收进 core 共享模块或经 meta
-  features 下发【2026-08-30 新增】。
+- ~~`routes.ts`（1030+ 行）把配置领域逻辑留在 HTTP 编排层~~【2026-08-31
+  已落地】`applyPatchFor`/`expandPetSwitchPatch` 下沉 `pets.ts`（与
+  `petSliceFromConfig` 同域对称）、`mountsStatesPatch` 下沉 `packs.ts`，
+  纯搬家零行为变化。`editor-store.ts`（1132 行）拆分仍**保留排队**。
+- ~~校验常量双源硬编码~~【2026-08-31 已落地】新增 `src/core/assets-contract.ts`
+  单一事实源（MIME 数组派生类型联合、10MB/60MB/4096、accept 字符串、
+  `isAssetMimeType` guard），五处硬编码全部改 import；包炸弹护栏与运动
+  像素边界有意保留独立（不同旋钮）。
 
 ---
 
 ## 7. physics 仓
 
-### E2. `config-hub.update()` 无客户端串行化（low-medium）
+### E2. `config-hub.update()` 无客户端串行化（low-medium）【已落地 2026-08-31】
 
-- 慢保存 + 再次编辑时响应按完成顺序回写本地快照，旧数据可盖回新数据；
-  host 侧 writeChain 已按会话串行，磁盘无损，主要污染 `hub.getConfig()`。
-- 建议：client 侧加 latest-wins 串行队列。
+- 已修为最小代际守卫：`updateSeq` 自增，过期响应（含 saving/saveError）
+  整体丢弃，latest-wins；load 兜底语义不动。+2 用例（乱序完成/正常顺序）。
+- 残余观察（登记不追）：`load()` 落地仍可能短暂覆盖在途保存的旧视图，
+  下一次保存成功即自愈。
 
 （G3 slide interrupt 配置化已于 2026-08-30 拍板并落地为扁平字段
 `slideInterrupt`（默认 true 保持现状），卡片带开关；见 implementation-notes

@@ -129,6 +129,113 @@ describe('GET /api/petween/config (§19.1)', () => {
   })
 })
 
+/**
+ * Preset-authority phase 1 (host/config-view.ts): GET /config assembles its
+ * response through the materialized-view seam. The matrix below locks the
+ * phase-1 contract — {null pointer, dangling pointer, missing/corrupt preset
+ * file, preset in sync, preset diverged} must ALL respond byte-identically to
+ * the legacy behavior (the config document itself), while the write paths
+ * stay untouched.
+ */
+describe('GET /api/petween/config — phase 1 view-seam equivalence matrix', () => {
+  const putConfig = (patch: unknown): Promise<Response> =>
+    fetch(`${base}/api/petween/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+
+  const getConfig = async (): Promise<{ config: PetweenConfig; assets: unknown; revision: number }> => {
+    const res = await fetch(`${base}/api/petween/config`)
+    expect(res.status).toBe(200)
+    return (await res.json()) as { config: PetweenConfig; assets: unknown; revision: number }
+  }
+
+  /** The legacy response: exactly what the config document holds. */
+  const expectLegacyResponse = async (): Promise<PetweenConfig> => {
+    const body = await getConfig()
+    const document = await deps.loadConfig()
+    expect(body.config).toEqual(document)
+    expect(body.assets).toEqual({})
+    expect(body.revision).toEqual(await deps.configRevision())
+    return document
+  }
+
+  it('null activePetId: a non-default slice with no pointer responds as the document', async () => {
+    const res = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
+    expect(res.status).toBe(200)
+    const document = await expectLegacyResponse()
+    expect(document.activePetId).toBeNull()
+    expect(document.global.scale).toBe(1.5)
+  })
+
+  it('dangling activePetId: the tolerated pointer resolves to no preset and the document answers', async () => {
+    const res = await putConfig({ activePetId: 'pet_missing', global: { scale: 2 } })
+    expect(res.status).toBe(200)
+    const document = await expectLegacyResponse()
+    expect(document.activePetId).toBe('pet_missing')
+    expect(document.global.scale).toBe(2)
+  })
+
+  it('preset in sync: the response equals the document while the preset path is exercised', async () => {
+    const seeded = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
+    expect(seeded.status).toBe(200)
+    const created = await fetch(`${base}/api/petween/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
+    })
+    expect(created.status).toBe(200)
+    const { pet } = (await created.json()) as { pet: PetPreset }
+    // A further edit keeps the mirror busy: config save → saveSlice, in sync.
+    const edited = await putConfig({ global: { scale: 2.5 } })
+    expect(edited.status).toBe(200)
+    const document = await expectLegacyResponse()
+    expect(document.activePetId).toBe(pet.id)
+    expect(document.global.scale).toBe(2.5)
+    // The preset genuinely tracked the edits (the sync precondition).
+    const preset = await deps.readPet(pet.id)
+    expect(preset.scale).toBe(2.5)
+    expect(preset.poses.idle.assetId).toBe('0123456789abcdef')
+  })
+
+  it('preset diverged (mirror failure simulated on disk): the config document wins', async () => {
+    const seeded = await putConfig({ global: { scale: 1.5 }, poses: { idle: { assetId: '0123456789abcdef' } } })
+    expect(seeded.status).toBe(200)
+    const created = await fetch(`${base}/api/petween/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
+    })
+    const { pet } = (await created.json()) as { pet: PetPreset }
+    // Simulate a swallowed mirror failure: the on-disk preset lags behind.
+    const presetPath = join(dir, 'pets', `${pet.id}.json`)
+    const stale = JSON.parse(await readFile(presetPath, 'utf8')) as Record<string, unknown>
+    stale.scale = 9.9
+    ;(stale.poses as Record<string, { assetId: string }>).idle.assetId = 'ffffffffffffffff'
+    await writeFile(presetPath, JSON.stringify(stale))
+    const document = await expectLegacyResponse()
+    expect(document.activePetId).toBe(pet.id)
+    expect(document.global.scale).toBe(1.5) // the document's, not the stale 9.9
+    expect(document.poses.idle.assetId).toBe('0123456789abcdef')
+  })
+
+  it('preset file corrupt: the unreadable preset resolves to no slice and the document answers', async () => {
+    const seeded = await putConfig({ global: { scale: 1.5 } })
+    expect(seeded.status).toBe(200)
+    const created = await fetch(`${base}/api/petween/pets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Kitty', from: 'current' }),
+    })
+    const { pet } = (await created.json()) as { pet: PetPreset }
+    await writeFile(join(dir, 'pets', `${pet.id}.json`), '{ not json')
+    const document = await expectLegacyResponse()
+    expect(document.activePetId).toBe(pet.id)
+    expect(document.global.scale).toBe(1.5)
+  })
+})
+
 describe('GET /api/petween/meta (B2 capability discovery)', () => {
   it('reports apiVersion/configVersion/revision and an additive feature list', async () => {
     const res = await fetch(`${base}/api/petween/meta`)

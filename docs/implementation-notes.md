@@ -985,3 +985,13 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 ### 验证
 
 主仓 **51 文件 / 977 用例**全绿、typecheck/lint 基线干净、产物重建;physics **10 文件 / 161 用例**全绿、typecheck/lint 干净、build 成功(client bundle 无 node 依赖泄漏)。真机复验项(规格 P2 验收):导出含 physics 配置的宠物包 → 删除宠物 → 导入 → 卡片确认横幅 → 应用 → 重力生效;旧主插件无 activePetId 字段时按契约静默(用例已锁)。
+
+## 预设权威化 阶段 1:host 只读面物化视图(2026-08-31)
+
+按拍板形态 (i) 与阶段定义落地,为翻转工程第一刀。主代理裁定阶段 1 语义:视图装配必须**可证明等价**——activePetId 为 null/指针悬空/预设文件损坏/预设切片与 config 切片结构不一致(镜像滞后窗口)时一律回退 config 自身切片(今日 config 仍是权威);仅切片深度一致时采用预设切片(值本相等,输出不变,但 seam 真正经走预设路径)。
+
+- 新建 `src/host/config-view.ts`(63 行纯函数 `buildConfigView`);`routes.ts` 仅 GET 分支接线(PUT/pets 路由/revision/SSE/镜像零改动)。比较语义与 `PetsStore.saveSlice` 依赖的归一化键序不变量同源,fail-safe(非归一化只会误判分叉→回退即旧响应)。
+- 热路径 IO:PetsStore 无缓存,选 `deps.readPet(activePetId)` 单小文件读,仅指针非空时发生,亚毫秒级;未新增注入。
+- 测试 +11(seam 单测 6 + 路由级等价矩阵 5:null/悬空/同步/分叉/损坏逐格断言响应 ≡ 旧行为且 assets/revision 不变)。
+- 验证:**52 文件 / 988 用例**全绿(+1 文件 +11 例,既有 977 零改动),typecheck/lint 基线干净。
+- 阶段 2 伏笔(仅注释):预设转权威、比较方向反转、onSaved 镜像与回退分支随迁移退役。

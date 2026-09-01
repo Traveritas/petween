@@ -39,7 +39,8 @@ import { ANIMATION_KINDS, type AnimationDefinition, type AnimationKind } from '.
 import { AnimationError, validateAnimationId } from './animations'
 import { AssetError } from './assets'
 import { RevisionMismatchError } from './config'
-import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset } from './pets'
+import { buildConfigView } from './config-view'
+import { PetError, applyPatchFor, expandPetSwitchPatch, petSliceFromConfig, validatePetId, type PetAttribution, type PetPluginConfigs, type PetPreset, type PetSlice } from './pets'
 import {
   buildPetPackageExport,
   buildPetPackageZip,
@@ -449,7 +450,23 @@ async function handleMeta(req: IncomingMessage, res: ServerResponse, deps: Route
 async function handleConfig(req: IncomingMessage, res: ServerResponse, deps: RoutesDeps): Promise<void> {
   if (req.method === 'GET') {
     const [config, assets, revision] = await Promise.all([deps.loadConfig(), deps.listAssets(), deps.configRevision()])
-    sendJson(res, 200, { config, assets, revision })
+    // Preset-authority phase 1 (host/config-view.ts): the response flows
+    // through the materialized-view seam. The active preset is read with the
+    // cheapest existing pattern — PetsStore.read, one small file (PetsStore
+    // keeps no cache by design; listPets would scan the whole directory) —
+    // and only when a pointer exists, so this polled hot path gains at most
+    // one tiny read. A missing/corrupt preset resolves to a null slice (the
+    // view then falls back to the config document), tolerated exactly like
+    // the PUT bare-switch guard below.
+    let activePresetSlice: PetSlice | null = null
+    if (config.activePetId !== null) {
+      try {
+        activePresetSlice = await deps.readPet(config.activePetId)
+      } catch (error) {
+        if (!(error instanceof PetError && error.code === 'NOT_FOUND')) throw error
+      }
+    }
+    sendJson(res, 200, { config: buildConfigView(config, activePresetSlice), assets, revision })
     return
   }
   if (req.method === 'PUT') {

@@ -2313,20 +2313,14 @@ ACTIVE thinking
 → ACTIVE thinking
 ```
 
-只更新 Ambient：
+Thinking 与 Working 配成不同 Pose 时换图（`advanced.changePoseWithinActive`，2026-09-18 起默认 true——桌面端连接器真机反馈：默认不换图被两宿主用户都当成缺陷）；换图走静默换 pose（不播 transition），方式由 `advanced.activityTransition` 决定。两 pose 相同时无视觉差异（等效只更新 Ambient）。关闭该开关则回落旧行为：
 
 ```text
 不换图片
 不 Comic Pop
 ```
 
-除非用户明确把 Thinking 和 Working 配成不同 Pose，并开启：
-
-```text
-advanced.changePoseWithinActive = true
-```
-
-该开关不进入 V1 UI，默认 false。
+开关位于编辑器「高级与互动 → 活跃状态内切换姿势」。
 
 ---
 

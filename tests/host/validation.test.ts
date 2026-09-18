@@ -255,7 +255,7 @@ describe('repairConfig — advanced defaults (§18.3)', () => {
   it('fills a missing advanced section with the defaults', () => {
     const repaired = repairConfig({ version: 1, enabled: true })
     expect(repaired.advanced).toEqual({
-      changePoseWithinActive: false,
+      changePoseWithinActive: true,
       activityTransition: 'subtle',
       terminalHold: 'timed',
       particles: true,
@@ -264,7 +264,7 @@ describe('repairConfig — advanced defaults (§18.3)', () => {
 
   it('repairs an invalid advanced value back to the default without throwing', () => {
     const repaired = repairConfig({ version: 1, advanced: { changePoseWithinActive: 1 } })
-    expect(repaired.advanced.changePoseWithinActive).toBe(false)
+    expect(repaired.advanced.changePoseWithinActive).toBe(true)
     expect(repairConfig({ version: 1, advanced: { particles: 'no' } }).advanced.particles).toBe(true)
   })
 

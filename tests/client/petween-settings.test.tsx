@@ -289,7 +289,7 @@ describe('PetweenSettings', () => {
     await saveChanges()
     expect(api.patchConfig).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.patchConfig).mock.calls[0][0].advanced).toEqual({
-      changePoseWithinActive: false,
+      changePoseWithinActive: true,
       activityTransition: 'subtle',
       terminalHold: 'until-interaction',
       particles: true,
@@ -304,16 +304,11 @@ describe('PetweenSettings', () => {
     vi.useFakeTimers()
     const api = makeApi(true)
     await render(api)
-    // changePoseWithinActive is off by default: the select starts disabled
-    expect(findControlRow('活跃内换图方式').querySelector('select')?.disabled).toBe(true)
-
-    const toggle = findControlRow('活跃状态内切换姿势').querySelector('input')
-    if (toggle === null) throw new Error('change-pose toggle missing')
-    act(() => toggle.click())
-    expect(findControlRow('活跃内换图方式').querySelector('select')?.disabled).toBe(false)
-
+    // changePoseWithinActive is on by default (2026-09-18): the select starts enabled
     const select = findControlRow('活跃内换图方式').querySelector('select')
     if (select === null) throw new Error('activity-transition select missing')
+    expect(select.disabled).toBe(false)
+
     act(() => choose(select, 'state'))
     await saveChanges()
     const calls = vi.mocked(api.patchConfig).mock.calls
@@ -322,6 +317,16 @@ describe('PetweenSettings', () => {
       activityTransition: 'state',
       terminalHold: 'timed',
       particles: true,
+    })
+
+    // Turning the pose toggle off re-disables the select and saves false.
+    const toggle = findControlRow('活跃状态内切换姿势').querySelector('input')
+    if (toggle === null) throw new Error('change-pose toggle missing')
+    act(() => toggle.click())
+    expect(findControlRow('活跃内换图方式').querySelector('select')?.disabled).toBe(true)
+    await saveChanges()
+    expect(vi.mocked(api.patchConfig).mock.calls.at(-1)?.[0].advanced).toMatchObject({
+      changePoseWithinActive: false,
     })
   })
 

@@ -1044,3 +1044,9 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **P3 physics**:boot load 链上注册 provider(返回 `structuredClone(当前配置)` 快照),三道静默门(已 dispose/旧服务无此方法/hub 未 loaded),dispose 注销。+5 用例(166 绿)。刻意不做:boot load 失败后经卡片重试变 loaded 的补注册(登记 backlog §7)。
 - **e2e**:核实更正——旧脚本无 DELETE 409/裸切断言(事故核验是临时 curl 未落盘);s3/s4/s5 补「为何不变」审计注释;新建 `s8-preset-authority.mjs`(纯 HTTP,翻转四语义 + 导出 manifest + pluginConfigs 宽松断言,破坏性分支 `E2E_DELETE_LAST_PET=1` 门控,仅语法检查未真机运行)。motion-format.md §12 补 POST 导出变体与收集语义。
 - 验证:主仓 55 文件 / **1044 用例**、physics 10 文件 / **166 用例**全绿,typecheck/lint 基线,两仓 build 成功。
+
+## changePoseWithinActive 默认翻转为 true(2026-09-18,桌面端用户拍板)
+
+- **动机**:桌面版 zcode 连接器真机使用反馈「思考/工作切换时图片不换」——DSH 端历史上同样出现过。根因即 §15.2 的默认 false(active 内换 mode 只刷 ambient 不换 pose);用户(两宿主唯一决策者)拍板默认换图。
+- **改动**:`createDefaultPetweenConfig().advanced.changePoseWithinActive = true`。规格 §15.2 文本同步(默认开、开关在编辑器「高级与互动」);显式存过 false 的旧配置不受影响(validation 按存量值保留,只有字段缺失的 repair/新装才吃新默认)。
+- **行为语义**:thinking 与 working pose 配置不同才会真的换图(同 pose 时无视觉差异);换图走既有「静默换 pose 不播过渡」路径,activityTransition 决定方式。

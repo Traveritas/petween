@@ -62,14 +62,14 @@ describe('PetStateResolver — visual transitions (§14)', () => {
 })
 
 describe('PetStateResolver — activity changes inside active (§15.2)', () => {
-  it('thinking → command emits an ambient-only target (same poseKey, new activityMode)', async () => {
+  it('thinking → command swaps to the working-slot pose by default (changePoseWithinActive on since 2026-09-18)', async () => {
     await send({ type: 'turn-start' })
     await send({ type: 'activity', mode: 'command' })
     expect(targets).toHaveLength(2)
     expect(targets[1]).toEqual({
       visualState: 'active',
       activityMode: 'command',
-      poseKey: 'thinking', // unchanged → the director plays no transition (§10.3)
+      poseKey: 'working', // the working slot pose emits; the swap is silent (no transition)
       reason: 'agent-state',
     })
     // a repeated identical activity dedupes away
@@ -77,25 +77,28 @@ describe('PetStateResolver — activity changes inside active (§15.2)', () => {
     expect(targets).toHaveLength(2)
   })
 
-  it('advanced.changePoseWithinActive=true lets the working slot pose through', async () => {
-    config.advanced.changePoseWithinActive = true
+  it('advanced.changePoseWithinActive=false keeps the ambient-only target (the pre-2026-09-18 default)', async () => {
+    config.advanced.changePoseWithinActive = false
     await send({ type: 'turn-start' })
     await send({ type: 'activity', mode: 'command' })
-    expect(targets[1].poseKey).toBe('working')
+    expect(targets[1].poseKey).toBe('thinking') // unchanged → the director plays no transition (§10.3)
   })
 
   it('reads the flag live off the config object (hot edits apply without a rebuild)', async () => {
     await send({ type: 'turn-start' })
     await send({ type: 'activity', mode: 'command' })
-    expect(targets[1].poseKey).toBe('thinking') // flag off: ambient-only target
-    config.advanced.changePoseWithinActive = true
-    await send({ type: 'activity', mode: 'working' })
-    expect(targets[2].poseKey).toBe('working') // flag on: the new slot pose emits
+    expect(targets[1].poseKey).toBe('working') // default on: the new slot pose emits
+    config.advanced.changePoseWithinActive = false
     await send({ type: 'activity', mode: 'thinking' })
-    expect(targets[3].poseKey).toBe('thinking')
+    expect(targets[2].poseKey).toBe('working') // off: keeps the current pose
+    config.advanced.changePoseWithinActive = true
+    await send({ type: 'activity', mode: 'command' })
+    expect(targets[3].poseKey).toBe('working') // on, but the command slot pose is already current
+    await send({ type: 'activity', mode: 'thinking' })
+    expect(targets[4].poseKey).toBe('thinking') // thinking slot differs → swaps back
     config.advanced.changePoseWithinActive = false
     await send({ type: 'activity', mode: 'command' })
-    expect(targets[4].poseKey).toBe('thinking') // off again: keeps the current pose
+    expect(targets[5].poseKey).toBe('thinking') // off again: keeps the current pose
   })
 })
 

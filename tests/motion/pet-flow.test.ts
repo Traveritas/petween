@@ -85,10 +85,12 @@ describe('integration: resolver → director (§29.4)', () => {
       harness.animations.some((a) => a.target === stage.layers.sway && a.options.iterations === Infinity),
     ).toBe(true)
 
-    // thinking → command: ZERO pose transition, ambient-only update
+    // thinking → command: pose swap through the subtle activity-swap
+    // transition (changePoseWithinActive default true + activityTransition
+    // 'subtle' since 2026-09-18) — still no full enter transition
     await step({ type: 'activity', mode: 'command' })
-    expect(stage.swapped).toHaveLength(1)
-    expect(transitionRunCount()).toBe(2)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'working'])
+    expect(transitionRunCount()).toBe(4)
     // working ambient: breathe loop on, sway loop stopped
     expect(
       harness.animations.some((a) => a.target === stage.layers.breathe && a.playState === 'running'),
@@ -97,18 +99,18 @@ describe('integration: resolver → director (§29.4)', () => {
 
     // active → waiting: one transition
     await step({ type: 'waiting' })
-    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'waiting'])
-    expect(transitionRunCount()).toBe(4)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'working', 'waiting'])
+    expect(transitionRunCount()).toBe(6)
 
     // waiting → active(thinking): one transition back to the thinking pose
     await step({ type: 'activity', mode: 'thinking' })
-    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'waiting', 'thinking'])
-    expect(transitionRunCount()).toBe(6)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'working', 'waiting', 'thinking'])
+    expect(transitionRunCount()).toBe(8)
 
     // active → success: celebrate runs once
     await step({ type: 'turn-end', outcome: 'success' })
-    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'waiting', 'thinking', 'success'])
-    expect(transitionRunCount()).toBe(8)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'working', 'waiting', 'thinking', 'success'])
+    expect(transitionRunCount()).toBe(10)
 
     // success is transient: after the hold the pet returns to idle by itself
     await vi.advanceTimersByTimeAsync(1600)
@@ -117,7 +119,7 @@ describe('integration: resolver → director (§29.4)', () => {
       harness.finishPending()
       await vi.advanceTimersByTimeAsync(0)
     }
-    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'waiting', 'thinking', 'success', 'idle'])
-    expect(transitionRunCount()).toBe(10)
+    expect(stage.swapped.map((pose) => pose.poseKey)).toEqual(['thinking', 'working', 'waiting', 'thinking', 'success', 'idle'])
+    expect(transitionRunCount()).toBe(12)
   })
 })

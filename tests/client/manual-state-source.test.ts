@@ -77,9 +77,10 @@ describe('ManualStateSource', () => {
     await vi.advanceTimersByTimeAsync(COALESCE_MS)
     expect(targets).toEqual([
       { visualState: 'active', activityMode: 'thinking', poseKey: 'thinking', reason: 'manual-preview' },
-      // §15.2: activity change inside `active` keeps the current poseKey, so
-      // the director only refreshes the ambient profile (no transition).
-      { visualState: 'active', activityMode: 'working', poseKey: 'thinking', reason: 'manual-preview' },
+      // §15.2: activity change inside `active` swaps to the new slot's pose
+      // silently (changePoseWithinActive default true since 2026-09-18; no
+      // transition plays, the director only refreshes the ambient profile).
+      { visualState: 'active', activityMode: 'working', poseKey: 'working', reason: 'manual-preview' },
       { visualState: 'waiting', activityMode: undefined, poseKey: 'waiting', reason: 'manual-preview' },
       { visualState: 'idle', activityMode: undefined, poseKey: 'idle', reason: 'manual-preview' },
     ])

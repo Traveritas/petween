@@ -145,32 +145,34 @@ describe('DSH mainline: IDLE→ACTIVE→WAITING→ACTIVE→SUCCESS→IDLE (§29.
     await settle()
     expect(transitionRunCount()).toBe(2)
 
-    // tool/call bash → ACTIVE(command): ZERO pose transition, ambient-only.
+    // tool/call bash → ACTIVE(command): pose swap through the subtle
+    // activity-swap transition (changePoseWithinActive default true since
+    // 2026-09-18) — still no full enter transition.
     sendSessionEvent('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' })
     await settle()
-    expect(swappedPoses()).toEqual(['thinking'])
-    expect(transitionRunCount()).toBe(2)
+    expect(swappedPoses()).toEqual(['thinking', 'working'])
+    expect(transitionRunCount()).toBe(4)
     expect(
       harness.animations.some((a) => a.target === stage.layers.breathe && a.playState === 'running'),
     ).toBe(true)
 
-    // tool/result → back to thinking activity: still ambient-only.
+    // tool/result → back to thinking activity: another subtle swap.
     sendSessionEvent('tool/result', { turn: 1, step: 1, message: {} })
     await settle()
-    expect(swappedPoses()).toEqual(['thinking'])
-    expect(transitionRunCount()).toBe(2)
+    expect(swappedPoses()).toEqual(['thinking', 'working', 'thinking'])
+    expect(transitionRunCount()).toBe(6)
 
     // approval/asked → WAITING: one transition.
     sendSessionEvent('approval/asked', { id: 'a1', toolName: 'bash' })
     await settle()
-    expect(swappedPoses()).toEqual(['thinking', 'waiting'])
-    expect(transitionRunCount()).toBe(4)
+    expect(swappedPoses()).toEqual(['thinking', 'working', 'thinking', 'waiting'])
+    expect(transitionRunCount()).toBe(8)
 
     // approval/decided → ACTIVE again: one transition back to thinking.
     sendSessionEvent('approval/decided', { id: 'a1', outcome: 'allowed-once' })
     await settle()
-    expect(swappedPoses()).toEqual(['thinking', 'waiting', 'thinking'])
-    expect(transitionRunCount()).toBe(6)
+    expect(swappedPoses()).toEqual(['thinking', 'working', 'thinking', 'waiting', 'thinking'])
+    expect(transitionRunCount()).toBe(10)
 
     // turn/end completed → SUCCESS: one celebrate transition. The real runtime
     // reports agent idle IMMEDIATELY after turn/end; that stray idle must not
@@ -178,14 +180,14 @@ describe('DSH mainline: IDLE→ACTIVE→WAITING→ACTIVE→SUCCESS→IDLE (§29.
     sendSessionEvent('turn/end', { turn: 1, reason: { kind: 'completed' } })
     sendAgentStatus('idle')
     await settle()
-    expect(swappedPoses()).toEqual(['thinking', 'waiting', 'thinking', 'success'])
-    expect(transitionRunCount()).toBe(8)
+    expect(swappedPoses()).toEqual(['thinking', 'working', 'thinking', 'waiting', 'thinking', 'success'])
+    expect(transitionRunCount()).toBe(12)
 
     // The full hold still runs; only then does the pet return to idle.
     await vi.advanceTimersByTimeAsync(config.global.successHoldMs)
     await settle()
-    expect(swappedPoses()).toEqual(['thinking', 'waiting', 'thinking', 'success', 'idle'])
-    expect(transitionRunCount()).toBe(10)
+    expect(swappedPoses()).toEqual(['thinking', 'working', 'thinking', 'waiting', 'thinking', 'success', 'idle'])
+    expect(transitionRunCount()).toBe(14)
   })
 
   it('a post-commit agent idle during the hold is dropped as well', async () => {

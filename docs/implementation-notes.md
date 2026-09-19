@@ -1096,3 +1096,9 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 
 - 用户复验反馈上一轮修复(rulerTick pointer-events + user-select)未解决闪动。改用证据法:CDP 命中测试在真页面逐 2px 采样 elementFromPoint+computed cursor,绘出光标地图——**lanes 面板的 8px 内边距环与每条轨道间 2px 接缝(row 盒)都是 `auto`**,扫动时指针在这些细条上不停翻回默认光标(静止时不察觉,运动中即闪动)。
 - 修复:`.timelineLanes`/`.timelineRow` 统一 `cursor: crosshair`(整个面板=可操纵表面),`.trackLabel` 显式回 `default`(标签列是 UI 不是时间面)。修复后地图复测:面板内仅剩 crosshair/ew-resize/grab,`auto` 只存在于标签列。探针为临时 harness(已删)。
+
+## V1.2 光标闪动第三轮:预览容器统一 grab + 现象分层(2026-09-19)
+
+- 用户判别性观察:**只有 Petween 自己的窗口闪**(其他程序正常、桌面宠物本体正常);宠物预览悬停为「手↔默认」闪,出现在编辑器与设置页两处预览。
+- 已落地修复:三处预览容器(设置页 LivePreview `.previewStage`、动画库 `.animationPreviewStage`、工作台 `.stageBox`)整体 `cursor: grab`——精灵 img 本就 grab,但其盒缘(透明边距/动画 transform)使光标判定在 img↔容器间翻动;容器与 img 同光标后边界消失。
+- 待判别:时间轴/文字处的闪动与此是否同源。理论:桌面宠物 ambient 动画使全屏透明 overlay 持续合成,同一 GPU 进程的兄弟窗口(编辑器/设置窗)光标更新被打断——与「只有我们的窗口闪/桌面宠物不闪/静态 DOM 探针全净」全部吻合。判别实验(用户 10 秒):设置里把宠物关掉再扫时间轴,闪动消失则坐实 overlay 合成开销 → 下一步为 overlay 收缩到宠物包围盒(既有 backlog「多显示器每屏一窗」的邻接改造)。

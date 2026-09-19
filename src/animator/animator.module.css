@@ -130,11 +130,14 @@
 
 /* A contained viewport, not a loose renderer: the stage layers animate with
    transforms, so the box clips and centers — the pet reads as performing on
-   a stage instead of bleeding across the workbench. */
+   a stage instead of bleeding across the workbench. The whole box carries
+   the pet's grab cursor: one stable decision, no sprite-box boundary to
+   flap on while the mouse moves. */
 .stageBox {
   position: relative;
   height: 300px;
   overflow: hidden;
+  cursor: grab;
   border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
   background:
     radial-gradient(

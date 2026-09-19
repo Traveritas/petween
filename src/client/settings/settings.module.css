@@ -442,6 +442,7 @@
 .previewStage {
   position: relative;
   height: 260px;
+  cursor: grab; /* same rationale as .animationPreviewStage */
   border: 1px dashed var(--dsw-alias-border-l1, #d4d9e3);
   border-radius: 8px;
   background: linear-gradient(
@@ -654,6 +655,11 @@
   position: relative;
   height: 240px;
   overflow: hidden;
+  /* One stable cursor for the whole stage: the sprite img already says grab,
+     but its box edges (transparent margins, animation transforms) make the
+     cursor decision flap img-vs-container while the mouse moves. The whole
+     container carrying the same cursor removes the boundary. */
+  cursor: grab;
   border: 1px dashed var(--dsw-alias-border-l1, #d4d9e3);
   border-radius: 8px;
   background: linear-gradient(

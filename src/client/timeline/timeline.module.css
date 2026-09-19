@@ -32,6 +32,11 @@
   border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
   border-radius: 6px;
   background: var(--dsw-alias-bg-layer-1, #f9fafb);
+  /* The whole panel is the timeline's manipulable surface: padding ring,
+     row seams and lane margins all read as crosshair, so a sweeping pointer
+     never flips back to the default cursor between lanes (the label column
+     opts back out below). */
+  cursor: crosshair;
 }
 
 /* V1.2 zoom/pan: the horizontal scroll viewport (no visual change at 1×) and
@@ -52,6 +57,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: crosshair; /* the 2px lane-margin seams must not flash default */
 }
 
 /* Sticky while panning: labels float over the scrolled lanes with the
@@ -71,6 +77,7 @@
   color: var(--dsw-alias-label-secondary, #6b7280);
   background: var(--dsw-alias-bg-layer-1, #f9fafb);
   border-right: 8px solid var(--dsw-alias-bg-layer-1, #f9fafb);
+  cursor: default; /* the label column is UI chrome, not timeline surface */
 }
 
 .trackProperty {

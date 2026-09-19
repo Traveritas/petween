@@ -1091,3 +1091,8 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **根因与修复**：①`.rulerTick` 无 `pointer-events:none`(刻度文字盖在 ew-resize 标尺上→命中测试来回翻转)+时间轴整体无 `user-select:none`(拖动触发文本选择→I-beam 抢光标)——两处补上,另加 diamond/marker/handle 的 `:active{cursor:grabbing}`;②预览此前是裸 `PetRenderer` 塞进 flex 格——舞台层动画的 transform 会越界,现在 `stageBox`(relative+overflow:hidden+300px+居中+底部径向渐变)完整收容(对齐 AnimationLibrary 的 animationPreviewStage 先例)。
 - **三栏重构**(Operate 模式,petween 令牌体系不变):**库|视口+时间轴|属性** DCC 语法——左列动画库;中列上「预览」面板(收容舞台+传输条:试播/停止/循环/强度+播放头 tabular-nums 时间读数)下「时间轴」面板(标题行带撤销/重做);右列「属性」(标量表单+dirty 点)/「检查器」(TimelineEditor 新增 `inspectorTarget` portal prop 停靠,saveIndicatorTarget 同款模式,缺省仍内联=V1.1 不变)/「操作」(保存/删除/克隆)。面板=唯一容器词汇(layer-1 底+标题行+统一圆角边框),≤1280px 时属性栏折叠到时间轴下方。布局经无头 Edge CDP 截图+DOM 几何探针审查(空态+选中态两帧)。
 - **测试**：+inspector portal 停靠用例;1111 用例全绿。
+
+## V1.2 光标闪动真根因修复:时间轴面板表面统一 crosshair(2026-09-19 第二轮)
+
+- 用户复验反馈上一轮修复(rulerTick pointer-events + user-select)未解决闪动。改用证据法:CDP 命中测试在真页面逐 2px 采样 elementFromPoint+computed cursor,绘出光标地图——**lanes 面板的 8px 内边距环与每条轨道间 2px 接缝(row 盒)都是 `auto`**,扫动时指针在这些细条上不停翻回默认光标(静止时不察觉,运动中即闪动)。
+- 修复:`.timelineLanes`/`.timelineRow` 统一 `cursor: crosshair`(整个面板=可操纵表面),`.trackLabel` 显式回 `default`(标签列是 UI 不是时间面)。修复后地图复测:面板内仅剩 crosshair/ew-resize/grab,`auto` 只存在于标签列。探针为临时 harness(已删)。

@@ -6,8 +6,7 @@ DeepSeek Harness（DSH）Web UI 的宠物插件 —— **一个纸片动画风�
 
 你只需要准备少量静态角色图（如 `idle.webp` / `thinking.webp` / `happy.webp`），插件的程序化 Motion Engine 会自动生成漫画感的状态切换动画（squash & stretch）与循环动画（Bounce / Sway / Breathing），并跟随 Agent 的真实运行状态自动切换姿势。
 
-![Overlay 宠物](docs/images/overlay.png)
-
+[README需要更新，排期中！]
 ## 特性
 
 - **少量图片即可工作**：至少一张图；六个状态槽位（待机/思考/工作/等待/成功/错误）各自可配，缺失状态自动 fallback

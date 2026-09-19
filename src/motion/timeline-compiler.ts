@@ -223,3 +223,62 @@ export function compileTimeline(definition: AnimationDefinition, options: Compil
     reducedMotion,
   }
 }
+
+/**
+ * A per-layer sample for scrubbing (V1.2): exactly the individual-transform
+ * properties composeLayerCss emits for WAAPI playback, so a scrub preview is
+ * pixel-identical to playback at the same time. `pose` follows audition
+ * semantics: the LATEST NAMED pose-swap at/before `at` (anonymous transition
+ * swaps are state-machine-owned and never change the audition pose); the
+ * string is the raw event target (builtin slot or user: id — resolution
+ * stays the host's job); null = keep the current pose. Particle events are
+ * markers only.
+ */
+export interface TimelineSample {
+  layers: Partial<Record<MotionLayer, { translate?: string; scale?: string; rotate?: string; opacity?: string }>>
+  pose: string | null
+}
+
+/**
+ * Easing-aware sample of the definition at normalized time `at` (clamped
+ * 0..1) — the scrub/preview counterpart of compileTimeline, reusing the same
+ * normalization (endpoint completion, parameterized values, bezier easing).
+ * No segments, no duration math: pure point sampling.
+ */
+export function sampleTimelineAt(
+  definition: AnimationDefinition,
+  at: number,
+  options: Pick<CompileOptions, 'params'> = {},
+): TimelineSample {
+  assertValidAnimationDefinition(definition)
+
+  const strengthParameter = definition.parameters?.strength
+  const strength = clamp(
+    options.params?.strength ?? strengthParameter?.default ?? 1,
+    strengthParameter?.min ?? TRANSITION_STRENGTH_LIMITS.min,
+    strengthParameter?.max ?? TRANSITION_STRENGTH_LIMITS.max,
+  )
+  const tracks = definition.tracks.map((track) => normalizeTrack(track, strength, false))
+  const time = clamp(at, 0, 1)
+
+  const valueOf = (property: MotionProperty): number => {
+    const track = tracks.find((candidate) => candidate.property === property)
+    return track === undefined ? MOTION_PROPERTIES[property].defaultValue : sampleTrack(track, time)
+  }
+
+  const layers: TimelineSample['layers'] = {}
+  const touchedLayers = new Set<MotionLayer>(definition.tracks.map((track) => MOTION_PROPERTIES[track.property].targetLayer))
+  for (const layer of touchedLayers) {
+    layers[layer] = composeLayerCss(layer, valueOf) as NonNullable<TimelineSample['layers'][MotionLayer]>
+  }
+
+  let pose: string | null = null
+  // Event order is not part of the schema contract (same as compileTimeline).
+  const sortedEvents = [...(definition.events ?? [])].sort((a, b) => a.at - b.at)
+  for (const event of sortedEvents) {
+    if (event.at > time) break
+    if (event.type === 'pose-swap' && event.pose !== undefined) pose = event.pose
+  }
+
+  return { layers, pose }
+}

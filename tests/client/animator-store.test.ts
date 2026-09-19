@@ -9,9 +9,9 @@ import { AnimatorStore } from '../../src/animator/animator-store'
 import { BUILTIN_DEFINITIONS } from '../../src/client/timeline/animation-draft'
 
 describe('AnimatorStore', () => {
-  it('starts with nothing open', () => {
+  it('starts with nothing open and the default feel state', () => {
     const store = new AnimatorStore()
-    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null })
+    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null, playheadAt: null, zoom: 1, snapEnabled: true })
   })
 
   it('selectAnimation opens a pristine draft of the saved definition', () => {
@@ -60,13 +60,48 @@ describe('AnimatorStore', () => {
 
     store.clear() // nothing open: no notification, no state churn
     expect(listener).not.toHaveBeenCalled()
-    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null })
+    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null, playheadAt: null, zoom: 1, snapEnabled: true })
 
     store.selectAnimation(BUILTIN_DEFINITIONS[0])
     expect(listener).toHaveBeenCalledTimes(1)
     store.clear()
     expect(listener).toHaveBeenCalledTimes(2)
-    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null })
+    expect(store.getSnapshot()).toMatchObject({ selectedId: null, draft: null })
+  })
+
+  it('selection switches drop the parked playhead (a stale scrub would lie)', () => {
+    const store = new AnimatorStore()
+    store.selectAnimation(BUILTIN_DEFINITIONS[0])
+    store.setPlayhead(0.3)
+    expect(store.getSnapshot().playheadAt).toBe(0.3)
+    store.selectAnimation(BUILTIN_DEFINITIONS[1])
+    expect(store.getSnapshot().playheadAt).toBeNull()
+  })
+
+  it('playhead clamps, dedupes, and clears', () => {
+    const store = new AnimatorStore()
+    store.selectAnimation(BUILTIN_DEFINITIONS[0])
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.setPlayhead(1.7)
+    expect(store.getSnapshot().playheadAt).toBe(1)
+    store.setPlayhead(1) // unchanged: no notification
+    expect(listener).toHaveBeenCalledTimes(1)
+    store.setPlayhead(null)
+    expect(store.getSnapshot().playheadAt).toBeNull()
+    store.setPlayhead(null) // already null: no notification
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it('zoom clamps into the working range and snap toggles', () => {
+    const store = new AnimatorStore()
+    store.setZoom(0.2)
+    expect(store.getSnapshot().zoom).toBe(1)
+    store.setZoom(500)
+    expect(store.getSnapshot().zoom).toBe(64)
+    store.setSnapEnabled(false)
+    expect(store.getSnapshot().snapEnabled).toBe(false)
   })
 
   it('notifies subscribers on every mutation and honors unsubscribe/dispose', () => {

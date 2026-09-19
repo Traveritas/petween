@@ -1059,3 +1059,12 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **animator 前端**:`src/animator/`(入口 index.tsx → `AnimatorPage` 工作台:左动画库列(内置+自定义+Motion Pack 导入导出+挂载横幅)|中标量表单+320px 试播渲染器(PreviewSession auditionOnly,试播/停止/循环试播/强度与动画库同语义)|下全宽 TimelineEditor+JSON 视图+动作行)。编辑状态入 `AnimatorStore`(纯 TS,subscribe/getSnapshot,仿 EditorStore 模式;本批持有 selectedId/draft,Phase 12 加 playhead/zoom、Phase 13 加多选与 undo 栈)。持久化复用 EditorStore + `/api/petween/*`,跨上下文一致性沿用 config-hub 3s 轮询 + 显式保存。`NoticeBar` 自 PetweenSettings 导出复用。
 - **构建**:tsdown 第 5 个配置 `petween/animator`(IIFE 自包含,CSS Modules 内联,react 全量内联,`clientBundlePurity` 门禁),产物 `lib/animator.js`(505KB/gzip 130KB);package.json files 纳入。
 - **测试**:+animator-page(host 路由,照 editor-page.test)/+animator-store(状态机单测)/+animator-entry(jsdom 入口 smoke:表头+库+常驻试播渲染器);plugin-entry ALL_ROUTES 追加 `/petween-animator`。58 文件/1057 用例全绿,双 typecheck 零错误,四+一产物 build 通过。
+
+## V1.2 Phase 12 手感一批:scrub 擦洗 + 采样预览 + zoom/pan + ms 时间轴 + 吸附升级(2026-09-19)
+
+- **motion**:`timeline-compiler.ts` 新增 `sampleTimelineAt(definition, at, {params})`——与 `compileTimeline` 共用 normalizeTrack/sampleTrack/composeLayerCss,逐层返回与 WAAPI 播放逐像素一致的独立变换属性(translate/scale/rotate/opacity);`pose` 遵循试播语义(≤t 最近一个**命名** pose-swap;过渡匿名换图与粒子事件不换图;事件乱序无关)。
+- **PreviewSession**:`scrubDefinition(def, at, {strength})`(停试播→清残留内联样式→采样直写四层内联样式→命名换图经 preload+swapPose)+ `endScrub()`(清样式+回到试播 idle 姿势)。擦洗无 WAAPI、无 director,拖到哪看到哪。
+- **timeline-model**:`snapAtWithTargets`(自适应网格取整 + 目标捕获半径 6px,enabled=false 直通)+ `adaptiveGridStep`(1-2-5×10^k 步进,≥44px 恒定,跨十进制修正)+ `formatTickMs`(≥1s 且整百 → 秒标签)。
+- **TimelineEditor advanced 模式**(全部可选 props,缺省=V1.1 行为不变):`.timelineScroll/.timelineContent` 包裹(内容宽 = zoom×100%,原生横向滚动做 pan,标签 sticky-left 带底色);`ScrubRuler`(ms 自适应刻度、点击/拖拽擦洗、←→ 步进 Shift×10、role=slider 可达性);播放头全高线 + 头部块;Ctrl+滚轮以光标为锚缩放(1×..64×,useLayoutEffect 事后修正 scrollLeft)、滚轮/触控板平移;Alt 按住(window keydown/keyup/blur 追踪)临时禁用吸附;帧/事件拖拽吸附目标=网格+兄弟帧/事件+播放头,播放头擦洗吸附目标=网格+帧/事件(**排除自身**,防粘滞)。TrackLane/EventTrack 增可选 `snapAt` prop(缺省 0.01 网格);键盘微调恒为 0.01 细步。
+- **AnimatorStore**:快照扩 `playheadAt/zoom/snapEnabled`(setPlayhead 去重+钳制;选动画/清选自动弃置播放头);AnimatorPage 接线——拖标尺即 `scrubDefinition` 定格预览(草稿无效时只动线不采样)、Space 播放/停止(latest-ref 模式)、试播/停止/切选自动 `endScrub`、缩放/吸附控件经 store。
+- **测试**:+timeline-sampling(采样数学/pose 语义/乱序)/+timeline-snap(吸附语义/步进数学/标签)/+timeline-editor-advanced(标尺渲染/点击/方向键/Ctrl 滚轮/播放头吸附/禁用直通/V1.1 无 chrome 回归)/+preview-scrub(内联样式/重复擦洗/endScrub/命名换图/匿名不换);animator-store 扩断言。62 文件/1088 用例全绿,双 typecheck 零错误。

@@ -117,6 +117,7 @@ export function AnimatorPage(): JSX.Element {
 
   const applySelection = (definition: AnimationDefinition): void => {
     auditionSessionRef.current?.stopPreviewDefinition()
+    auditionSessionRef.current?.endScrub() // a parked scrub freezes the pose; drop it on switch
     setAutoReplay(false)
     animator.selectAnimation(definition)
     setTimelineErrors(validateTimelineDraft(definition.kind, definition.tracks, definition.events ?? []))
@@ -242,6 +243,7 @@ export function AnimatorPage(): JSX.Element {
 
   const audition = (): void => {
     if (evaluation?.definition != null && timelineErrors.length === 0) {
+      auditionSessionRef.current?.endScrub()
       auditionSessionRef.current?.previewDefinition(evaluation.definition, { strength: previewStrength })
     }
   }
@@ -249,7 +251,53 @@ export function AnimatorPage(): JSX.Element {
   const stopAudition = (): void => {
     setAutoReplay(false)
     auditionSessionRef.current?.stopPreviewDefinition()
+    auditionSessionRef.current?.endScrub()
   }
+
+  /**
+   * Playhead scrub (V1.2): park the playhead in the store and freeze the
+   * preview at the sampled frame — pixel-identical to playback (the sampler
+   * shares the compiler's math). An invalid draft still moves the playhead;
+   * only the preview apply is skipped.
+   */
+  const handlePlayheadChange = (at: number): void => {
+    animator.setPlayhead(at)
+    if (evaluation?.definition != null && timelineErrors.length === 0) {
+      auditionSessionRef.current?.scrubDefinition(evaluation.definition, at, { strength: previewStrength })
+    }
+  }
+
+  // Space toggles the audition (engine transport feel). Skipped while a form
+  // control has focus. The latest-toggle ref keeps the listener stable.
+  const toggleAuditionRef = useRef<() => void>(() => undefined)
+  toggleAuditionRef.current = (): void => {
+    if (draft === null) return
+    if (autoReplay) {
+      stopAudition()
+      return
+    }
+    if (evaluation?.definition != null && timelineErrors.length === 0) audition()
+  }
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== 'Space' || event.repeat) return
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.tagName === 'BUTTON' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+      event.preventDefault()
+      toggleAuditionRef.current()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
   // Latest-callback ref so the debounce timer always auditions the live draft.
   const auditionRef = useRef(audition)
   useEffect(() => {
@@ -534,9 +582,17 @@ export function AnimatorPage(): JSX.Element {
                 <>
                   <TimelineEditor
                     key={selected.id}
+                    advanced
                     kind={draft.kind}
                     tracks={draft.tracks}
                     events={draft.events}
+                    durationMs={draft.durationMs}
+                    playheadAt={animSnapshot.playheadAt}
+                    onPlayheadChange={handlePlayheadChange}
+                    zoom={animSnapshot.zoom}
+                    onZoomChange={(zoom) => animator.setZoom(zoom)}
+                    snapEnabled={animSnapshot.snapEnabled}
+                    onSnapEnabledChange={(enabled) => animator.setSnapEnabled(enabled)}
                     onChange={({ tracks, events }) => animator.applyTimeline({ tracks, events })}
                     onValidationChange={setTimelineErrors}
                   />

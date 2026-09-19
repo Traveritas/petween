@@ -31,13 +31,32 @@
   background: var(--dsw-alias-bg-layer-1, #f9fafb);
 }
 
+/* V1.2 zoom/pan: the horizontal scroll viewport (no visual change at 1×) and
+   the zoomed content box the lanes, ruler, event overlay and playhead live
+   in (percentage positions keep working at any zoom). */
+.timelineScroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.timelineContent {
+  position: relative;
+  min-width: 100%;
+}
+
 .timelineRow {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+/* Sticky while panning: labels float over the scrolled lanes with the
+   lanes' own background so nothing bleeds through. */
 .trackLabel {
+  position: sticky;
+  left: 0;
+  z-index: 3;
   width: var(--mp-timeline-label-w);
   flex: none;
   display: flex;
@@ -47,6 +66,8 @@
   min-width: 0;
   font-size: 11px;
   color: var(--dsw-alias-label-secondary, #6b7280);
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+  border-right: 8px solid var(--dsw-alias-bg-layer-1, #f9fafb);
 }
 
 .trackProperty {
@@ -74,6 +95,19 @@
   position: relative;
   flex: 1;
   height: 18px;
+}
+
+/* V1.2 interactive ruler: taller (ms labels), scrub cursor, focus ring. */
+.rulerScrub {
+  height: 22px;
+  cursor: ew-resize;
+  touch-action: none; /* a ruler press is a scrub gesture, not page scroll */
+}
+
+.rulerScrub:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary, #6366f1);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 
 .rulerTick {
@@ -151,13 +185,14 @@
 
 /* --- event markers (full-height lines over all lanes) --- */
 
+/* V1.2: the overlay lives inside .timelineContent (it zooms/pans with it);
+   lane area starts after the sticky label block (label + border-right). */
 .eventOverlay {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
-  /* lane left edge = lanes padding (8) + label width + row gap (8) */
+  top: 0;
+  bottom: 0;
   left: calc(var(--mp-timeline-label-w) + 16px);
-  right: 8px;
+  right: 0;
   pointer-events: none; /* lane clicks pass through; the icons re-enable */
 }
 
@@ -189,6 +224,32 @@
 .eventIconSelected:hover {
   background: var(--dsw-alias-brand-primary, #6366f1);
   color: var(--dsw-alias-bg-layer-2, #ffffff);
+}
+
+/* --- playhead (V1.2 advanced mode) --- */
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid var(--dsw-alias-brand-primary, #6366f1);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.playheadHead {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px 2px 2px 0;
+  background: var(--dsw-alias-brand-primary, #6366f1);
+}
+
+.toolbarToggleOn {
+  border-color: var(--dsw-alias-brand-primary, #6366f1);
 }
 
 /* --- inspector --- */

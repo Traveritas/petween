@@ -17,6 +17,8 @@ import { POSE_KEYS } from '../core/types'
 import type { AnimationDefinition } from '../motion/animation-definition'
 import { assertValidAnimationDefinition } from '../motion/animation-definition'
 import { createBuiltinRegistry, type AnimationRegistry } from '../motion/animation-registry'
+import { sampleTimelineAt } from '../motion/timeline-compiler'
+import type { MotionLayer } from '../motion/motion-properties'
 import type { TimelineInstance } from '../motion/animation-handle'
 import { MotionDirector } from '../motion/motion-director'
 import type { PlayOptions } from '../motion/timeline-engine'
@@ -311,6 +313,64 @@ export class PreviewSession {
     instance.dispose()
     this.customInstances.delete(instance)
     this.previewInstance = null
+  }
+
+  /**
+   * V1.2 Phase 12 scrub preview: apply the definition's sample at `at`
+   * directly onto the stage layers as inline individual-transform styles —
+   * no WAAPI, no director; pixel-identical to playback (the sampler shares
+   * the compiler's math). Any audition stops first; a NAMED pose-swap at/before
+   * `at` swaps the pose (audition semantics: anonymous transition swaps never
+   * change the audition pose). Idempotent and cheap — call per drag tick.
+   */
+  scrubDefinition(definition: AnimationDefinition, at: number, options: { strength?: number } = {}): void {
+    if (this.disposed) return
+    assertValidAnimationDefinition(definition)
+    this.stopPreviewDefinition()
+    const sample = sampleTimelineAt(
+      definition,
+      at,
+      options.strength === undefined ? {} : { params: { strength: options.strength } },
+    )
+    this.clearScrubStyles()
+    for (const [layer, css] of Object.entries(sample.layers) as Array<[MotionLayer, NonNullable<ReturnType<typeof sampleTimelineAt>['layers'][MotionLayer]>]>) {
+      const element = this.stage.layers[layer]
+      if (element === undefined) continue
+      if (css.translate !== undefined) element.style.translate = css.translate
+      if (css.scale !== undefined) element.style.scale = css.scale
+      if (css.rotate !== undefined) element.style.rotate = css.rotate
+      if (css.opacity !== undefined) element.style.opacity = css.opacity
+    }
+    if (sample.pose !== null && (POSE_KEYS as readonly string[]).includes(sample.pose)) {
+      // Same discipline as the director seam: builtin slots resolve through
+      // the config; user: ids need companion registrations the preview lacks
+      // (dangling targets skip — the audition keeps its pose).
+      const pose = this.resolvePose(sample.pose as PoseKey)
+      if (pose !== null && pose.asset.url !== this.stage.currentPose?.asset.url) {
+        void this.stage
+          .preload([pose])
+          .then(() => {
+            if (!this.disposed) this.stage.swapPose(pose)
+          })
+          .catch(() => undefined) // preload failure: keep the current pose
+      }
+    }
+  }
+
+  /** Leave the scrubbed state: clear inline styles, back to the audition pose. */
+  endScrub(): void {
+    if (this.disposed) return
+    this.clearScrubStyles()
+    void this.refreshAuditionPose()
+  }
+
+  private clearScrubStyles(): void {
+    for (const element of Object.values(this.stage.layers)) {
+      element.style.translate = ''
+      element.style.scale = ''
+      element.style.rotate = ''
+      element.style.opacity = ''
+    }
   }
 
   dispose(): void {

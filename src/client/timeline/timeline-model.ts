@@ -32,6 +32,74 @@ export function snapAt(at: number): number {
   return clamp(Math.round(at * 100) / 100, 0, 1)
 }
 
+/**
+ * V1.2 target snapping (game-engine feel): the raw time first rounds to the
+ * adaptive grid (like snapAt, but the grid follows zoom), then any snap
+ * TARGET — another keyframe/event time or the playhead — wins when it sits
+ * within `threshold` normalized units. Disabled passes the raw clamped time
+ * through (the Alt-hold escape hatch).
+ */
+export interface SnapOptions {
+  enabled: boolean
+  /** Adaptive grid step in normalized units (see adaptiveGridStep). */
+  grid: number
+  /** Snap candidates in normalized units (other frames, events, playhead). */
+  targets: readonly number[]
+  /** Capture radius in normalized units (~px / lane width). */
+  threshold: number
+}
+
+export function snapAtWithTargets(at: number, options: SnapOptions): number {
+  const clamped = clamp(at, 0, 1)
+  if (!options.enabled) return clamped
+  const steps = Math.max(1, Math.round(1 / options.grid))
+  const gridRounded = clamp(Math.round(clamped * steps) / steps, 0, 1)
+  let best = gridRounded
+  let bestDistance = Math.abs(clamped - gridRounded)
+  for (const target of options.targets) {
+    const distance = Math.abs(clamped - target)
+    if (distance <= options.threshold && distance < bestDistance) {
+      best = clamp(target, 0, 1)
+      bestDistance = distance
+    }
+  }
+  return roundValue(best)
+}
+
+/** 1-2-5 nice steps keep ruler labels readable at every zoom (ms units). */
+const NICE_STEPS_MS = [1, 2, 5]
+
+/**
+ * The adaptive ruler/grid step for a zoomed lane: the smallest 1/2/5×10^k ms
+ * step whose on-screen size stays >= minStepPx, so ticks never crowd
+ * together while zooming. Returns the step in ms plus its normalized size.
+ */
+export function adaptiveGridStep(durationMs: number, laneWidthPx: number, zoom: number, minStepPx = 44): { stepMs: number; grid: number } {
+  const pxPerMs = (laneWidthPx * zoom) / Math.max(1, durationMs)
+  const minStepMs = Math.max(1, Math.ceil(minStepPx / Math.max(pxPerMs, Number.EPSILON)))
+  const magnitude = 10 ** Math.floor(Math.log10(minStepMs))
+  let stepMs = 10 * magnitude // minStepMs above every 1/2/5 of this magnitude → next decade's 1×
+  for (const nice of NICE_STEPS_MS) {
+    const candidate = nice * magnitude
+    if (candidate >= minStepMs) {
+      stepMs = candidate
+      break
+    }
+  }
+  return { stepMs, grid: clamp(stepMs / Math.max(1, durationMs), 0.001, 1) }
+}
+
+/** Format a tick label in engine style: seconds past 1000ms (nice 1/2/5 steps
+ *  keep ≤1 decimal), ms below, bare zero. */
+export function formatTickMs(ms: number): string {
+  if (ms === 0) return '0'
+  if (ms >= 1000 && ms % 100 === 0) {
+    const seconds = Math.round(ms / 100) / 10 // ≤1 decimal for 1-2-5 steps
+    return `${seconds}s`
+  }
+  return `${Math.round(ms)}ms`
+}
+
 /** Keep edited numbers readable (and JSON diffs stable). */
 export function roundValue(value: number): number {
   return Math.round(value * 10000) / 10000

@@ -14,7 +14,7 @@ import { useEffect, useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, 
 import type { MotionTrack } from '../../motion/animation-definition'
 import { motionPropertyDisplayName } from './display-labels'
 import { beginPointerGesture } from './pointer-gesture'
-import { snapAt } from './timeline-model'
+import { snapAt as snapAtGrid } from './timeline-model'
 import styles from './timeline.module.css'
 
 export interface TrackLaneProps {
@@ -26,6 +26,8 @@ export interface TrackLaneProps {
   onMoveKeyframe: (keyframeIndex: number, at: number) => void
   onRemoveKeyframe: (keyframeIndex: number) => void
   onRemoveTrack: () => void
+  /** V1.2: zoom-adaptive snap with targets; default = the 0.01 grid. */
+  snapAt?: (at: number) => number
 }
 
 export function TrackLane(props: TrackLaneProps): JSX.Element {
@@ -38,10 +40,11 @@ export function TrackLane(props: TrackLaneProps): JSX.Element {
   // leak its window listeners (and keep retiming a dead lane) otherwise.
   useEffect(() => () => gestureCancelRef.current?.(), [])
 
+  const snap = props.snapAt ?? snapAtGrid
   const atFromClientX = (clientX: number): number | null => {
     const rect = laneRef.current?.getBoundingClientRect()
     if (rect === undefined || rect.width <= 0) return null // no layout (jsdom without a stub) — no-op
-    return snapAt((clientX - rect.left) / rect.width)
+    return snap((clientX - rect.left) / rect.width)
   }
 
   const handleLaneClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
@@ -78,7 +81,7 @@ export function TrackLane(props: TrackLaneProps): JSX.Element {
       const nudge = event.key === 'ArrowLeft' ? -0.01 : event.key === 'ArrowRight' ? 0.01 : 0
       if (nudge !== 0) {
         event.preventDefault()
-        props.onMoveKeyframe(keyframeIndex, snapAt(at + nudge))
+        props.onMoveKeyframe(keyframeIndex, snapAtGrid(at + nudge))
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         props.onRemoveKeyframe(keyframeIndex)

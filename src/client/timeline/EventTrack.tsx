@@ -23,7 +23,7 @@ import { NumberField, SelectRow, TextField } from '../settings/controls'
 import settingsStyles from '../settings/settings.module.css'
 import { eventTypeDisplayName } from './display-labels'
 import { beginPointerGesture } from './pointer-gesture'
-import { snapAt } from './timeline-model'
+import { snapAt as snapAtGrid } from './timeline-model'
 import styles from './timeline.module.css'
 
 export const PARTICLE_EFFECT_OPTIONS: ReadonlyArray<{ value: ParticleEffectId; label: string }> = [
@@ -47,6 +47,8 @@ export interface EventTrackProps {
   onSelectEvent: (eventIndex: number) => void
   onMoveEvent: (eventIndex: number, at: number) => void
   onDeleteEvent: (eventIndex: number) => void
+  /** V1.2: zoom-adaptive snap with targets; default = the 0.01 grid. */
+  snapAt?: (at: number) => number
 }
 
 export function EventTrack(props: EventTrackProps): JSX.Element {
@@ -58,10 +60,11 @@ export function EventTrack(props: EventTrackProps): JSX.Element {
   // listeners when the overlay goes away mid-press.
   useEffect(() => () => gestureCancelRef.current?.(), [])
 
+  const snap = props.snapAt ?? snapAtGrid
   const atFromClientX = (clientX: number): number | null => {
     const rect = overlayRef.current?.getBoundingClientRect()
     if (rect === undefined || rect.width <= 0) return null
-    return snapAt((clientX - rect.left) / rect.width)
+    return snap((clientX - rect.left) / rect.width)
   }
 
   const handleMarkerDown = (eventIndex: number) => (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -96,7 +99,7 @@ export function EventTrack(props: EventTrackProps): JSX.Element {
       const nudge = e.key === 'ArrowLeft' ? -0.01 : e.key === 'ArrowRight' ? 0.01 : 0
       if (nudge !== 0) {
         e.preventDefault()
-        props.onMoveEvent(eventIndex, snapAt(event.at + nudge))
+        props.onMoveEvent(eventIndex, snapAtGrid(event.at + nudge))
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && deletable(event)) {
         e.preventDefault()
         props.onDeleteEvent(eventIndex)

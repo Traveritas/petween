@@ -15,6 +15,9 @@
  * - lib/editor.js   the standalone full-page settings editor the host serves
  *                  at /petween-editor/ (same self-contained IIFE pattern
  *                  as the preview)
+ * - lib/animator.js the standalone animation workbench the host serves at
+ *                  /petween-animator/ (same IIFE pattern; timeline-first
+ *                  layout, opened in its own window by the desktop shell)
  */
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -207,4 +210,27 @@ const editor: UserConfig = {
   },
 }
 
-export default [lib, client, preview, editor]
+const animator: UserConfig = {
+  name: 'petween/animator',
+  entry: { animator: 'src/animator/index.tsx' },
+  outDir: 'lib',
+  format: 'iife',
+  platform: 'browser',
+  target: 'es2022',
+  dts: false,
+  sourcemap: true,
+  clean: false,
+  deps: {
+    // Fully self-contained like the editor: the host serves this bundle
+    // directly, there is no shell module table on the animator page.
+    alwaysBundle: [/.*/],
+    onlyBundle: false,
+  },
+  define: ENV_DEFINES,
+  plugins: [clientBundlePurity(), cssModulesInline('petween/animator')],
+  outputOptions: {
+    entryFileNames: 'animator.js',
+  },
+}
+
+export default [lib, client, preview, editor, animator]

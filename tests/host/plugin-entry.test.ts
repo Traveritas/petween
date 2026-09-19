@@ -40,6 +40,7 @@ const ALL_ROUTES = [
   '/api/petween/pets', // prefix GET/PUT/DELETE + apply
   '/petween-assets',
   '/petween-editor',
+  '/petween-animator', // V1.2 animation workbench page (desktop window / by URL)
   '/api/petween/events',
   '/api/petween/state',
 ]

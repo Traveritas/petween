@@ -12,6 +12,7 @@ import { AssetStore } from './host/assets'
 import { ConfigStore } from './host/config'
 import { ConfigViewStore } from './host/view-store'
 import { createWriteLock } from './host/storage'
+import { registerAnimatorPage } from './host/animator-page'
 import { registerEditorPage } from './host/editor-page'
 import { PetsStore } from './host/pets'
 import { planMotionPackImport } from './host/packs'
@@ -104,11 +105,14 @@ export function apply(ctx: Context) {
   return ctx.effect(() => {
     let disposeRoutes: (() => void) | null = null
     let disposeEditor: (() => void) | null = null
+    let disposeAnimator: (() => void) | null = null
     let disposeService: (() => void) | null = null
     try {
       disposeRoutes = registerRoutes(ctx, deps)
       // Standalone full-page settings editor at /petween-editor/.
       disposeEditor = registerEditorPage(ctx)
+      // V1.2 standalone animation workbench at /petween-animator/.
+      disposeAnimator = registerAnimatorPage(ctx)
       // M4: agent-state SSE channel (session/event + agent/status + agent/error).
       const channel = attachStateChannel(ctx)
       // Companion service (L1): host plugins inject 'petween' to register
@@ -121,12 +125,14 @@ export function apply(ctx: Context) {
       return () => {
         disposeService?.()
         channel.dispose()
+        disposeAnimator?.()
         disposeEditor?.()
         disposeRoutes?.()
         registry[MOUNT_FLAG] = undefined
       }
     } catch (error) {
       disposeService?.() // roll back whatever registered before the throw
+      disposeAnimator?.() // roll back whatever registered before the throw
       disposeEditor?.() // roll back whatever registered before the throw
       disposeRoutes?.()
       registry[MOUNT_FLAG] = undefined

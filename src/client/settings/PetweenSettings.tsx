@@ -194,7 +194,9 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
   }
 }
 
-function NoticeBar(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element | null {
+// Exported for the standalone animator workbench (/petween-animator/), which
+// owns its own EditorStore and surfaces the same notice channel.
+export function NoticeBar(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element | null {
   const { snapshot, store } = props
   const notice = snapshot.notice
   if (notice === null) return null

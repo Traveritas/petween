@@ -1050,3 +1050,12 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **动机**:桌面版 zcode 连接器真机使用反馈「思考/工作切换时图片不换」——DSH 端历史上同样出现过。根因即 §15.2 的默认 false(active 内换 mode 只刷 ambient 不换 pose);用户(两宿主唯一决策者)拍板默认换图。
 - **改动**:`createDefaultPetweenConfig().advanced.changePoseWithinActive = true`。规格 §15.2 文本同步(默认开、开关在编辑器「高级与互动」);显式存过 false 的旧配置不受影响(validation 按存量值保留,只有字段缺失的 repair/新装才吃新默认)。
 - **行为语义**:thinking 与 working pose 配置不同才会真的换图(同 pose 时无视觉差异);换图走既有「静默换 pose 不播过渡」路径,activityTransition 决定方式。
+
+## V1.2 动画工作台骨架:/petween-animator/ 独立页(2026-09-19,Phase 11)
+
+- **动机**:桌面壳把动画编辑器独立成按需启动的专用窗口(petween-desktop Phase 11),需要 timeline 优先的专用页面而非设置编辑器尾部的动画库分区;后续手感升级(scrub/zoom/多选/undo/曲线)只落在本页,设置页动画库冻结在 V1.1 UX。
+- **host**:`editor-page.ts` 的路由骨架泛化为 `static-page.ts#createStaticPageRoute`(HTML shell + 预构建 IIFE + 404/405/500 守卫,单 prefix 注册);`registerEditorPage` 签名不变(桌面壳注入 `loadBundle` 的装配不受影响);新增 `animator-page.ts` 注册 `/petween-animator`(bundle `lib/animator.js`,缺包 500 `ANIMATOR_BUNDLE_MISSING`)。DSH 形态纯增量:多一条可 URL 直达的路由,设置弹窗不加入口(宠物/图片/姿势管理仍归设置编辑器)。
+- **草稿模型共享**:AnimationLibrary 的纯函数草稿层(DraftState/draftFrom/evaluateDraft/dirty 基线/类型切换规范化/内置定义清单)提取到 `client/timeline/animation-draft.ts`,两页共用;`normalizeKindSwitch` 即原 changeKind 体内的规范化逻辑,行为零变化(animation-library 30 用例原样通过)。
+- **animator 前端**:`src/animator/`(入口 index.tsx → `AnimatorPage` 工作台:左动画库列(内置+自定义+Motion Pack 导入导出+挂载横幅)|中标量表单+320px 试播渲染器(PreviewSession auditionOnly,试播/停止/循环试播/强度与动画库同语义)|下全宽 TimelineEditor+JSON 视图+动作行)。编辑状态入 `AnimatorStore`(纯 TS,subscribe/getSnapshot,仿 EditorStore 模式;本批持有 selectedId/draft,Phase 12 加 playhead/zoom、Phase 13 加多选与 undo 栈)。持久化复用 EditorStore + `/api/petween/*`,跨上下文一致性沿用 config-hub 3s 轮询 + 显式保存。`NoticeBar` 自 PetweenSettings 导出复用。
+- **构建**:tsdown 第 5 个配置 `petween/animator`(IIFE 自包含,CSS Modules 内联,react 全量内联,`clientBundlePurity` 门禁),产物 `lib/animator.js`(505KB/gzip 130KB);package.json files 纳入。
+- **测试**:+animator-page(host 路由,照 editor-page.test)/+animator-store(状态机单测)/+animator-entry(jsdom 入口 smoke:表头+库+常驻试播渲染器);plugin-entry ALL_ROUTES 追加 `/petween-animator`。58 文件/1057 用例全绿,双 typecheck 零错误,四+一产物 build 通过。

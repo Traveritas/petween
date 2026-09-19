@@ -17,21 +17,25 @@
  * the draft matches its saved version again).
  */
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
-import { BUILTIN_AMBIENT_DEFINITIONS } from '../../core/ambient-presets'
-import { BUILTIN_INTERACTION_DEFINITIONS, BUILTIN_TRANSITION_DEFINITIONS } from '../../core/transition-presets'
 import type { AssetMeta, PetweenConfig, PoseKey } from '../../core/types'
-import type {
-  AnimationDefinition,
-  AnimationKind,
-  MotionTrack,
-  RepeatPolicy,
-  TimelineEvent,
-} from '../../motion/animation-definition'
-import { isCustomAnimationId, validateAnimationDefinition } from '../../motion/animation-definition'
-import { MOTION_PROPERTIES } from '../../motion/motion-properties'
+import type { AnimationDefinition, AnimationKind, MotionTrack, TimelineEvent } from '../../motion/animation-definition'
+import { isCustomAnimationId } from '../../motion/animation-definition'
 import { confirmDialog } from '../dialog-queue'
 import { TimelineEditor } from '../timeline/TimelineEditor'
-import { addTrack, validateTimelineDraft } from '../timeline/timeline-model'
+import { validateTimelineDraft } from '../timeline/timeline-model'
+import {
+  AUTO_REPLAY_DELAY_MS,
+  BUILTIN_DEFINITIONS,
+  KIND_LABELS,
+  KIND_OPTIONS,
+  REPEAT_MODE_OPTIONS,
+  type DraftState,
+  draftDivergesFromBaseline,
+  draftFrom,
+  evaluateDraft,
+  newAnimationTemplate,
+  normalizeKindSwitch,
+} from '../timeline/animation-draft'
 import { PetRenderer } from '../overlay/PetRenderer'
 import type { PetStage } from '../overlay/pet-stage'
 import { PreviewSession } from '../preview-session'
@@ -39,137 +43,6 @@ import type { EditorStore, PendingMountApply } from '../stores/editor-store'
 import { FileImportButton, NumberField, SelectRow, Slider, Toggle } from './controls'
 import { STATE_LABELS } from './StateList'
 import styles from './settings.module.css'
-
-/** Every built-in definition, mirroring what the sessions register. */
-const BUILTIN_DEFINITIONS: readonly AnimationDefinition[] = [
-  ...BUILTIN_TRANSITION_DEFINITIONS,
-  ...BUILTIN_AMBIENT_DEFINITIONS,
-  ...BUILTIN_INTERACTION_DEFINITIONS,
-]
-
-const KIND_LABELS: Record<AnimationKind, string> = {
-  transition: '过渡',
-  ambient: '循环动画',
-  interaction: '互动',
-}
-
-const KIND_OPTIONS: ReadonlyArray<{ value: AnimationKind; label: string }> = [
-  { value: 'transition', label: '过渡 transition' },
-  { value: 'ambient', label: '循环动画 ambient' },
-  { value: 'interaction', label: '互动 interaction' },
-]
-
-const REPEAT_MODE_OPTIONS: ReadonlyArray<{ value: RepeatPolicy['mode']; label: string }> = [
-  { value: 'once', label: '单次' },
-  { value: 'loop', label: '循环' },
-  { value: 'alternate', label: '往返' },
-  { value: 'random-interval', label: '随机间隔' },
-]
-
-/** Debounce for the 循环试播 auto-replay after an edit. */
-const AUTO_REPLAY_DELAY_MS = 600
-
-/** A guaranteed-valid starting point for 新建 (one squash track + pose-swap). */
-function newAnimationTemplate(): AnimationDefinition {
-  return {
-    version: 1,
-    id: `user:${crypto.randomUUID()}`,
-    name: '新建动画',
-    kind: 'transition',
-    durationMs: 300,
-    repeat: { mode: 'once' },
-    tracks: [
-      {
-        property: 'transition.scaleY',
-        keyframes: [
-          { at: 0, value: 1 },
-          { at: 0.45, value: { base: 1, parameter: 'strength', amount: -0.25 }, easing: 'anticipate' },
-          { at: 1, value: 1 },
-        ],
-      },
-    ],
-    events: [{ at: 0.45, type: 'pose-swap' }],
-    parameters: { strength: { default: 1, min: 0, max: 3 } },
-  }
-}
-
-/** The editable draft: scalar fields plus structured tracks/events. */
-interface DraftState {
-  name: string
-  kind: AnimationKind
-  durationMs: number
-  repeatMode: RepeatPolicy['mode']
-  repeatMinMs: number
-  repeatMaxMs: number
-  tracks: MotionTrack[]
-  events: TimelineEvent[]
-}
-
-function draftFrom(definition: AnimationDefinition): DraftState {
-  const repeat = definition.repeat
-  return {
-    name: definition.name,
-    kind: definition.kind,
-    durationMs: definition.durationMs,
-    repeatMode: repeat.mode,
-    repeatMinMs: repeat.mode === 'random-interval' ? repeat.minDelayMs : 800,
-    repeatMaxMs: repeat.mode === 'random-interval' ? repeat.maxDelayMs : 1300,
-    tracks: structuredClone(definition.tracks),
-    events: structuredClone(definition.events ?? []),
-  }
-}
-
-interface DraftEvaluation {
-  /** The assembled definition; null while any field or timeline part is schema-invalid. */
-  definition: AnimationDefinition | null
-  errors: string[]
-}
-
-/** Assemble the draft into a candidate and run the real schema validation. */
-function evaluateDraft(
-  baseId: string,
-  parameters: AnimationDefinition['parameters'],
-  draft: DraftState,
-): DraftEvaluation {
-  const repeat: RepeatPolicy =
-    draft.repeatMode === 'random-interval'
-      ? { mode: 'random-interval', minDelayMs: draft.repeatMinMs, maxDelayMs: draft.repeatMaxMs }
-      : { mode: draft.repeatMode }
-  // version/id are immutable; parameters (strength range) are preserved from
-  // the base definition. An empty events list is omitted from the payload.
-  const candidate: Record<string, unknown> = {
-    version: 1,
-    id: baseId,
-    name: draft.name,
-    kind: draft.kind,
-    durationMs: draft.durationMs,
-    repeat,
-    tracks: draft.tracks,
-    ...(draft.events.length > 0 ? { events: draft.events } : {}),
-    ...(parameters !== undefined ? { parameters } : {}),
-  }
-  const result = validateAnimationDefinition(candidate)
-  if (!result.valid) return { definition: null, errors: result.errors }
-  return { definition: candidate as unknown as AnimationDefinition, errors: [] }
-}
-
-/**
- * UX-2 dirty check, run on the ASSEMBLED definitions (exactly what a save
- * would persist). A raw DraftState comparison would flag repeatMinMs/MaxMs
- * leftovers — e.g. a custom interval from an earlier random-interval setting
- * that a non-random-interval save legitimately drops (evaluateDraft omits
- * them) — and keep the ● marker on forever after such a save. An invalid
- * draft (null assembly) always counts as dirty so the unsaved-edit guards
- * stay armed.
- */
-function draftDivergesFromBaseline(
-  selected: AnimationDefinition,
-  assembled: AnimationDefinition | null,
-): boolean {
-  if (assembled === null) return true
-  const baseline = evaluateDraft(selected.id, selected.parameters, draftFrom(selected)).definition
-  return baseline === null || JSON.stringify(assembled) !== JSON.stringify(baseline)
-}
 
 export interface AnimationLibraryProps {
   store: EditorStore
@@ -278,47 +151,12 @@ export function AnimationLibrary(props: AnimationLibraryProps): JSX.Element {
   }
 
   /**
-   * Kind switches normalize event rules AND the track set so a valid draft
-   * stays editable: ambient timelines may keep no transition-layer track
-   * (the schema rejects them — enter/click own that DOM layer), and an
-   * emptied-out ambient is reseeded with a default loop. Pose-swap rules
-   * convert in BOTH directions: → interaction keeps the timing but names a
-   * target (idle — retarget in the inspector), → transition strips targets
-   * and truncates to the exactly-one anonymous swap.
+   * Kind switches normalize event rules AND the track set (shared rule set
+   * with the animator workbench — see normalizeKindSwitch in
+   * timeline/animation-draft.ts).
    */
   const changeKind = (kind: AnimationKind): void => {
-    setDraft((current) => {
-      if (current === null || current.kind === kind) return current
-      let events = current.events
-      let tracks = current.tracks
-      if (kind === 'ambient') {
-        events = []
-        tracks = tracks.filter((track) => MOTION_PROPERTIES[track.property].targetLayer !== 'transition')
-        if (tracks.length === 0) tracks = addTrack([], 'sway.rotation').tracks
-      }
-      if (kind === 'interaction') {
-        // Interaction swaps are legal only with a named target; the timing
-        // the author tuned on the transition survives the switch.
-        events = events.map((event) =>
-          event.type === 'pose-swap' && event.pose === undefined ? { ...event, pose: 'idle' } : event,
-        )
-      }
-      if (kind === 'transition') {
-        // Keep the FIRST pose-swap's timing, drop extras, strip the target:
-        // the enter pose is state-machine-owned (schema forbids "pose").
-        let keptSwap = false
-        events = events.filter((event) => {
-          if (event.type !== 'pose-swap') return true
-          if (keptSwap) return false
-          keptSwap = true
-          return true
-        })
-        events = events.map((event) => (event.type === 'pose-swap' ? { at: event.at, type: 'pose-swap' } : event))
-        if (!keptSwap) events = [...events, { at: 0.5, type: 'pose-swap' }]
-      }
-      const repeatMode = events.length > 0 && current.repeatMode === 'alternate' ? 'once' : current.repeatMode
-      return { ...current, kind, events, repeatMode, tracks }
-    })
+    setDraft((current) => (current === null ? current : normalizeKindSwitch(current, kind)))
   }
 
   const handleNew = async (): Promise<void> => {

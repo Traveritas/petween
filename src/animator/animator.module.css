@@ -1,0 +1,110 @@
+/* Animator workbench chrome (src/animator/*). The page runs without the
+   shell, so the body/token treatment is imported from the editor page
+   (src/editor/editor.module.css — same fallback tokens + dark flip); this
+   file owns the workbench layout only. Control/row/list visuals come from
+   the shared settings.module.css classes. */
+
+.page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.headerMain {
+  min-width: 0;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+/* Library | main work area. */
+.workbench {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.libraryColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+}
+
+.mainColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Scalar form (left) beside the audition preview (right). */
+.topRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: start;
+}
+
+.formColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.previewPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+  flex: none;
+}
+
+.previewStage {
+  align-self: center;
+}
+
+.previewActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.previewStrength {
+  min-width: 160px;
+}
+
+@media (max-width: 1100px) {
+  /* Narrow windows (or small desktop shells): stack the top row instead of
+     squeezing the form beside the preview. */
+  .topRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .libraryColumn {
+    position: static;
+  }
+}

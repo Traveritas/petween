@@ -41,6 +41,8 @@
     "lib/client.js.map",
     "lib/editor.js",
     "lib/editor.js.map",
+    "lib/animator.js",
+    "lib/animator.js.map",
     "lib/types",
     "cordis.patch.yml"
   ],

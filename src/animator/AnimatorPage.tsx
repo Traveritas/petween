@@ -279,25 +279,34 @@ export function AnimatorPage(): JSX.Element {
     if (evaluation?.definition != null && timelineErrors.length === 0) audition()
   }
   useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      const el = target
+      return (
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      )
+    }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== 'Space' || event.repeat) return
-      const target = event.target
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.tagName === 'BUTTON' ||
-          target.isContentEditable)
-      ) {
+      if (event.code === 'Space' && !event.repeat) {
+        if (isEditableTarget(event.target)) return
+        const el = event.target
+        if (el instanceof HTMLElement && (el.tagName === 'BUTTON' || el.getAttribute('role') === 'menu')) return
+        event.preventDefault()
+        toggleAuditionRef.current()
         return
       }
-      event.preventDefault()
-      toggleAuditionRef.current()
+      // P13 undo/redo: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (skipped in form fields).
+      if (!event.ctrlKey && !event.metaKey) return
+      if (event.code === 'KeyZ' || event.code === 'KeyY') {
+        if (isEditableTarget(event.target)) return
+        event.preventDefault()
+        if (event.shiftKey || event.code === 'KeyY') animator.redo()
+        else animator.undo()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [animator])
   // Latest-callback ref so the debounce timer always auditions the live draft.
   const auditionRef = useRef(audition)
   useEffect(() => {
@@ -580,6 +589,26 @@ export function AnimatorPage(): JSX.Element {
               </div>
               {selected === undefined || draft === null || evaluation === null ? null : (
                 <>
+                  <div className={styles.historyRow} aria-label="编辑历史">
+                    <button
+                      type="button"
+                      className={settingsStyles.button}
+                      disabled={!animSnapshot.canUndo}
+                      data-tooltip="撤销上一步时间轴编辑（Ctrl+Z）。"
+                      onClick={() => animator.undo()}
+                    >
+                      ↶ 撤销
+                    </button>
+                    <button
+                      type="button"
+                      className={settingsStyles.button}
+                      disabled={!animSnapshot.canRedo}
+                      data-tooltip="重做（Ctrl+Shift+Z / Ctrl+Y）。"
+                      onClick={() => animator.redo()}
+                    >
+                      ↷ 重做
+                    </button>
+                  </div>
                   <TimelineEditor
                     key={selected.id}
                     advanced

@@ -252,6 +252,59 @@
   border-color: var(--dsw-alias-brand-primary, #6366f1);
 }
 
+/* --- marquee band (P13 time-slice selection) --- */
+
+.marqueeBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #6366f1) 12%, transparent);
+  border-left: 1px solid var(--dsw-alias-brand-primary, #6366f1);
+  border-right: 1px solid var(--dsw-alias-brand-primary, #6366f1);
+}
+
+/* --- context menu (P13) --- */
+
+.contextMenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.contextMenu button {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary, #374151);
+}
+
+.contextMenu button:hover {
+  background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+}
+
+/* --- shortcut help card (P13) --- */
+
+.helpCard {
+  font-size: 11px;
+  line-height: 1.7;
+  padding: 8px 12px;
+  border: 1px dashed var(--dsw-alias-border-l2, #d1d5db);
+  border-radius: 6px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  background: var(--dsw-alias-bg-layer-1, #f9fafb);
+}
+
 /* --- inspector --- */
 
 .inspector {

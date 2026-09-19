@@ -58,6 +58,13 @@
   min-width: 0;
 }
 
+/* Undo/redo transport row above the timeline (P13). */
+.historyRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 /* Scalar form (left) beside the audition preview (right). */
 .topRow {
   display: grid;

@@ -7,10 +7,19 @@
  *
  * V1.1 (P1) mode is the default: a fit-width normalized timeline, single
  * selection, 0.01 grid snapping. The optional `advanced` mode (V1.2, the
- * /petween-animator/ workbench) adds the game-engine feel on top: an
- * interactive playhead with scrub, Ctrl+wheel zoom around the cursor +
- * wheel panning (sticky track labels), an adaptive ms ruler, and target
- * snapping (frames/events/playhead, Alt-hold to bypass). All advanced props
+ * /petween-animator/ workbench) layers the game-engine feel on top:
+ * - P12: interactive playhead with scrub, Ctrl+wheel zoom around the cursor +
+ *   wheel panning (sticky track labels), adaptive ms ruler, target snapping
+ *   (frames/events/playhead, Alt-hold to bypass).
+ * - P13: multi-selection (shift = range within a track, ctrl = toggle, plain
+ *   click re-selects single), time-band marquee on empty lanes, batch drag
+ *   (the whole selection follows the anchor, collisions drop silently),
+ *   Ctrl+D duplicate, Delete/Esc/arrows for the selection, and a context
+ *   menu on diamonds / markers / lanes / the ruler / track labels.
+ *
+ * The selection lives INSIDE the editor as string keys (see timeline-model)
+ * with a last-clicked anchor for the inspector; indices shift on every
+ * mutation, so the keys are re-derived after each edit. All advanced props
  * are opt-in; the settings-page AnimationLibrary keeps its frozen V1.1 UX.
  *
  * Every change is re-validated against the real schema
@@ -48,15 +57,20 @@ import { motionPropertyDisplayName } from './display-labels'
 import { EventInspector, EventTrack, PARTICLE_EFFECT_OPTIONS } from './EventTrack'
 import { KeyframeInspector } from './KeyframeInspector'
 import { ScrubRuler, TimelineRuler } from './TimelineRuler'
-import { TrackLane } from './TrackLane'
+import { TrackLane, type SelectModifiers } from './TrackLane'
 import {
   addKeyframe,
   addParticleEvent,
   addPoseSwapEvent,
   addTrack,
   adaptiveGridStep,
+  duplicateSelectedKeyframes,
+  eventKey,
+  keyframeKey,
   moveEvent,
   moveKeyframe,
+  moveSelectionBatch,
+  parseSelectionKey,
   removeEvent,
   removeKeyframe,
   removeTrack,
@@ -66,6 +80,7 @@ import {
   setParticleEffect,
   snapAtWithTargets,
   validateTimelineDraft,
+  type SelectionKey,
 } from './timeline-model'
 import styles from './timeline.module.css'
 
@@ -76,7 +91,7 @@ export interface TimelineEditorProps {
   onChange: (next: { tracks: MotionTrack[]; events: TimelineEvent[] }) => void
   /** Fires with the current validation error list after every change (and on mount). */
   onValidationChange?: (errors: string[]) => void
-  /** V1.2 workbench mode: playhead/scrub + zoom/pan + ms ruler + target snap. */
+  /** V1.2 workbench mode: playhead/scrub + zoom/pan + ms ruler + target snap + multi-select. */
   advanced?: boolean
   /** Parked playhead position (normalized); null hides it. */
   playheadAt?: number | null
@@ -90,11 +105,9 @@ export interface TimelineEditorProps {
   onSnapEnabledChange?: (enabled: boolean) => void
 }
 
-type Selection =
-  | { type: 'keyframe'; trackIndex: number; keyframeIndex: number }
-  | { type: 'event'; eventIndex: number }
+type LAYER_LABELS_RECORD = Record<MotionLayer, string>
 
-const LAYER_LABELS: Record<MotionLayer, string> = {
+const LAYER_LABELS: LAYER_LABELS_RECORD = {
   transition: '过渡层',
   sway: '摇摆层',
   bounce: '弹跳层',
@@ -104,12 +117,23 @@ const LAYER_LABELS: Record<MotionLayer, string> = {
 /** Snap capture radius in px — converted to normalized units per lane width. */
 const SNAP_THRESHOLD_PX = 6
 
+type ContextMenuState =
+  | { kind: 'keyframe'; trackIndex: number; keyframeIndex: number; x: number; y: number }
+  | { kind: 'event'; eventIndex: number; x: number; y: number }
+  | { kind: 'lane'; trackIndex: number; at: number; x: number; y: number }
+  | { kind: 'ruler'; at: number; x: number; y: number }
+  | { kind: 'track'; trackIndex: number; x: number; y: number }
+
 export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   const { kind, tracks, events } = props
-  const [selection, setSelection] = useState<Selection | null>(null)
   const advanced = props.advanced === true
   const zoom = props.zoom ?? 1
   const durationMs = props.durationMs ?? 300
+
+  // --- selection (string keys; lastSelected drives the inspector) ---------
+
+  const [selectionKeys, setSelectionKeys] = useState<ReadonlySet<SelectionKey>>(new Set())
+  const [lastSelected, setLastSelected] = useState<SelectionKey | null>(null)
 
   const errors = useMemo(() => validateTimelineDraft(kind, tracks, events), [kind, tracks, events])
   useEffect(() => {
@@ -119,6 +143,84 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   const poseSwapCount = events.filter((event) => event.type === 'pose-swap').length
   const showEvents = kind !== 'ambient'
 
+  const selectSingle = (key: SelectionKey | null): void => {
+    setSelectionKeys(key === null ? new Set() : new Set([key]))
+    setLastSelected(key)
+  }
+
+  /** Drop selection keys that no longer resolve after an external reshuffle
+   *  (kind switches / JSON applies replace the draft wholesale). */
+  useEffect(() => {
+    setSelectionKeys((current) => {
+      if (current.size === 0) return current
+      const kept = new Set<SelectionKey>()
+      for (const key of current) {
+        const parsed = parseSelectionKey(key)
+        if (parsed === null) continue
+        if (parsed.kind === 'keyframe') {
+          if (tracks[parsed.trackIndex]?.keyframes[parsed.keyframeIndex] !== undefined) kept.add(key)
+        } else if (events[parsed.eventIndex] !== undefined) {
+          kept.add(key)
+        }
+      }
+      if (kept.size === current.size) return current
+      setLastSelected((last) => (last !== null && kept.has(last) ? last : [...kept][kept.size - 1] ?? null))
+      return kept
+    })
+  }, [tracks, events])
+
+  const selectKeyframe = (trackIndex: number, keyframeIndex: number, modifiers?: SelectModifiers): void => {
+    const key = keyframeKey(trackIndex, keyframeIndex)
+    if (!advanced || modifiers === undefined || (!modifiers.shift && !modifiers.toggle)) {
+      selectSingle(key)
+      return
+    }
+    if (modifiers.toggle) {
+      setSelectionKeys((current) => {
+        const next = new Set(current)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        setLastSelected(key)
+        return next
+      })
+      return
+    }
+    // shift = range within the clicked track, from the last keyframe selection
+    setSelectionKeys((current) => {
+      const next = new Set<SelectionKey>(current)
+      const track = tracks[trackIndex]
+      if (track !== undefined) {
+        let fromAt = track.keyframes[keyframeIndex]?.at ?? 0
+        const anchorParsed = lastSelected === null ? null : parseSelectionKey(lastSelected)
+        if (anchorParsed !== null && anchorParsed.kind === 'keyframe') {
+          fromAt = tracks[anchorParsed.trackIndex]?.keyframes[anchorParsed.keyframeIndex]?.at ?? fromAt
+        }
+        const toAt = track.keyframes[keyframeIndex]?.at ?? fromAt
+        const [lo, hi] = fromAt <= toAt ? [fromAt, toAt] : [toAt, fromAt]
+        track.keyframes.forEach((keyframe, index) => {
+          if (keyframe.at >= lo && keyframe.at <= hi) next.add(keyframeKey(trackIndex, index))
+        })
+      }
+      setLastSelected(key)
+      return next
+    })
+  }
+
+  const selectEventIndex = (eventIndex: number, modifiers?: { shift: boolean; toggle: boolean }): void => {
+    const key = eventKey(eventIndex)
+    if (!advanced || modifiers === undefined || !modifiers.toggle) {
+      selectSingle(key)
+      return
+    }
+    setSelectionKeys((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      setLastSelected(key)
+      return next
+    })
+  }
+
   // --- advanced mode plumbing: measured lane width + Alt bypass ----------
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -127,6 +229,9 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   const [altHeld, setAltHeld] = useState(false)
   /** Zoom anchor: keep the timeline time under the cursor stationary. */
   const zoomAnchorRef = useRef<{ clientX: number; anchorAt: number } | null>(null)
+  const [marquee, setMarquee] = useState<{ from: number; to: number } | null>(null)
+  const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   useEffect(() => {
     if (!advanced) return
@@ -198,6 +303,21 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
     return () => scrollEl.removeEventListener('wheel', onWheel)
   }, [advanced, zoom, props.onZoomChange])
 
+  // Close the context menu on any outside press / Escape.
+  useEffect(() => {
+    if (menu === null) return
+    const close = (): void => setMenu(null)
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') close()
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
   const frameEventTargets = useMemo(() => {
     if (!advanced) return []
     const targets: number[] = []
@@ -236,25 +356,76 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
 
   // --- track-level ops -----------------------------------------------------
 
-  const updateTracks = (nextTracks: MotionTrack[]): void => props.onChange({ tracks: nextTracks, events })
-  const updateEvents = (nextEvents: TimelineEvent[]): void => props.onChange({ tracks, events: nextEvents })
+  const updateTracks = (nextTracks: MotionTrack[]): void => {
+    props.onChange({ tracks: nextTracks, events })
+  }
+  const updateEvents = (nextEvents: TimelineEvent[]): void => {
+    props.onChange({ tracks, events: nextEvents })
+  }
+  const updateBoth = (next: { tracks: MotionTrack[]; events: TimelineEvent[] }): void => {
+    props.onChange(next)
+  }
 
   const replaceTrack = (trackIndex: number, track: MotionTrack): void =>
     updateTracks(tracks.map((current, index) => (index === trackIndex ? track : current)))
 
+  /** Re-key a track's keyframe selection after an index shift at `removedIndex`. */
+  const shiftKeyframeSelection = (trackIndex: number, removedIndex: number): void => {
+    setSelectionKeys((current) => {
+      const next = new Set<SelectionKey>()
+      for (const key of current) {
+        const parsed = parseSelectionKey(key)
+        if (parsed === null || parsed.kind !== 'keyframe' || parsed.trackIndex !== trackIndex) {
+          next.add(key)
+          continue
+        }
+        if (parsed.keyframeIndex === removedIndex) continue // the deleted frame itself
+        next.add(
+          keyframeKey(
+            trackIndex,
+            parsed.keyframeIndex > removedIndex ? parsed.keyframeIndex - 1 : parsed.keyframeIndex,
+          ),
+        )
+      }
+      return next
+    })
+    setLastSelected((last) => {
+      const parsed = last === null ? null : parseSelectionKey(last)
+      if (parsed === null || parsed.kind !== 'keyframe' || parsed.trackIndex !== trackIndex) return last
+      if (parsed.keyframeIndex === removedIndex) return null
+      return keyframeKey(trackIndex, parsed.keyframeIndex > removedIndex ? parsed.keyframeIndex - 1 : parsed.keyframeIndex)
+    })
+  }
+
   const handleAddTrack = (property: MotionProperty): void => {
     const edit = addTrack(tracks, property)
     updateTracks(edit.tracks)
-    setSelection({ type: 'keyframe', trackIndex: edit.index, keyframeIndex: 0 })
+    selectSingle(keyframeKey(edit.index, 0))
   }
 
   const handleRemoveTrack = (trackIndex: number): void => {
     updateTracks(removeTrack(tracks, trackIndex))
-    setSelection((current) => {
-      if (current === null || current.type !== 'keyframe') return current
-      if (current.trackIndex === trackIndex) return null
-      return current.trackIndex > trackIndex ? { ...current, trackIndex: current.trackIndex - 1 } : current
+    // Re-key: that track's selection dies; later tracks shift down.
+    setSelectionKeys((current) => {
+      const next = new Set<SelectionKey>()
+      for (const key of current) {
+        const parsed = parseSelectionKey(key)
+        if (parsed === null || parsed.kind !== 'keyframe') {
+          next.add(key)
+          continue
+        }
+        if (parsed.trackIndex === trackIndex) continue
+        next.add(keyframeKey(parsed.trackIndex > trackIndex ? parsed.trackIndex - 1 : parsed.trackIndex, parsed.keyframeIndex))
+      }
+      return next
     })
+    setLastSelected((last) => {
+      const parsed = last === null ? null : parseSelectionKey(last)
+      if (parsed === null || parsed.kind !== 'keyframe') return last
+      if (parsed.trackIndex === trackIndex) return null
+      return keyframeKey(parsed.trackIndex > trackIndex ? parsed.trackIndex - 1 : parsed.trackIndex, parsed.keyframeIndex)
+    })
+    setMenu(null)
   }
 
   // --- keyframe ops --------------------------------------------------------
@@ -262,10 +433,24 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   const handleAddKeyframe = (trackIndex: number, at: number): void => {
     const edit = addKeyframe(tracks[trackIndex], at)
     if (edit.created) replaceTrack(trackIndex, edit.track)
-    setSelection({ type: 'keyframe', trackIndex, keyframeIndex: edit.index })
+    selectSingle(keyframeKey(trackIndex, edit.index))
   }
 
   const handleMoveKeyframe = (trackIndex: number, keyframeIndex: number, at: number): void => {
+    // P13 batch drag: an anchor inside a multi-selection carries the group.
+    if (
+      advanced &&
+      selectionKeys.size > 1 &&
+      selectionKeys.has(keyframeKey(trackIndex, keyframeIndex))
+    ) {
+      const anchorAt = tracks[trackIndex]?.keyframes[keyframeIndex]?.at
+      if (anchorAt === undefined) return
+      const target = snapEdit !== null ? snapEdit(at) : at
+      const delta = target - anchorAt
+      if (delta === 0) return
+      updateBoth(moveSelectionBatch(tracks, events, selectionKeys, delta))
+      return
+    }
     const edit = moveKeyframe(tracks[trackIndex], keyframeIndex, at)
     if (edit.moved) replaceTrack(trackIndex, edit.track)
   }
@@ -280,28 +465,113 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
 
   const handleDeleteKeyframe = (trackIndex: number, keyframeIndex: number): void => {
     replaceTrack(trackIndex, removeKeyframe(tracks[trackIndex], keyframeIndex))
-    setSelection((current) => {
-      if (current === null || current.type !== 'keyframe' || current.trackIndex !== trackIndex) return current
-      if (current.keyframeIndex === keyframeIndex) return null
-      return current.keyframeIndex > keyframeIndex ? { ...current, keyframeIndex: current.keyframeIndex - 1 } : current
-    })
+    shiftKeyframeSelection(trackIndex, keyframeIndex)
+  }
+
+  /** P13: delete every selected keyframe/event (descending so indices hold). */
+  const handleDeleteSelection = (): void => {
+    if (selectionKeys.size === 0) return
+    let nextTracks = tracks
+    let nextEvents = events
+    const keyframeDeletes = new Map<number, number[]>()
+    const eventDeletes: number[] = []
+    for (const key of selectionKeys) {
+      const parsed = parseSelectionKey(key)
+      if (parsed === null) continue
+      if (parsed.kind === 'keyframe') {
+        const list = keyframeDeletes.get(parsed.trackIndex) ?? []
+        list.push(parsed.keyframeIndex)
+        keyframeDeletes.set(parsed.trackIndex, list)
+      } else {
+        eventDeletes.push(parsed.eventIndex)
+      }
+    }
+    // Schema guard: a lone transition pose-swap is never deletable.
+    const protectedEvents =
+      kind === 'transition'
+        ? nextEvents.filter((event) => event.type === 'pose-swap').length <= 1
+          ? nextEvents.findIndex((event) => event.type === 'pose-swap')
+          : -1
+        : -1
+    for (const [trackIndex, indices] of keyframeDeletes) {
+      for (const index of indices.sort((a, b) => b - a)) {
+        const track = nextTracks[trackIndex]
+        if (track !== undefined && track.keyframes.length > 1) {
+          nextTracks = nextTracks.map((current, i) => (i === trackIndex ? removeKeyframe(current, index) : current))
+        }
+      }
+    }
+    for (const index of eventDeletes.sort((a, b) => b - a)) {
+      if (index === protectedEvents) continue
+      const deletable = nextEvents[index] !== undefined && (kind !== 'transition' || nextEvents.filter((e) => e.type === 'pose-swap').length > 1 || nextEvents[index].type !== 'pose-swap')
+      if (deletable) nextEvents = removeEvent(nextEvents, index)
+    }
+    updateBoth({ tracks: nextTracks, events: nextEvents })
+    selectSingle(null)
+  }
+
+  /** P13: duplicate the selected keyframes at +0.05; the copies get selected. */
+  const handleDuplicateSelection = (): void => {
+    if (selectionKeys.size === 0) return
+    const edit = duplicateSelectedKeyframes(tracks, selectionKeys)
+    updateBoth({ tracks: edit.tracks, events })
+    if (edit.selection.length > 0) {
+      setSelectionKeys(new Set(edit.selection))
+      setLastSelected(edit.selection[edit.selection.length - 1] ?? null)
+    }
   }
 
   // --- event ops -----------------------------------------------------------
 
+  /** Re-key the event selection after a deletion at `removedIndex`. */
+  const shiftEventSelection = (removedIndex: number): void => {
+    setSelectionKeys((current) => {
+      const next = new Set<SelectionKey>()
+      for (const key of current) {
+        const parsed = parseSelectionKey(key)
+        if (parsed === null || parsed.kind !== 'event') {
+          next.add(key)
+          continue
+        }
+        if (parsed.eventIndex === removedIndex) continue
+        next.add(eventKey(parsed.eventIndex > removedIndex ? parsed.eventIndex - 1 : parsed.eventIndex))
+      }
+      return next
+    })
+    setLastSelected((last) => {
+      const parsed = last === null ? null : parseSelectionKey(last)
+      if (parsed === null || parsed.kind !== 'event') return last
+      if (parsed.eventIndex === removedIndex) return null
+      return eventKey(parsed.eventIndex > removedIndex ? parsed.eventIndex - 1 : parsed.eventIndex)
+    })
+  }
+
   const handleDeleteEvent = (eventIndex: number): void => {
     updateEvents(removeEvent(events, eventIndex))
-    setSelection((current) => {
-      if (current === null || current.type !== 'event') return current
-      if (current.eventIndex === eventIndex) return null
-      return current.eventIndex > eventIndex ? { ...current, eventIndex: current.eventIndex - 1 } : current
-    })
+    shiftEventSelection(eventIndex)
+  }
+
+  const handleMoveEvent = (eventIndex: number, at: number): void => {
+    if (
+      advanced &&
+      selectionKeys.size > 1 &&
+      selectionKeys.has(eventKey(eventIndex))
+    ) {
+      const anchorAt = events[eventIndex]?.at
+      if (anchorAt === undefined) return
+      const target = snapEdit !== null ? snapEdit(at) : at
+      const delta = target - anchorAt
+      if (delta === 0) return
+      updateBoth(moveSelectionBatch(tracks, events, selectionKeys, delta))
+      return
+    }
+    updateEvents(moveEvent(events, eventIndex, at))
   }
 
   const handleAddParticle = (effect: ParticleEffectId): void => {
     const edit = addParticleEvent(events, effect)
     updateEvents(edit.events)
-    setSelection({ type: 'event', eventIndex: edit.index })
+    selectSingle(eventKey(edit.index))
   }
 
   const handleAddPoseSwap = (): void => {
@@ -311,8 +581,69 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
     // its pose is state-machine-owned (schema forbids the field).
     const edit = addPoseSwapEvent(events, 0.5, kind === 'interaction' ? 'idle' : undefined)
     updateEvents(edit.events)
-    setSelection({ type: 'event', eventIndex: edit.index })
+    selectSingle(eventKey(edit.index))
   }
+
+  // --- marquee + selection keyboard ----------------------------------------
+
+  const handleMarquee = (phase: 'start' | 'move' | 'end', fromAt: number, toAt: number, shift: boolean): void => {
+    if (phase === 'move') {
+      setMarquee({ from: Math.min(fromAt, toAt), to: Math.max(fromAt, toAt) })
+      return
+    }
+    // end: commit the last band across ALL tracks (time-slice selection).
+    const band = marquee ?? { from: Math.min(fromAt, toAt), to: Math.max(fromAt, toAt) }
+    const picked = new Set<SelectionKey>()
+    tracks.forEach((track, trackIndex) => {
+      track.keyframes.forEach((keyframe, keyframeIndex) => {
+        if (keyframe.at >= band.from && keyframe.at <= band.to) picked.add(keyframeKey(trackIndex, keyframeIndex))
+      })
+    })
+    events.forEach((event, eventIndex) => {
+      if (event.at >= band.from && event.at <= band.to) picked.add(eventKey(eventIndex))
+    })
+    setMarquee(null)
+    setSelectionKeys((current) => (shift ? new Set([...current, ...picked]) : picked))
+    setLastSelected([...picked][picked.size - 1] ?? null)
+  }
+
+  useEffect(() => {
+    if (!advanced) return
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      const el = target
+      return (
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      )
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (isEditableTarget(event.target)) return
+      const onButton = event.target instanceof HTMLElement && event.target.tagName === 'BUTTON'
+      if (event.key === 'Escape') {
+        setMenu(null)
+        if (!onButton) selectSingle(null)
+        return
+      }
+      if (selectionKeys.size === 0) return
+      if ((event.key === 'Delete' || event.key === 'Backspace') && !onButton) {
+        event.preventDefault()
+        handleDeleteSelection()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.code === 'KeyD') {
+        event.preventDefault()
+        handleDuplicateSelection()
+        return
+      }
+      if (!onButton && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault()
+        const step = (event.shiftKey ? 0.1 : 0.01) * (event.key === 'ArrowLeft' ? -1 : 1)
+        updateBoth(moveSelectionBatch(tracks, events, selectionKeys, step))
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
 
   // --- toolbar selects -----------------------------------------------------
 
@@ -330,8 +661,17 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
 
   // --- inspector target ----------------------------------------------------
 
-  const keyframeSelection = selection !== null && selection.type === 'keyframe' ? selection : null
-  const eventSelection = selection !== null && selection.type === 'event' ? selection : null
+  const lastParsed = lastSelected === null ? null : parseSelectionKey(lastSelected)
+  const keyframeSelection =
+    lastParsed !== null && lastParsed.kind === 'keyframe'
+      ? tracks[lastParsed.trackIndex]?.keyframes[lastParsed.keyframeIndex] !== undefined
+        ? lastParsed
+        : null
+      : null
+  const eventSelection =
+    lastParsed !== null && lastParsed.kind === 'event' && events[lastParsed.eventIndex] !== undefined
+      ? lastParsed
+      : null
   const selectedTrack = keyframeSelection === null ? undefined : tracks[keyframeSelection.trackIndex]
   const selectedEvent = eventSelection === null ? undefined : events[eventSelection.eventIndex]
 
@@ -353,7 +693,7 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
         kind={kind}
         event={selectedEvent}
         poseSwapCount={poseSwapCount}
-        onSetAt={(at) => updateEvents(moveEvent(events, eventSelection.eventIndex, at))}
+        onSetAt={(at) => handleMoveEvent(eventSelection.eventIndex, at)}
         onSetEffect={(effect) => updateEvents(setParticleEffect(events, eventSelection.eventIndex, effect))}
         onSetPose={(pose) => updateEvents(setEventPose(events, eventSelection.eventIndex, pose))}
         onDelete={() => handleDeleteEvent(eventSelection.eventIndex)}
@@ -364,6 +704,50 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   }
 
   const playhead = advanced ? (props.playheadAt ?? null) : null
+
+  const trackSelectedIndices = (trackIndex: number): ReadonlySet<number> => {
+    const indices = new Set<number>()
+    for (const key of selectionKeys) {
+      const parsed = parseSelectionKey(key)
+      if (parsed !== null && parsed.kind === 'keyframe' && parsed.trackIndex === trackIndex) {
+        indices.add(parsed.keyframeIndex)
+      }
+    }
+    return indices
+  }
+
+  const eventSelectedIndices = (): ReadonlySet<number> => {
+    const indices = new Set<number>()
+    for (const key of selectionKeys) {
+      const parsed = parseSelectionKey(key)
+      if (parsed !== null && parsed.kind === 'event') indices.add(parsed.eventIndex)
+    }
+    return indices
+  }
+
+  const openMenu = (
+    target:
+      | { kind: 'keyframe'; trackIndex: number; keyframeIndex: number }
+      | { kind: 'event'; eventIndex: number }
+      | { kind: 'lane'; at: number }
+      | { kind: 'track' },
+    trackIndex: number,
+    x: number,
+    y: number,
+  ): void => {
+    if (!advanced) return
+    if (target.kind === 'keyframe') {
+      selectSingle(keyframeKey(target.trackIndex, target.keyframeIndex))
+      setMenu({ ...target, x, y })
+    } else if (target.kind === 'event') {
+      selectSingle(eventKey(target.eventIndex))
+      setMenu({ ...target, x, y })
+    } else if (target.kind === 'lane') {
+      setMenu({ kind: 'lane', trackIndex, at: target.at, x, y })
+    } else {
+      setMenu({ kind: 'track', trackIndex, x, y })
+    }
+  }
 
   return (
     <div className={styles.timeline} aria-label="时间轴编辑器">
@@ -439,14 +823,35 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
             >
               ⤢ {Math.round(zoom * 100)}%
             </button>
+            <button
+              type="button"
+              className={helpOpen ? `${settingsStyles.button} ${styles.toolbarToggleOn}` : settingsStyles.button}
+              aria-expanded={helpOpen}
+              onClick={() => setHelpOpen((open) => !open)}
+            >
+              ? 快捷键
+            </button>
           </>
         ) : null}
         <span className={styles.timelineHint}>
           {advanced
-            ? '拖标尺移动播放头（预览实时定格）；Ctrl+滚轮缩放、滚轮平移；单击轨道空白添加关键帧，拖动微调时间；Alt 临时禁用吸附。'
+            ? '拖标尺移动播放头（预览实时定格）；Ctrl+滚轮缩放、滚轮平移；拖空白框选，Shift/Ctrl 多选，拖动所选批量移动。'
             : '单击轨道空白添加关键帧；拖动或选中菱形/事件标记后用 ←→ 微调、Delete 删除；同层轨道共享缓动'}
         </span>
       </div>
+      {advanced && helpOpen ? (
+        <div className={styles.helpCard} aria-label="快捷键速查">
+          <b>播放头</b>：拖标尺 / 点击标尺定位；←→ 步进（Shift ×10）；空格 试播/停止
+          <br />
+          <b>缩放平移</b>：Ctrl+滚轮 以光标缩放；滚轮 / Shift+滚轮 平移；工具条复位
+          <br />
+          <b>选择</b>：Shift 点选 同轨区间；Ctrl 点选 增减；空白拖动 框选时间段（跨全部轨道）；Esc 清空
+          <br />
+          <b>编辑</b>：拖动所选 批量移动；Ctrl+D 复制所选帧（+0.05）；Delete 删除所选；←→ 微调所选
+          <br />
+          <b>吸附</b>：网格/其他帧/事件/播放头自动吸附；Alt 临时禁用
+        </div>
+      ) : null}
       <div className={styles.timelineLanes}>
         <div ref={scrollRef} className={styles.timelineScroll}>
           <div
@@ -463,6 +868,11 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
                   zoom={zoom}
                   playheadAt={playhead}
                   onScrub={handleScrub}
+                  onContextMenu={
+                    menu === null
+                      ? (at, x, y) => setMenu({ kind: 'ruler', at, x, y })
+                      : undefined
+                  }
                 />
               ) : (
                 <TimelineRuler />
@@ -472,17 +882,20 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
               <TrackLane
                 key={track.property}
                 track={track}
-                selectedKeyframeIndex={
-                  keyframeSelection !== null && keyframeSelection.trackIndex === trackIndex
-                    ? keyframeSelection.keyframeIndex
-                    : -1
-                }
-                onSelectKeyframe={(keyframeIndex) => setSelection({ type: 'keyframe', trackIndex, keyframeIndex })}
+                trackIndex={trackIndex}
+                selectedKeyframeIndices={trackSelectedIndices(trackIndex)}
+                onSelectKeyframe={(keyframeIndex, modifiers) => selectKeyframe(trackIndex, keyframeIndex, modifiers)}
                 onAddKeyframe={(at) => handleAddKeyframe(trackIndex, at)}
                 onMoveKeyframe={(keyframeIndex, at) => handleMoveKeyframe(trackIndex, keyframeIndex, at)}
                 onRemoveKeyframe={(keyframeIndex) => handleDeleteKeyframe(trackIndex, keyframeIndex)}
                 onRemoveTrack={() => handleRemoveTrack(trackIndex)}
                 snapAt={snapEdit ?? undefined}
+                onMarquee={advanced ? handleMarquee : undefined}
+                onContextMenu={
+                  advanced
+                    ? (target, x, y) => openMenu(target, trackIndex, x, y)
+                    : undefined
+                }
               />
             ))}
             {showEvents ? (
@@ -490,17 +903,29 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
                 kind={kind}
                 poseSwapCount={poseSwapCount}
                 events={events}
-                selectedIndex={eventSelection === null ? -1 : eventSelection.eventIndex}
-                onSelectEvent={(eventIndex) => setSelection({ type: 'event', eventIndex })}
-                onMoveEvent={(eventIndex, at) => updateEvents(moveEvent(events, eventIndex, at))}
-                onDeleteEvent={(eventIndex) => handleDeleteEvent(eventIndex)}
+                selectedIndices={eventSelectedIndices()}
+                onSelectEvent={selectEventIndex}
+                onMoveEvent={handleMoveEvent}
+                onDeleteEvent={handleDeleteEvent}
                 snapAt={snapEdit ?? undefined}
+                onContextMenu={
+                  advanced
+                    ? (eventIndex, x, y) => openMenu({ kind: 'event', eventIndex }, -1, x, y)
+                    : undefined
+                }
               />
             ) : null}
             {playhead !== null ? (
               <div className={styles.playhead} style={{ left: `${playhead * 100}%` }} aria-hidden="true">
                 <span className={styles.playheadHead} />
               </div>
+            ) : null}
+            {marquee !== null ? (
+              <div
+                className={styles.marqueeBand}
+                style={{ left: `${marquee.from * 100}%`, width: `${(marquee.to - marquee.from) * 100}%` }}
+                aria-hidden="true"
+              />
             ) : null}
           </div>
         </div>
@@ -512,6 +937,70 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
             <li key={error}>{error}</li>
           ))}
         </ul>
+      ) : null}
+      {menu !== null ? (
+        <div className={styles.contextMenu} style={{ left: menu.x, top: menu.y }} role="menu" aria-label="时间轴菜单">
+          {menu.kind === 'keyframe' ? (
+            <>
+              <button type="button" role="menuitem" onClick={() => { handleDuplicateSelection(); setMenu(null) }}>
+                复制关键帧（Ctrl+D）
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  handleDeleteKeyframe(menu.kind === 'keyframe' ? menu.trackIndex : 0, menu.kind === 'keyframe' ? menu.keyframeIndex : 0)
+                  setMenu(null)
+                }}
+              >
+                删除关键帧
+              </button>
+            </>
+          ) : menu.kind === 'event' ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                if (menu.kind === 'event') handleDeleteEvent(menu.eventIndex)
+                setMenu(null)
+              }}
+            >
+              删除事件
+            </button>
+          ) : menu.kind === 'lane' ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                if (menu.kind === 'lane') handleAddKeyframe(menu.trackIndex, menu.at)
+                setMenu(null)
+              }}
+            >
+              在此添加关键帧
+            </button>
+          ) : menu.kind === 'ruler' ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                if (menu.kind === 'ruler') handleScrub(menu.at)
+                setMenu(null)
+              }}
+            >
+              播放头移到这里
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                if (menu.kind === 'track') handleRemoveTrack(menu.trackIndex)
+              }}
+            >
+              删除轨道
+            </button>
+          )}
+        </div>
       ) : null}
     </div>
   )

@@ -233,4 +233,150 @@ describe('advanced timeline (V1.2)', () => {
     expect([...container.querySelectorAll('button')].some((button) => button.textContent?.includes('吸附'))).toBe(false)
     expect(container.textContent).toContain('%') // the normalized ruler remains
   })
+
+  // --- P13: multi-selection, marquee, batch edits, context menu -------------
+
+  const duoTracks = (): MotionTrack[] => [
+    {
+      property: 'transition.scaleY',
+      keyframes: [
+        { at: 0.1, value: 1 },
+        { at: 0.5, value: 1.2 },
+        { at: 0.9, value: 1 },
+      ],
+    },
+  ]
+
+  const mountDuo = async (): Promise<{ current: () => { tracks: MotionTrack[]; events: TimelineEvent[] } }> => {
+    const state: { tracks: MotionTrack[]; events: TimelineEvent[] } = {
+      tracks: duoTracks(),
+      events: [{ at: 0.5, type: 'pose-swap' }],
+    }
+    const Wrapper = (): JSX.Element => {
+      const [draft, setDraft] = useState(() => ({ tracks: state.tracks, events: state.events }))
+      state.tracks = draft.tracks
+      state.events = draft.events
+      return (
+        <TimelineEditor
+          advanced
+          kind="transition"
+          tracks={draft.tracks}
+          events={draft.events}
+          durationMs={1000}
+          onChange={setDraft}
+        />
+      )
+    }
+    await act(async () => {
+      root.render(<Wrapper />)
+    })
+    return { current: () => state }
+  }
+
+  const diamondsOf = (): HTMLButtonElement[] => [
+    ...q<HTMLDivElement>('[aria-label="轨道 transition.scaleY"]').querySelectorAll<HTMLButtonElement>(
+      'button[aria-label^="关键帧"]',
+    ),
+  ]
+
+  const press = (el: Element, x: number, opts: { shift?: boolean; ctrl?: boolean } = {}): void => {
+    act(() => {
+      el.dispatchEvent(
+        new MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: x, shiftKey: opts.shift, ctrlKey: opts.ctrl }),
+      )
+    })
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, clientX: x }))
+    })
+  }
+
+  it('shift/ctrl clicks build a multi-selection (aria-pressed reflects the set)', async () => {
+    await mountDuo()
+    const [a, b, c] = diamondsOf()
+    press(a, 100)
+    press(b, 500, { shift: true })
+    expect(a.getAttribute('aria-pressed')).toBe('true')
+    expect(b.getAttribute('aria-pressed')).toBe('true') // within the 0.1..0.5 range
+    expect(c.getAttribute('aria-pressed')).toBe('false')
+    press(b, 500, { ctrl: true }) // toggle off
+    expect(b.getAttribute('aria-pressed')).toBe('false')
+    expect(a.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('an empty-lane drag marquee-selects the time band across the track', async () => {
+    await mountDuo()
+    const lane = q<HTMLDivElement>('[aria-label="轨道 transition.scaleY"]')
+    stubRect(lane, 0, 800)
+    act(() => {
+      lane.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 0.12 * 800 }))
+    })
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, cancelable: true, clientX: 0.55 * 800 }))
+    })
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, clientX: 0.55 * 800 }))
+    })
+    const [a, b, c] = diamondsOf()
+    expect(a.getAttribute('aria-pressed')).toBe('false') // 0.1 outside [0.12, 0.55]
+    expect(b.getAttribute('aria-pressed')).toBe('true') // 0.5 in band
+    expect(c.getAttribute('aria-pressed')).toBe('false') // 0.9 outside
+    // the pose-swap event at 0.5 joined the selection too
+    const marker = q<HTMLButtonElement>('[aria-label^="pose-swap"]')
+    expect(marker.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('Delete removes the whole selection (window keyboard, body focus)', async () => {
+    const mounted = await mountDuo()
+    const [a, b] = diamondsOf()
+    press(a, 100)
+    press(b, 500, { shift: true })
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+    })
+    expect(mounted.current().tracks[0].keyframes).toHaveLength(1) // only 0.9 survives
+  })
+
+  it('Ctrl+D duplicates the selection at +0.05 and selects the copies', async () => {
+    const mounted = await mountDuo()
+    const [, b] = diamondsOf()
+    press(b, 500)
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyD', ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    const ats = mounted.current().tracks[0].keyframes.map((keyframe) => keyframe.at)
+    expect(ats).toContain(0.55)
+    // the copy (0.55) is the selected one now
+    const fresh = diamondsOf()
+    const selected = fresh.find((button) => button.getAttribute('aria-pressed') === 'true')
+    expect(selected?.getAttribute('aria-label')).toContain('@ 0.55')
+  })
+
+  it('right-click on a diamond opens the context menu; 删除 removes it', async () => {
+    const mounted = await mountDuo()
+    const [a] = diamondsOf()
+    act(() => {
+      a.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }))
+    })
+    const menu = q('[role="menu"]')
+    expect(menu.textContent).toContain('删除关键帧')
+    const deleteItem = [...menu.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('删除关键帧'),
+    )
+    act(() => {
+      deleteItem?.click()
+    })
+    expect(mounted.current().tracks[0].keyframes.map((keyframe) => keyframe.at)).toEqual([0.5, 0.9])
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  it('Esc clears the selection', async () => {
+    await mountDuo()
+    const [a] = diamondsOf()
+    press(a, 100)
+    expect(a.getAttribute('aria-pressed')).toBe('true')
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(diamondsOf()[0].getAttribute('aria-pressed')).toBe('false')
+  })
 })

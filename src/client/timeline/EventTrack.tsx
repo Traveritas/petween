@@ -42,13 +42,15 @@ export interface EventTrackProps {
   kind: AnimationKind
   poseSwapCount: number
   events: TimelineEvent[]
-  /** Index of the selected event, -1 when none. */
-  selectedIndex: number
-  onSelectEvent: (eventIndex: number) => void
+  /** Selected event indices (V1.1 passes a 0/1-entry set). */
+  selectedIndices: ReadonlySet<number>
+  onSelectEvent: (eventIndex: number, modifiers?: { shift: boolean; toggle: boolean }) => void
   onMoveEvent: (eventIndex: number, at: number) => void
   onDeleteEvent: (eventIndex: number) => void
   /** V1.2: zoom-adaptive snap with targets; default = the 0.01 grid. */
   snapAt?: (at: number) => number
+  /** V1.2: right-click on a marker opens the context menu. */
+  onContextMenu?: (eventIndex: number, x: number, y: number) => void
 }
 
 export function EventTrack(props: EventTrackProps): JSX.Element {
@@ -70,8 +72,12 @@ export function EventTrack(props: EventTrackProps): JSX.Element {
   const handleMarkerDown = (eventIndex: number) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     gestureCancelRef.current?.() // a fresh press supersedes a gesture still open
+    const modifiers = props.onContextMenu === undefined ? undefined : {
+      shift: event.shiftKey,
+      toggle: event.ctrlKey || event.metaKey,
+    }
     gestureCancelRef.current = beginPointerGesture(event, {
-      onClick: () => props.onSelectEvent(eventIndex),
+      onClick: () => props.onSelectEvent(eventIndex, modifiers),
       onDrag: (clientX) => {
         const at = atFromClientX(clientX)
         if (at !== null) props.onMoveEvent(eventIndex, at)
@@ -115,13 +121,24 @@ export function EventTrack(props: EventTrackProps): JSX.Element {
           <button
             type="button"
             className={
-              index === props.selectedIndex ? `${styles.eventIcon} ${styles.eventIconSelected}` : styles.eventIcon
+              props.selectedIndices.has(index)
+                ? `${styles.eventIcon} ${styles.eventIconSelected}`
+                : styles.eventIcon
             }
             aria-label={eventLabel(event)}
-            aria-pressed={index === props.selectedIndex}
+            aria-pressed={props.selectedIndices.has(index)}
             onPointerDown={handleMarkerDown(index)}
             onClick={handleMarkerClick(index)}
             onKeyDown={handleMarkerKeyDown(index, event)}
+            onContextMenu={
+              props.onContextMenu === undefined
+                ? undefined
+                : (menuEvent) => {
+                    menuEvent.preventDefault()
+                    menuEvent.stopPropagation()
+                    props.onContextMenu?.(index, menuEvent.clientX, menuEvent.clientY)
+                  }
+            }
           >
             {event.type === 'pose-swap' ? '⚑' : '✦'}
           </button>

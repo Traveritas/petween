@@ -1068,3 +1068,13 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **TimelineEditor advanced 模式**(全部可选 props,缺省=V1.1 行为不变):`.timelineScroll/.timelineContent` 包裹(内容宽 = zoom×100%,原生横向滚动做 pan,标签 sticky-left 带底色);`ScrubRuler`(ms 自适应刻度、点击/拖拽擦洗、←→ 步进 Shift×10、role=slider 可达性);播放头全高线 + 头部块;Ctrl+滚轮以光标为锚缩放(1×..64×,useLayoutEffect 事后修正 scrollLeft)、滚轮/触控板平移;Alt 按住(window keydown/keyup/blur 追踪)临时禁用吸附;帧/事件拖拽吸附目标=网格+兄弟帧/事件+播放头,播放头擦洗吸附目标=网格+帧/事件(**排除自身**,防粘滞)。TrackLane/EventTrack 增可选 `snapAt` prop(缺省 0.01 网格);键盘微调恒为 0.01 细步。
 - **AnimatorStore**:快照扩 `playheadAt/zoom/snapEnabled`(setPlayhead 去重+钳制;选动画/清选自动弃置播放头);AnimatorPage 接线——拖标尺即 `scrubDefinition` 定格预览(草稿无效时只动线不采样)、Space 播放/停止(latest-ref 模式)、试播/停止/切选自动 `endScrub`、缩放/吸附控件经 store。
 - **测试**:+timeline-sampling(采样数学/pose 语义/乱序)/+timeline-snap(吸附语义/步进数学/标签)/+timeline-editor-advanced(标尺渲染/点击/方向键/Ctrl 滚轮/播放头吸附/禁用直通/V1.1 无 chrome 回归)/+preview-scrub(内联样式/重复擦洗/endScrub/命名换图/匿名不换);animator-store 扩断言。62 文件/1088 用例全绿,双 typecheck 零错误。
+
+## V1.2 Phase 13 手感二批:多选/框选/批量 + undo/redo + 右键菜单 + 快捷键(2026-09-19)
+
+- **选择模型**:TimelineEditor 选择统一为字符串键 Set(`keyframe:<track>:<frame>`/`event:<i>`,timeline-model 新增 key/parse 助手)+ last-clicked 锚(驱动检查器);V1.1 单选语义=单元素集合(行为零变化,既有 23 用例原样通过)。删除/删轨做显式索引位移重键(指向「错误但存在」的帧是 prune 无法察觉的);外部整块替换(类型切换/JSON 应用)由 tracks/events 变更 effect 兜底清键。
+- **多选交互**:Shift 点选=同轨区间(at 排序)、Ctrl/Cmd 点选=增减、普通点击=塌缩单选;空白轨道拖动=时间带框选(跨全部轨道选帧+事件,拖后 DOM click 抑制不加帧;pointer-gesture 补 `onEnd(dragged)` 钩子)。
+- **批量编辑**:`moveSelectionBatch`(锚已吸附的 delta 逐 tick 累加应用,无需手势起点快照;越界钳制、与未选帧碰撞静默丢弃不合并)驱动多选拖动(帧/事件锚皆可);`duplicateSelectedKeyframes`(+0.05、占位跳过、按对象身份取合并后索引,副本成为新选择);Delete 批删(过渡唯一 pose-swap 保护)、Ctrl+D、Esc 清选、←→ 批量微调(Shift×10)。
+- **右键菜单**(advanced):菱形(复制/删除)、事件标记(删除)、空白轨道(在此加帧)、标尺(播放头移到这里)、轨道标签(删除轨道)——固定定位无依赖菜单,外点/Escape/动作即关。
+- **undo/redo**:AnimatorStore 手势级历史(编辑前状态入栈,600ms 窗口内合并=一次拖拽一步;栈深 100;新编辑清 redo;切选/清选重置);Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y(输入框内跳过)+ 时间轴上方 ↶↷ 按钮(canUndo/canRedo 驱动禁用)。库级操作(建/删/克隆动画)不入历史,维持确认守卫。
+- **工具条**:「? 快捷键」速查卡。
+- **测试**:+timeline-batch(key 往返/批量移动钳制碰撞/复制占位)/animator-store 历史(fake timers 验证 600ms 合并边界、redo 清空、切选重置)/timeline-editor-advanced 扩 6 用例(shift/ctrl 多选、框选带选择含事件、Delete 批删、Ctrl+D 副本选中、右键菜单删除、Esc)。63 文件/1105 用例全绿,双 typecheck 零错误。

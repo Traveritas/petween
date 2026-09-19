@@ -19,6 +19,12 @@ export const TIMELINE_DRAG_THRESHOLD_PX = 3
 export interface PointerGestureOptions {
   onDrag: (clientX: number, clientY: number) => void
   onClick: () => void
+  /**
+   * V1.2: fires once when the gesture finishes (up or cancel), reporting
+   * whether the drag threshold was crossed — marquee selection finalizes
+   * here (a drag has no click to piggyback on).
+   */
+  onEnd?: (dragged: boolean) => void
 }
 
 /** Loose pointer shape: React synthetic events and jsdom MouseEvents both fit. */
@@ -70,11 +76,13 @@ export function beginPointerGesture(event: PointerLike, options: PointerGestureO
     const wasDragging = dragging
     cleanup()
     if (!wasDragging) options.onClick()
+    options.onEnd?.(wasDragging)
   }
   const handleCancel = (raw: Event): void => {
     if (cancelled) return
     if (!isGestureEvent(raw as PointerLike)) return
     cleanup()
+    options.onEnd?.(false)
   }
   window.addEventListener('pointermove', handleMove)
   window.addEventListener('pointerup', handleUp)

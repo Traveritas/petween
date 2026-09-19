@@ -11,7 +11,15 @@ import { BUILTIN_DEFINITIONS } from '../../src/client/timeline/animation-draft'
 describe('AnimatorStore', () => {
   it('starts with nothing open and the default feel state', () => {
     const store = new AnimatorStore()
-    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null, playheadAt: null, zoom: 1, snapEnabled: true })
+    expect(store.getSnapshot()).toEqual({
+      selectedId: null,
+      draft: null,
+      playheadAt: null,
+      zoom: 1,
+      snapEnabled: true,
+      canUndo: false,
+      canRedo: false,
+    })
   })
 
   it('selectAnimation opens a pristine draft of the saved definition', () => {
@@ -60,7 +68,15 @@ describe('AnimatorStore', () => {
 
     store.clear() // nothing open: no notification, no state churn
     expect(listener).not.toHaveBeenCalled()
-    expect(store.getSnapshot()).toEqual({ selectedId: null, draft: null, playheadAt: null, zoom: 1, snapEnabled: true })
+    expect(store.getSnapshot()).toEqual({
+      selectedId: null,
+      draft: null,
+      playheadAt: null,
+      zoom: 1,
+      snapEnabled: true,
+      canUndo: false,
+      canRedo: false,
+    })
 
     store.selectAnimation(BUILTIN_DEFINITIONS[0])
     expect(listener).toHaveBeenCalledTimes(1)
@@ -102,6 +118,60 @@ describe('AnimatorStore', () => {
     expect(store.getSnapshot().zoom).toBe(64)
     store.setSnapEnabled(false)
     expect(store.getSnapshot().snapEnabled).toBe(false)
+  })
+
+  it('undo/redo walks the draft history and clears redo on a new edit', async () => {
+    const store = new AnimatorStore()
+    store.selectAnimation(BUILTIN_DEFINITIONS[0])
+    expect(store.getSnapshot().canUndo).toBe(false)
+
+    store.patchDraft({ durationMs: 1234 })
+    expect(store.getSnapshot().canUndo).toBe(true)
+    store.patchDraft({ durationMs: 1500 })
+    // still within the coalescing window: one undo step, pre-gesture state on top
+    store.undo()
+    expect(store.getSnapshot().draft?.durationMs).toBe(BUILTIN_DEFINITIONS[0].durationMs)
+    expect(store.getSnapshot().canUndo).toBe(false)
+    expect(store.getSnapshot().canRedo).toBe(true)
+
+    store.redo()
+    expect(store.getSnapshot().draft?.durationMs).toBe(1500)
+    expect(store.getSnapshot().canRedo).toBe(false)
+
+    // a fresh edit after undo discards the redo branch
+    store.undo()
+    store.patchDraft({ durationMs: 777 })
+    expect(store.getSnapshot().canRedo).toBe(false)
+    expect(store.getSnapshot().draft?.durationMs).toBe(777)
+  })
+
+  it('slow successive edits become separate undo steps', () => {
+    vi.useFakeTimers()
+    try {
+      const store = new AnimatorStore()
+      store.selectAnimation(BUILTIN_DEFINITIONS[0])
+      const original = store.getSnapshot().draft?.durationMs
+      store.patchDraft({ durationMs: 1000 })
+      vi.advanceTimersByTime(700) // past the coalescing window
+      store.patchDraft({ durationMs: 2000 })
+      store.undo() // back to the intermediate (1000) — two steps existed
+      expect(store.getSnapshot().draft?.durationMs).toBe(1000)
+      store.undo()
+      expect(store.getSnapshot().draft?.durationMs).toBe(original)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('selection switches reset the history (no cross-animation undo)', () => {
+    const store = new AnimatorStore()
+    store.selectAnimation(BUILTIN_DEFINITIONS[0])
+    store.patchDraft({ durationMs: 4321 })
+    expect(store.getSnapshot().canUndo).toBe(true)
+    store.selectAnimation(BUILTIN_DEFINITIONS[1] ?? BUILTIN_DEFINITIONS[0])
+    expect(store.getSnapshot().canUndo).toBe(false)
+    expect(store.getSnapshot().canRedo).toBe(false)
+    expect(() => store.undo()).not.toThrow()
   })
 
   it('notifies subscribers on every mutation and honors unsubscribe/dispose', () => {

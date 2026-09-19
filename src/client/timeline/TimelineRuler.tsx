@@ -6,7 +6,7 @@
  *   adaptive step so labels never crowd. Keyboard: ←/→ step the playhead by
  *   one grid step (Shift ×10).
  */
-import { useEffect, useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, type JSX, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { adaptiveGridStep, formatTickMs } from './timeline-model'
 import { beginPointerGesture } from './pointer-gesture'
 import styles from './timeline.module.css'
@@ -32,6 +32,8 @@ export interface ScrubRulerProps {
   zoom: number
   playheadAt: number | null
   onScrub: (at: number) => void
+  /** V1.2: right-click opens the context menu (playhead to here). */
+  onContextMenu?: (at: number, x: number, y: number) => void
 }
 
 export function ScrubRuler(props: ScrubRulerProps): JSX.Element {
@@ -71,6 +73,12 @@ export function ScrubRuler(props: ScrubRulerProps): JSX.Element {
     }
   }
 
+  const handleContextMenu = props.onContextMenu === undefined ? undefined : (event: React.MouseEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const at = atFromClientX(event.clientX)
+    if (at !== null) props.onContextMenu?.(at, event.clientX, event.clientY)
+  }
+
   const { stepMs } = adaptiveGridStep(props.durationMs, props.laneWidthPx > 0 ? props.laneWidthPx : 800, props.zoom)
   const ticks: Array<{ ms: number; at: number }> = []
   for (let ms = 0; ms < props.durationMs; ms += stepMs) {
@@ -91,6 +99,7 @@ export function ScrubRuler(props: ScrubRulerProps): JSX.Element {
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
+      onContextMenu={handleContextMenu}
     >
       {ticks.map((tick) => (
         <span key={tick.ms} className={styles.rulerTick} style={{ left: `${tick.at * 100}%` }}>

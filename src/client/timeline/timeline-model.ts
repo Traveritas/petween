@@ -386,3 +386,155 @@ export function validateTimelineDraft(
   if (!result.valid) errors.push(...result.errors)
   return errors
 }
+
+// --- V1.2 Phase 13: multi-selection batch operations (pure) ----------------
+
+/**
+ * Selection identity across renders: string keys, not object references.
+ * `keyframe:<trackIndex>:<keyframeIndex>` / `event:<eventIndex>`.
+ */
+export type SelectionKey = string
+
+export function keyframeKey(trackIndex: number, keyframeIndex: number): SelectionKey {
+  return `keyframe:${trackIndex}:${keyframeIndex}`
+}
+
+export function eventKey(eventIndex: number): SelectionKey {
+  return `event:${eventIndex}`
+}
+
+export type ParsedSelection =
+  | { kind: 'keyframe'; trackIndex: number; keyframeIndex: number }
+  | { kind: 'event'; eventIndex: number }
+
+export function parseSelectionKey(key: SelectionKey): ParsedSelection | null {
+  const parts = key.split(':')
+  if (parts.length !== 3 && parts.length !== 2) return null
+  if (parts[0] === 'keyframe' && parts.length === 3) {
+    const trackIndex = Number(parts[1])
+    const keyframeIndex = Number(parts[2])
+    if (!Number.isInteger(trackIndex) || !Number.isInteger(keyframeIndex)) return null
+    return { kind: 'keyframe', trackIndex, keyframeIndex }
+  }
+  if (parts[0] === 'event' && parts.length === 2) {
+    const eventIndex = Number(parts[1])
+    if (!Number.isInteger(eventIndex)) return null
+    return { kind: 'event', eventIndex }
+  }
+  return null
+}
+
+/**
+ * Batch-move the whole selection by the anchor's (already snapped) step:
+ * every selected keyframe/event shifts by `delta` from its CURRENT time
+ * (per-tick application makes a drag cumulative — no gesture-start snapshot
+ * needed), clamped to 0..1 on the 0.01 grid. Collisions drop silently (the
+ * colliding frame stays put rather than merging — same discipline as single
+ * moves). Non-selected frames never move.
+ */
+export function moveSelectionBatch(
+  tracks: MotionTrack[],
+  events: TimelineEvent[],
+  selection: ReadonlySet<SelectionKey>,
+  delta: number,
+): { tracks: MotionTrack[]; events: TimelineEvent[] } {
+  if (selection.size === 0 || delta === 0) return { tracks, events }
+  const selectedKeyframes = new Map<number, Set<number>>() // trackIndex -> keyframe indices
+  const selectedEvents = new Set<number>()
+  for (const key of selection) {
+    const parsed = parseSelectionKey(key)
+    if (parsed === null) continue
+    if (parsed.kind === 'keyframe') {
+      const indices = selectedKeyframes.get(parsed.trackIndex) ?? new Set<number>()
+      indices.add(parsed.keyframeIndex)
+      selectedKeyframes.set(parsed.trackIndex, indices)
+    } else {
+      selectedEvents.add(parsed.eventIndex)
+    }
+  }
+
+  const nextTracks = tracks.map((track, trackIndex) => {
+    const indices = selectedKeyframes.get(trackIndex)
+    if (indices === undefined) return track
+    // Occupancy after the move decides collisions: build the target times
+    // first, then keep unselected frames and non-colliding moves.
+    const targets = track.keyframes.map((keyframe, index) =>
+      indices.has(index) ? snapAt(keyframe.at + delta) : keyframe.at,
+    )
+    const kept: number[] = [] // indices whose move survives
+    for (const index of indices) {
+      const target = targets[index]
+      const clash = track.keyframes.some(
+        (keyframe, other) => !indices.has(other) && snapAt(keyframe.at) === target,
+      )
+      const internalClash = kept.some((keptIndex) => targets[keptIndex] === target)
+      if (!clash && !internalClash) kept.push(index)
+    }
+    return {
+      ...track,
+      keyframes: track.keyframes.map((keyframe, index) =>
+        kept.includes(index) ? { ...keyframe, at: targets[index] } : keyframe,
+      ),
+    }
+  })
+
+  const nextEvents = events.map((event, index) =>
+    selectedEvents.has(index) ? { ...event, at: snapAt(event.at + delta) } : event,
+  )
+
+  return { tracks: nextTracks, events: nextEvents }
+}
+
+/** Default offset for duplicated keyframes (one half grid step region). */
+export const DUPLICATE_OFFSET = 0.05
+
+/**
+ * Duplicate every selected keyframe at `at + 0.05` (clamped/snapped; occupied
+ * slots are skipped silently). Events are not duplicated. Returns the new
+ * tracks and the copies' selection keys (the copies become the selection).
+ */
+export function duplicateSelectedKeyframes(
+  tracks: MotionTrack[],
+  selection: ReadonlySet<SelectionKey>,
+): { tracks: MotionTrack[]; selection: SelectionKey[] } {
+  const byTrack = new Map<number, Set<number>>()
+  for (const key of selection) {
+    const parsed = parseSelectionKey(key)
+    if (parsed === null || parsed.kind !== 'keyframe') continue
+    const indices = byTrack.get(parsed.trackIndex) ?? new Set<number>()
+    indices.add(parsed.keyframeIndex)
+    byTrack.set(parsed.trackIndex, indices)
+  }
+
+  const createdKeys: SelectionKey[] = []
+  const nextTracks = tracks.map((track, trackIndex) => {
+    const indices = byTrack.get(trackIndex)
+    if (indices === undefined) return track
+    const occupied = new Set(track.keyframes.map((keyframe) => snapAt(keyframe.at)))
+    const additions: Array<{ at: number; keyframe: MotionKeyframe }> = []
+    for (const index of indices) {
+      const source = track.keyframes[index]
+      if (source === undefined) continue
+      const target = snapAt(Math.min(1, source.at + DUPLICATE_OFFSET))
+      if (occupied.has(target)) continue
+      occupied.add(target)
+      additions.push({
+        at: target,
+        keyframe: { ...structuredClone(source), at: target },
+      })
+    }
+    if (additions.length === 0) return track
+    const merged = [...track.keyframes, ...additions.map((addition) => addition.keyframe)].sort(
+      (a, b) => a.at - b.at,
+    )
+    // Selection keys must reference the POST-merge indices (object identity:
+    // an at-bearing lookup would misfire on same-at neighbors).
+    for (const addition of additions) {
+      const mergedIndex = merged.indexOf(addition.keyframe)
+      if (mergedIndex >= 0) createdKeys.push(keyframeKey(trackIndex, mergedIndex))
+    }
+    return { ...track, keyframes: merged }
+  })
+
+  return { tracks: nextTracks, selection: createdKeys }
+}

@@ -398,11 +398,11 @@ Overlay Pet：
 任意 JavaScript expression
 脚本轨
 骨骼动画编辑
-曲线图编辑器全集
+多段曲线轨道/曲线编辑器全集
 AE/Blender 级动画工具
 ```
 
-目标始终是 **Pet-specific Animation Editor**。
+目标始终是 **Pet-specific Animation Editor**。（V1.2 修订：关键帧检查器内嵌的**单段 cubic-bezier 双手柄画布**不属于「曲线编辑器全集」——它只是既有 `cubic-bezier()` 四个数字的直接操纵面，无多段曲线、无关键帧化曲线轨。）
 
 ---
 

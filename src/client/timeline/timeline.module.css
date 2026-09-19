@@ -327,6 +327,60 @@
   gap: 0 12px;
 }
 
+/* --- bezier curve editor (P14) --- */
+
+.bezierEditor {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.bezierSvg {
+  width: 200px;
+  height: 200px;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #ffffff);
+}
+
+.bezierFrame {
+  fill: none;
+  stroke: var(--dsw-alias-border-l2, #d1d5db);
+  stroke-width: 0.4;
+}
+
+.bezierGridLine,
+.bezierAxis {
+  stroke: var(--dsw-alias-border-l2, #d1d5db);
+  stroke-width: 0.3;
+  stroke-dasharray: 1 1;
+}
+
+.bezierAxis {
+  stroke-dasharray: none;
+}
+
+.bezierGuide {
+  fill: none;
+  stroke: var(--dsw-alias-label-secondary, #9ca3af);
+  stroke-width: 0.4;
+  stroke-dasharray: 1.5 1.5;
+}
+
+.bezierCurve {
+  fill: none;
+  stroke: var(--dsw-alias-brand-primary, #6366f1);
+  stroke-width: 1.2;
+}
+
+.bezierHandle {
+  fill: var(--dsw-alias-brand-primary, #6366f1);
+  stroke: var(--dsw-alias-bg-layer-2, #ffffff);
+  stroke-width: 0.6;
+  cursor: grab;
+  touch-action: none; /* a handle press is a drag gesture, not page scroll */
+}
+
 .hint {
   font-size: 11px;
   color: var(--dsw-alias-label-secondary, #9ca3af);

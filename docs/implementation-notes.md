@@ -1078,3 +1078,9 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **undo/redo**:AnimatorStore 手势级历史(编辑前状态入栈,600ms 窗口内合并=一次拖拽一步;栈深 100;新编辑清 redo;切选/清选重置);Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y(输入框内跳过)+ 时间轴上方 ↶↷ 按钮(canUndo/canRedo 驱动禁用)。库级操作(建/删/克隆动画)不入历史,维持确认守卫。
 - **工具条**:「? 快捷键」速查卡。
 - **测试**:+timeline-batch(key 往返/批量移动钳制碰撞/复制占位)/animator-store 历史(fake timers 验证 600ms 合并边界、redo 清空、切选重置)/timeline-editor-advanced 扩 6 用例(shift/ctrl 多选、框选带选择含事件、Delete 批删、Ctrl+D 副本选中、右键菜单删除、Esc)。63 文件/1105 用例全绿,双 typecheck 零错误。
+
+## V1.2 Phase 14 手感三批:单段 bezier 曲线编辑器 + 护栏修订(2026-09-19)
+
+- **BezierCurveEditor**(`client/timeline/BezierCurveEditor.tsx`):DevTools 风格 SVG 画布——参数化 (x(t),y(t)) 多项式曲线(直接多项式采样,非 createCubicBezier 的反解)、控制点虚线引导、两个可拖手柄(P1 出线/P2 入线)。视图窗 y∈[-1,2](x 恒 [0,1]):拖拽 x 钳 [0,1](CSS 规则)、y 钳视图窗(拖不出画面;数字输入仍允许 schema 的 ±10);无布局(jsdom/零尺寸)时拖动静默。与 KeyframeInspector 既有四个数字输入双向联动(同一 setEasing 路径,同层缓动同步纪律不变);数字输入保留为精确/可达路径。
+- **护栏修订**:development-spec §2.2 与 v1.1-timeline-editor-plan §6 措辞改为「多段曲线轨道/曲线编辑器全集」不做,单段 cubic-bezier 手柄画布明确豁免(Pet-specific 定位不变)。
+- **测试**:+bezier-curve(映射往返/多项式端点与控制点/拖拽钳制取整/P2 不受扰/零布局静默)。64 文件/1110 用例全绿,双 typecheck 零错误。

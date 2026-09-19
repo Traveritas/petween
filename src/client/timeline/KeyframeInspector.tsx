@@ -19,6 +19,7 @@ import { EASING_BEZIERS, isParameterizedValue, parseEasing } from '../../motion/
 import { MOTION_PROPERTIES } from '../../motion/motion-properties'
 import { NumberField, SelectRow } from '../settings/controls'
 import settingsStyles from '../settings/settings.module.css'
+import { BezierCurveEditor } from './BezierCurveEditor'
 import { motionPropertyDisplayName } from './display-labels'
 import { roundValue } from './timeline-model'
 import styles from './timeline.module.css'
@@ -154,19 +155,32 @@ export function KeyframeInspector(props: KeyframeInspectorProps): JSX.Element | 
         onChange={setEasingChoice}
       />
       {easingChoice === 'custom' ? (
-        <div className={styles.bezierGrid}>
-          {BEZIER_POINT_LABELS.map((name, pointIndex) => (
-            <NumberField
-              key={name}
-              label={name}
-              min={pointIndex % 2 === 0 ? 0 : -10}
-              max={pointIndex % 2 === 0 ? 1 : 10}
-              step={0.01}
-              value={bezierPoints[pointIndex]}
-              onChange={(pointValue) => setBezierPoint(pointIndex, pointValue)}
-            />
-          ))}
-        </div>
+        <>
+          {/* P14: the visual handle canvas — bidirectionally synced with the
+              numeric fields below through the same setBezierPoint path. */}
+          <BezierCurveEditor
+            points={bezierPoints}
+            onChange={(points) =>
+              props.onSetEasing(
+                props.keyframeIndex,
+                `cubic-bezier(${points[0]},${points[1]},${points[2]},${points[3]})`,
+              )
+            }
+          />
+          <div className={styles.bezierGrid}>
+            {BEZIER_POINT_LABELS.map((name, pointIndex) => (
+              <NumberField
+                key={name}
+                label={name}
+                min={pointIndex % 2 === 0 ? 0 : -10}
+                max={pointIndex % 2 === 0 ? 1 : 10}
+                step={0.01}
+                value={bezierPoints[pointIndex]}
+                onChange={(pointValue) => setBezierPoint(pointIndex, pointValue)}
+              />
+            ))}
+          </div>
+        </>
       ) : null}
       <button type="button" className={settingsStyles.button} onClick={() => props.onDelete(props.keyframeIndex)}>
         删除关键帧

@@ -74,6 +74,8 @@ export function AnimatorPage(): JSX.Element {
   const [autoReplay, setAutoReplay] = useState(false)
   const [previewStrength, setPreviewStrength] = useState(1)
   const [previewReady, setPreviewReady] = useState(false)
+  /** The right-rail element the timeline inspector portals into (V1.2). */
+  const [inspectorHost, setInspectorHost] = useState<HTMLDivElement | null>(null)
   const auditionSessionRef = useRef<PreviewSession | null>(null)
   const latestPreviewData = useRef({ config: snapshot.config, assets: snapshot.assets, customs: snapshot.customs })
   latestPreviewData.current = { config: snapshot.config, assets: snapshot.assets, customs: snapshot.customs }
@@ -512,12 +514,27 @@ export function AnimatorPage(): JSX.Element {
       </>
     )
 
+  // The playhead readout next to the transport (tabular numerals via CSS).
+  const playheadMs =
+    draft !== null && animSnapshot.playheadAt !== null
+      ? Math.round(animSnapshot.playheadAt * draft.durationMs)
+      : null
+
   const previewPanel = (
-    <div className={styles.previewPanel} aria-label="动画试播渲染器">
-      <div className={styles.previewStage}>
-        <PetRenderer onStage={handleAuditionStage} embedded size={320} />
+    <section className={styles.panel} aria-label="动画预览">
+      <div className={styles.panelHeader}>
+        <span className={styles.panelTitle}>预览</span>
+        <span className={styles.transportReadout}>
+          {playheadMs === null ? `${draft?.durationMs ?? '—'}ms` : `${playheadMs} / ${draft?.durationMs ?? 0}ms`}
+        </span>
       </div>
-      <div className={styles.previewActions}>
+      {/* A contained viewport, not a loose renderer: the stage layers animate
+          with transforms, so without relative + overflow:hidden the pet walks
+          over its neighbors (the library panel bleeds the same way). */}
+      <div className={styles.stageBox}>
+        <PetRenderer onStage={handleAuditionStage} embedded size={260} />
+      </div>
+      <div className={styles.transport}>
         <button type="button" className={settingsStyles.button} disabled={!previewReady} onClick={audition}>
           ▶ 试播
         </button>
@@ -536,7 +553,7 @@ export function AnimatorPage(): JSX.Element {
           tooltip="编辑变更且校验通过后自动重播一次。"
           onChange={setAutoReplay}
         />
-        <div className={styles.previewStrength}>
+        <div className={styles.transportStrength}>
           <Slider
             label="试播强度"
             min={strengthBounds.min}
@@ -548,7 +565,7 @@ export function AnimatorPage(): JSX.Element {
           />
         </div>
       </div>
-    </div>
+    </section>
   )
 
   return (
@@ -557,7 +574,7 @@ export function AnimatorPage(): JSX.Element {
         <div className={styles.headerMain}>
           <h1 className={styles.title}>Petween 动画编辑器</h1>
           <p className={styles.subtitle}>
-            独立动画工作台：左侧管理动画库，右侧编辑时间轴并试播。保存后可在设置编辑器的过渡动画、循环动画与点击互动中挂载。
+            左列管理动画库，中央预览与时间轴，右列属性与检查器。保存后可在设置编辑器的过渡动画、循环动画与点击互动中挂载。
           </p>
         </div>
       </header>
@@ -582,13 +599,13 @@ export function AnimatorPage(): JSX.Element {
           <NoticeBar snapshot={snapshot} store={store} />
           <div className={styles.workbench}>
             {libraryColumn}
-            <div className={styles.mainColumn}>
-              <div className={styles.topRow}>
-                <div className={styles.formColumn}>{formColumn}</div>
-                {previewPanel}
-              </div>
-              {selected === undefined || draft === null || evaluation === null ? null : (
-                <>
+            {/* Center: the viewer (program monitor) above the timeline — the
+                DCC studio column. */}
+            <div className={styles.centerColumn}>
+              {previewPanel}
+              <section className={`${styles.panel} ${styles.timelinePanel}`} aria-label="时间轴">
+                <div className={styles.panelHeader}>
+                  <span className={styles.panelTitle}>时间轴</span>
                   <div className={styles.historyRow} aria-label="编辑历史">
                     <button
                       type="button"
@@ -609,118 +626,154 @@ export function AnimatorPage(): JSX.Element {
                       ↷ 重做
                     </button>
                   </div>
-                  <TimelineEditor
-                    key={selected.id}
-                    advanced
-                    kind={draft.kind}
-                    tracks={draft.tracks}
-                    events={draft.events}
-                    durationMs={draft.durationMs}
-                    playheadAt={animSnapshot.playheadAt}
-                    onPlayheadChange={handlePlayheadChange}
-                    zoom={animSnapshot.zoom}
-                    onZoomChange={(zoom) => animator.setZoom(zoom)}
-                    snapEnabled={animSnapshot.snapEnabled}
-                    onSnapEnabledChange={(enabled) => animator.setSnapEnabled(enabled)}
-                    onChange={({ tracks, events }) => animator.applyTimeline({ tracks, events })}
-                    onValidationChange={setTimelineErrors}
-                  />
-                  <div className={settingsStyles.jsonView}>
-                    <button
-                      type="button"
-                      className={settingsStyles.jsonToggle}
-                      aria-expanded={jsonOpen}
-                      data-tooltip="与时间轴实时同步；批量粘贴或外部工具产出的定义可经「编辑 JSON」应用。"
-                      onClick={() => setJsonOpen((open) => !open)}
-                    >
-                      {jsonOpen ? '▾' : '▸'} JSON 视图
-                    </button>
-                    {jsonOpen ? (
-                      jsonDraft === null ? (
-                        <>
-                          <pre className={settingsStyles.jsonPreview}>{jsonPreviewText}</pre>
-                          <div className={settingsStyles.jsonActions}>
-                            <button
-                              type="button"
-                              className={settingsStyles.button}
-                              onClick={() => setJsonDraft({ text: jsonPreviewText, errors: [] })}
-                            >
-                              编辑 JSON…
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <textarea
-                            className={settingsStyles.jsonEditor}
-                            rows={12}
-                            spellCheck={false}
-                            aria-label="JSON 编辑"
-                            value={jsonDraft.text}
-                            onChange={(event) => setJsonDraft({ text: event.target.value, errors: [] })}
-                          />
-                          {jsonDraft.errors.length > 0 ? (
-                            <ul className={settingsStyles.animationErrors} aria-label="JSON 错误">
-                              {jsonDraft.errors.map((error) => (
-                                <li key={error}>{error}</li>
-                              ))}
-                            </ul>
-                          ) : null}
-                          <div className={settingsStyles.jsonActions}>
-                            <button
-                              type="button"
-                              className={settingsStyles.button}
-                              data-tooltip="粘贴含 tracks / events 字段的 JSON 对象（例如完整动画定义）；校验通过后替换当前轨道与事件。"
-                              onClick={applyJson}
-                            >
-                              应用 JSON
-                            </button>
-                            <button type="button" className={settingsStyles.button} onClick={() => setJsonDraft(null)}>
-                              取消
-                            </button>
-                          </div>
-                        </>
-                      )
-                    ) : null}
-                  </div>
-                  {scalarErrors.length > 0 ? (
-                    <ul className={settingsStyles.animationErrors} aria-label="字段校验错误">
-                      {scalarErrors.map((error) => (
-                        <li key={error}>{error}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <div className={settingsStyles.animationActions}>
-                    {readOnly ? null : (
-                      <>
-                        <button
-                          type="button"
-                          className={settingsStyles.button}
-                          disabled={busy || !draftValid}
-                          onClick={() => void handleSave()}
-                        >
-                          保存
-                        </button>
-                        <button type="button" className={settingsStyles.button} disabled={busy} onClick={() => void handleDelete()}>
-                          删除
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className={settingsStyles.button}
-                      disabled={busy || !draftValid}
-                      data-tooltip={
-                        readOnly ? '内置动画只读：时间轴上的修改仅用于试播，克隆后随副本保存。' : undefined
-                      }
-                      onClick={() => void handleClone()}
-                    >
-                      克隆为自定义
-                    </button>
-                  </div>
-                </>
-              )}
+                </div>
+                {selected === undefined || draft === null || evaluation === null ? (
+                  <p className={settingsStyles.hint}>在左侧选择动画后在此编辑时间轴。</p>
+                ) : (
+                  <>
+                    <TimelineEditor
+                      key={selected.id}
+                      advanced
+                      kind={draft.kind}
+                      tracks={draft.tracks}
+                      events={draft.events}
+                      durationMs={draft.durationMs}
+                      playheadAt={animSnapshot.playheadAt}
+                      onPlayheadChange={handlePlayheadChange}
+                      zoom={animSnapshot.zoom}
+                      onZoomChange={(zoom) => animator.setZoom(zoom)}
+                      snapEnabled={animSnapshot.snapEnabled}
+                      onSnapEnabledChange={(enabled) => animator.setSnapEnabled(enabled)}
+                      onChange={({ tracks, events }) => animator.applyTimeline({ tracks, events })}
+                      onValidationChange={setTimelineErrors}
+                      inspectorTarget={inspectorHost}
+                    />
+                    <div className={settingsStyles.jsonView}>
+                      <button
+                        type="button"
+                        className={settingsStyles.jsonToggle}
+                        aria-expanded={jsonOpen}
+                        data-tooltip="与时间轴实时同步；批量粘贴或外部工具产出的定义可经「编辑 JSON」应用。"
+                        onClick={() => setJsonOpen((open) => !open)}
+                      >
+                        {jsonOpen ? '▾' : '▸'} JSON 视图
+                      </button>
+                      {jsonOpen ? (
+                        jsonDraft === null ? (
+                          <>
+                            <pre className={settingsStyles.jsonPreview}>{jsonPreviewText}</pre>
+                            <div className={settingsStyles.jsonActions}>
+                              <button
+                                type="button"
+                                className={settingsStyles.button}
+                                onClick={() => setJsonDraft({ text: jsonPreviewText, errors: [] })}
+                              >
+                                编辑 JSON…
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <textarea
+                              className={settingsStyles.jsonEditor}
+                              rows={12}
+                              spellCheck={false}
+                              aria-label="JSON 编辑"
+                              value={jsonDraft.text}
+                              onChange={(event) => setJsonDraft({ text: event.target.value, errors: [] })}
+                            />
+                            {jsonDraft.errors.length > 0 ? (
+                              <ul className={settingsStyles.animationErrors} aria-label="JSON 错误">
+                                {jsonDraft.errors.map((error) => (
+                                  <li key={error}>{error}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            <div className={settingsStyles.jsonActions}>
+                              <button
+                                type="button"
+                                className={settingsStyles.button}
+                                data-tooltip="粘贴含 tracks / events 字段的 JSON 对象（例如完整动画定义）；校验通过后替换当前轨道与事件。"
+                                onClick={applyJson}
+                              >
+                                应用 JSON
+                              </button>
+                              <button type="button" className={settingsStyles.button} onClick={() => setJsonDraft(null)}>
+                                取消
+                              </button>
+                            </div>
+                          </>
+                        )
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </section>
             </div>
+            {/* Right rail: properties — the DCC inspector column. */}
+            <aside className={styles.propertyRail}>
+              <section className={styles.panel} aria-label="动画属性">
+                <div className={styles.panelHeader}>
+                  <span className={styles.panelTitle}>属性</span>
+                  {draftDirty ? <span className={settingsStyles.dirtyDot} title="有未保存的修改">●</span> : null}
+                </div>
+                <div className={styles.panelBody}>{formColumn}</div>
+              </section>
+              <section className={`${styles.panel} ${styles.inspectorPanel}`} aria-label="检查器面板">
+                <div className={styles.panelHeader}>
+                  <span className={styles.panelTitle}>检查器</span>
+                </div>
+                <div className={styles.panelBody} ref={setInspectorHost}>
+                  {selected === undefined || draft === null || evaluation === null ? (
+                    <p className={settingsStyles.hint}>选中关键帧或事件标记后在此编辑。</p>
+                  ) : null}
+                </div>
+              </section>
+              {selected === undefined || draft === null || evaluation === null ? null : (
+                <section className={styles.panel} aria-label="动画操作">
+                  <div className={styles.panelHeader}>
+                    <span className={styles.panelTitle}>操作</span>
+                  </div>
+                  <div className={styles.panelBody}>
+                    {scalarErrors.length > 0 ? (
+                      <ul className={settingsStyles.animationErrors} aria-label="字段校验错误">
+                        {scalarErrors.map((error) => (
+                          <li key={error}>{error}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <div className={styles.actionColumn}>
+                      {readOnly ? null : (
+                        <>
+                          <button
+                            type="button"
+                            className={settingsStyles.button}
+                            disabled={busy || !draftValid}
+                            onClick={() => void handleSave()}
+                          >
+                            保存
+                          </button>
+                          <button type="button" className={settingsStyles.button} disabled={busy} onClick={() => void handleDelete()}>
+                            删除
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className={settingsStyles.button}
+                        disabled={busy || !draftValid}
+                        data-tooltip={
+                          readOnly ? '内置动画只读：时间轴上的修改仅用于试播，克隆后随副本保存。' : undefined
+                        }
+                        onClick={() => void handleClone()}
+                      >
+                        克隆为自定义
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
+            </aside>
           </div>
           <ModalHost />
         </>

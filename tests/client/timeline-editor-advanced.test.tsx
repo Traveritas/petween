@@ -379,4 +379,37 @@ describe('advanced timeline (V1.2)', () => {
     })
     expect(diamondsOf()[0].getAttribute('aria-pressed')).toBe('false')
   })
+
+  it('inspectorTarget docks the inspector into the host element (no inline copy)', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const Wrapper = (): JSX.Element => {
+      const [draft, setDraft] = useState<{ tracks: MotionTrack[]; events: TimelineEvent[] }>(() => ({
+        tracks: duoTracks(),
+        events: [{ at: 0.5, type: 'pose-swap' }],
+      }))
+      return (
+        <TimelineEditor
+          advanced
+          kind="transition"
+          tracks={draft.tracks}
+          events={draft.events}
+          durationMs={1000}
+          inspectorTarget={host}
+          onChange={setDraft}
+        />
+      )
+    }
+    await act(async () => {
+      root.render(<Wrapper />)
+    })
+    const lane = q<HTMLDivElement>('[aria-label="轨道 transition.scaleY"]')
+    stubRect(lane, 0, 800)
+    const [a] = diamondsOf()
+    press(a, 80)
+    const docked = host.querySelector('[aria-label="关键帧检查器"]')
+    expect(docked).not.toBeNull()
+    expect(container.querySelector('[aria-label="关键帧检查器"]')).toBeNull() // not inline too
+    host.remove()
+  })
 })

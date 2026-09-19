@@ -37,6 +37,7 @@ import {
   type ChangeEvent,
   type JSX,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   AnimationKind,
   MotionEasing,
@@ -103,6 +104,12 @@ export interface TimelineEditorProps {
   durationMs?: number
   snapEnabled?: boolean
   onSnapEnabledChange?: (enabled: boolean) => void
+  /**
+   * V1.2: dock the inspector into this element (the workbench's right rail)
+   * instead of rendering inline below the lanes — the saveIndicatorTarget
+   * portal pattern. Unset = the V1.1 inline placement.
+   */
+  inspectorTarget?: HTMLElement | null
 }
 
 type LAYER_LABELS_RECORD = Record<MotionLayer, string>
@@ -702,6 +709,10 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
   } else {
     inspector = <p className={styles.hint}>选中关键帧或事件标记进行编辑；同层轨道的缓动按区间自动保持一致。</p>
   }
+  // Docked placement (the workbench's right rail): portal through, keeping
+  // the rail's slot stably mounted across selection changes.
+  const inspectorNode =
+    props.inspectorTarget != null ? createPortal(inspector, props.inspectorTarget) : inspector
 
   const playhead = advanced ? (props.playheadAt ?? null) : null
 
@@ -930,7 +941,7 @@ export function TimelineEditor(props: TimelineEditorProps): JSX.Element {
           </div>
         </div>
       </div>
-      {inspector}
+      {inspectorNode}
       {errors.length > 0 ? (
         <ul className={settingsStyles.animationErrors} aria-label="时间轴校验错误">
           {errors.map((error) => (

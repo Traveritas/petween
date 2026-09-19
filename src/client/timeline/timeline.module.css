@@ -9,6 +9,9 @@
   margin: 8px 0 2px;
   /* label column width; the event overlay offsets itself by the same amount */
   --mp-timeline-label-w: 120px;
+  /* The timeline is a manipulable surface, not a document: no text selection
+     fighting the drag cursors (an I-beam appearing mid-drag reads as a bug). */
+  user-select: none;
 }
 
 .timelineToolbar {
@@ -117,6 +120,9 @@
   font-size: 9px;
   color: var(--dsw-alias-label-secondary, #9ca3af);
   transform: translateX(-50%);
+  /* Labels are ink on the scrub surface, not hit targets: without this the
+     cursor flickers default↔ew-resize while sweeping the ruler. */
+  pointer-events: none;
 }
 
 .rulerTick::before {
@@ -174,6 +180,14 @@
 
 .keyframe:hover {
   background: var(--dsw-alias-interactive-bg-hover, #eef2ff);
+}
+
+/* Grabbing while the gesture is live — the cursor must not fall back to
+   grab/crosshair mid-drag as the pointer crosses element boundaries. */
+.keyframe:active,
+.eventIcon:active,
+.bezierHandle:active {
+  cursor: grabbing;
 }
 
 .keyframeSelected,

@@ -1084,3 +1084,10 @@ host `POST /packs/import` 响应在带 mounts 时附 `applyPatch`(改号后的�
 - **BezierCurveEditor**(`client/timeline/BezierCurveEditor.tsx`):DevTools 风格 SVG 画布——参数化 (x(t),y(t)) 多项式曲线(直接多项式采样,非 createCubicBezier 的反解)、控制点虚线引导、两个可拖手柄(P1 出线/P2 入线)。视图窗 y∈[-1,2](x 恒 [0,1]):拖拽 x 钳 [0,1](CSS 规则)、y 钳视图窗(拖不出画面;数字输入仍允许 schema 的 ±10);无布局(jsdom/零尺寸)时拖动静默。与 KeyframeInspector 既有四个数字输入双向联动(同一 setEasing 路径,同层缓动同步纪律不变);数字输入保留为精确/可达路径。
 - **护栏修订**:development-spec §2.2 与 v1.1-timeline-editor-plan §6 措辞改为「多段曲线轨道/曲线编辑器全集」不做,单段 cubic-bezier 手柄画布明确豁免(Pet-specific 定位不变)。
 - **测试**:+bezier-curve(映射往返/多项式端点与控制点/拖拽钳制取整/P2 不受扰/零布局静默)。64 文件/1110 用例全绿,双 typecheck 零错误。
+
+## V1.2 工作台重构批：三栏 DCC 布局 + 光标/预览两修(2026-09-19,用户真机反馈)
+
+- **动机**：用户初测反馈三问题——① 光标在 crosshair/grab 区域随鼠标移动在默认光标与功能光标间闪动；② 预览渲染器与相邻组件穿插；③ 排版拘泥表单思维，授权放开重构并参考美学 skill。
+- **根因与修复**：①`.rulerTick` 无 `pointer-events:none`(刻度文字盖在 ew-resize 标尺上→命中测试来回翻转)+时间轴整体无 `user-select:none`(拖动触发文本选择→I-beam 抢光标)——两处补上,另加 diamond/marker/handle 的 `:active{cursor:grabbing}`;②预览此前是裸 `PetRenderer` 塞进 flex 格——舞台层动画的 transform 会越界,现在 `stageBox`(relative+overflow:hidden+300px+居中+底部径向渐变)完整收容(对齐 AnimationLibrary 的 animationPreviewStage 先例)。
+- **三栏重构**(Operate 模式,petween 令牌体系不变):**库|视口+时间轴|属性** DCC 语法——左列动画库;中列上「预览」面板(收容舞台+传输条:试播/停止/循环/强度+播放头 tabular-nums 时间读数)下「时间轴」面板(标题行带撤销/重做);右列「属性」(标量表单+dirty 点)/「检查器」(TimelineEditor 新增 `inspectorTarget` portal prop 停靠,saveIndicatorTarget 同款模式,缺省仍内联=V1.1 不变)/「操作」(保存/删除/克隆)。面板=唯一容器词汇(layer-1 底+标题行+统一圆角边框),≤1280px 时属性栏折叠到时间轴下方。布局经无头 Edge CDP 截图+DOM 几何探针审查(空态+选中态两帧)。
+- **测试**：+inspector portal 停靠用例;1111 用例全绿。

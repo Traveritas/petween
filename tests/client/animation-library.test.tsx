@@ -210,10 +210,10 @@ const render = async (api: EditorApi, wide: boolean): Promise<void> => {
 }
 
 const saveConfig = async (): Promise<void> => {
-  // §5.2-2: the dirty save button is 保存到「<name>」 with an active pet and
-  // 保存修改（未命名配置） without one — match either label.
+  // §5.2-2: the dirty apply button is the stable 应用 (the target pet rides
+  // on the state line).
   const button = [...container.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent !== null && /^保存(修改|到「)/.test(candidate.textContent) && !candidate.disabled,
+    (candidate) => candidate.textContent === '应用' && !candidate.disabled,
   )
   if (button === undefined) throw new Error('enabled config save button missing')
   await act(async () => button.click())

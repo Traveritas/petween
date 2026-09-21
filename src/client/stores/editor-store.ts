@@ -473,13 +473,13 @@ export class EditorStore {
       response = await this.api.getConfig()
     } catch (error) {
       if (!this.disposed) {
-        this.emit({ notice: { kind: 'error', text: `撤回失败：${describeError(error)}` } })
+        this.emit({ notice: { kind: 'error', text: `取消失败：${describeError(error)}` } })
       }
       return
     }
     if (this.disposed) return
     if (this.saveChain !== chainBefore) {
-      this.emit({ notice: { kind: 'warn', text: '已取消撤回：期间发起了新的保存。' } })
+      this.emit({ notice: { kind: 'warn', text: '已中止取消：期间发起了新的保存。' } })
       return
     }
     this.dirty = false
@@ -490,7 +490,7 @@ export class EditorStore {
       configRevision: this.snapshot.configRevision + 1,
       saveState: 'idle',
       saveError: null,
-      notice: { kind: 'info', text: '已撤回未保存的修改。' },
+      notice: { kind: 'info', text: '已取消未保存的更改。' },
     })
   }
 
@@ -979,7 +979,7 @@ export class EditorStore {
     if (this.disposed || this.snapshot.config === null) return false
     const active = this.snapshot.pets.find((pet) => pet.id === this.snapshot.config?.activePetId)
     const initial = active === undefined ? '新宠物' : `${active.name} 变体`
-    const name = (await promptDialog({ title: '把当前配置（含未保存修改）另存为新宠物', initial }))?.trim()
+    const name = (await promptDialog({ title: '把当前配置（含未保存的更改）另存为新宠物', initial }))?.trim()
     if (name === undefined || name === '') return false
     return this.saveDraftAsNewPet(name)
   }
@@ -1066,7 +1066,7 @@ export class EditorStore {
       this.emit({
         notice: {
           kind: 'warn',
-          text: '有未保存修改——先保存，或「另存草稿为新宠物」保住它。',
+          text: '有未保存的更改——先「应用」或「取消」，或用「另存草稿为新宠物」保住它。',
           action: 'save-draft-as-new-pet',
         },
       })
@@ -1074,7 +1074,7 @@ export class EditorStore {
     }
     await this.saveChain
     if (touchesActive && this.snapshot.saveState === 'error') {
-      this.emit({ notice: { kind: 'warn', text: '上次保存失败，请先重试保存或撤回修改，再操作宠物预设。' } })
+      this.emit({ notice: { kind: 'warn', text: '上次保存失败，请先重试保存或「取消」修改，再操作宠物预设。' } })
       return false
     }
     return true

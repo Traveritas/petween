@@ -124,7 +124,7 @@ const FLASH_POSE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 
 export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorStore }): JSX.Element {
   const { snapshot, store } = props
-  // UX: 撤回修改 drops the unsaved draft and returns to the last saved
+  // UX: 取消 drops the unsaved draft and returns to the last saved
   // config — the same confirm pattern as the animation guards (C2 modal; the
   // native confirm is dead in the IAB). Offered in the dirty
   // AND error branches (a failed save may be exactly what the user wants to
@@ -136,7 +136,7 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
   }
   const revertButton = (disabled: boolean): JSX.Element => (
     <button type="button" className={styles.button} disabled={disabled} onClick={revert}>
-      撤回修改
+      取消
     </button>
   )
   switch (snapshot.saveState) {
@@ -148,21 +148,19 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
         </span>
       )
     case 'dirty': {
-      // §5.2-2: the dirty save button names its target — the active pet the
-      // slice save lands in. The unnamed-config label survives only for
-      // pre-flip hosts: under preset authority an active pet always exists.
+      // §5.2-2 vocabulary: the buttons are the stable 应用/取消 pair (the
+      // same property-dialog pair the desktop settings pages use); the state
+      // line names the target — the pet the slice save lands in. The
+      // unnamed-config fallback survives only for pre-flip hosts: under
+      // preset authority an active pet always exists.
       const activePet = snapshot.pets.find((pet) => pet.id === snapshot.config?.activePetId)
-      const saveLabel =
-        activePet !== undefined
-          ? `保存到「${activePet.name}」`
-          : snapshot.presetAuthority
-            ? '保存修改'
-            : '保存修改（未命名配置）'
+      const stateText =
+        activePet !== undefined ? `有未保存的更改（将应用到「${activePet.name}」）` : '有未保存的更改'
       return (
         <span className={`${styles.saveState} ${styles.saveBusy}`}>
-          <span>有未保存修改</span>
+          <span>{stateText}</span>
           <button type="button" className={styles.button} onClick={() => void store.saveConfig()}>
-            {saveLabel}
+            应用
           </button>
           {revertButton(false)}
         </span>
@@ -172,7 +170,7 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
       return (
         <span className={`${styles.saveState} ${styles.saveOk}`}>
           <span>已保存</span>
-          <button type="button" className={styles.button} disabled>保存修改</button>
+          <button type="button" className={styles.button} disabled>应用</button>
         </span>
       )
     case 'error':
@@ -188,7 +186,7 @@ export function SaveIndicator(props: { snapshot: EditorSnapshot; store: EditorSt
     default:
       return (
         <span className={`${styles.saveState} ${styles.saveIdle}`}>
-          <button type="button" className={styles.button} disabled>保存修改</button>
+          <button type="button" className={styles.button} disabled>应用</button>
         </span>
       )
   }
@@ -261,8 +259,8 @@ function PetPresetCard(props: { snapshot: EditorSnapshot; store: EditorStore }):
           className={styles.petSelectLabel}
           data-tooltip={
             snapshot.presetAuthority
-              ? '保存把当前配置写回所选宠物预设；有未保存修改时无法切换宠物。'
-              : '保存把当前配置写回所选宠物预设；有未保存修改时无法切换宠物。未命名配置不属于任何宠物，只写入配置本身。'
+              ? '应用把当前配置写回所选宠物预设；有未保存的更改时，先「应用」或「取消」再切换。'
+              : '应用把当前配置写回所选宠物预设；有未保存的更改时，先「应用」或「取消」再切换。未命名配置不属于任何宠物，只写入配置本身。'
           }
         >
           <span className={styles.label}>当前宠物</span>

@@ -101,7 +101,7 @@ export function PetweenCard(props: PetweenCardProps): JSX.Element {
       <SaveIndicator snapshot={snapshot} store={store} />
       {/* §3.4 (方案 i): the dialog close cannot be vetoed, so while a draft is
           dirty the discard consequence stays visible BEFORE the decision. */}
-      {snapshot.saveState === 'dirty' ? <p className={styles.hint}>关闭卡片将丢弃未保存修改</p> : null}
+      {snapshot.saveState === 'dirty' ? <p className={styles.hint}>关闭卡片将丢弃未保存的更改</p> : null}
       {/* C2 modal host: the SaveIndicator's revert confirm renders here (this
           card is its own browsing context — it cannot use the editor page's
           host; see modals.tsx mount contract). */}

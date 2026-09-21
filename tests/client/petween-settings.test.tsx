@@ -120,10 +120,10 @@ const render = async (api: EditorApi, wide = false): Promise<void> => {
 }
 
 const saveChanges = async (): Promise<void> => {
-  // §5.2-2: the dirty save button is 保存到「<name>」 with an active pet and
-  // 保存修改（未命名配置） without one — match either label.
+  // §5.2-2: the dirty apply button is the stable 应用 — the target pet rides
+  // on the state line (有未保存的更改（将应用到「<name>」）), never the button.
   const button = [...container.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent !== null && /^保存(修改|到「)/.test(candidate.textContent) && !candidate.disabled,
+    (candidate) => candidate.textContent === '应用' && !candidate.disabled,
   )
   if (button === undefined) throw new Error('enabled save button missing')
   await act(async () => button.click())
@@ -419,7 +419,7 @@ describe('PetweenSettings', () => {
     await render(api, true)
     // UX: the resident pet-card hint paragraph is gone — the same semantics
     // now ride on the controls' tooltips (data-tooltip attributes).
-    expect(findControlRow('当前宠物').getAttribute('data-tooltip')).toContain('有未保存修改时无法切换宠物')
+    expect(findControlRow('当前宠物').getAttribute('data-tooltip')).toContain('先「应用」或「取消」再切换')
     const copyButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '复制')
     const blankButton = [...container.querySelectorAll('button')].find((b) => b.textContent === '新建空白')
     expect(copyButton?.getAttribute('data-tooltip')).toBe('基于当前宠物创建副本并切换过去')
@@ -542,17 +542,17 @@ describe('PetweenSettings', () => {
     addSpy.mockRestore()
   })
 
-  it('撤回修改 reloads the saved config after confirmation; declining keeps the draft (UX-1b)', async () => {
+  it('取消 reloads the saved config after confirmation; declining keeps the draft (UX-1b)', async () => {
     const api = makeApi(true)
     await render(api)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    expect(container.textContent).toContain('有未保存修改')
+    expect(container.textContent).toContain('有未保存的更改')
     const getConfig = vi.mocked(api.getConfig)
     const callsBefore = getConfig.mock.calls.length
 
-    const revert = [...container.querySelectorAll('button')].find((b) => b.textContent === '撤回修改')
+    const revert = [...container.querySelectorAll('button')].find((b) => b.textContent === '取消')
     if (revert === undefined) throw new Error('revert button missing')
     act(() => revert.click()) // the discard confirm goes through the C2 modal
     expect(modalDialog()?.textContent).toContain('放弃所有未保存的修改')
@@ -568,11 +568,11 @@ describe('PetweenSettings', () => {
     expect(getConfig.mock.calls.length).toBe(callsBefore + 1)
     expect(api.patchConfig).not.toHaveBeenCalled()
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true)
-    expect(container.textContent).toContain('已撤回未保存的修改')
-    expect(container.textContent).not.toContain('有未保存修改')
+    expect(container.textContent).toContain('已取消未保存的更改')
+    expect(container.textContent).not.toContain('有未保存的更改')
   })
 
-  it('a failed save also offers 撤回修改 next to 重试', async () => {
+  it('a failed save also offers 取消 next to 重试', async () => {
     const api = makeApi(true)
     api.patchConfig = vi.fn(async () => {
       throw new Error('disk full')
@@ -583,10 +583,10 @@ describe('PetweenSettings', () => {
     act(() => checkbox.click())
     await saveChanges()
     expect(container.textContent).toContain('保存失败：disk full')
-    act(() => clickButton('撤回修改'))
+    act(() => clickButton('取消'))
     await act(async () => modalButton('确定').click())
     await flushActions()
-    expect(container.textContent).toContain('已撤回未保存的修改')
+    expect(container.textContent).toContain('已取消未保存的更改')
     expect(container.textContent).not.toContain('保存失败')
   })
 
@@ -649,12 +649,12 @@ describe('PetweenSettings', () => {
     // typing neither commits nor marks the draft dirty
     act(() => typeInput(input, '250'))
     expect(input.value).toBe('250')
-    expect(container.textContent).not.toContain('有未保存修改')
+    expect(container.textContent).not.toContain('有未保存的更改')
 
     // blur commits
     act(() => blurInput(input))
     expect(input.value).toBe('250')
-    expect(container.textContent).toContain('有未保存修改')
+    expect(container.textContent).toContain('有未保存的更改')
 
     // Enter commits too, clamped to the host bounds
     act(() => typeInput(input, '999999'))
@@ -851,7 +851,7 @@ describe('PetweenSettings — pet package & attribution (§12)', () => {
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    expect(container.textContent).toContain('有未保存修改')
+    expect(container.textContent).toContain('有未保存的更改')
 
     // Declined in the modal: no request, the dirty draft survives.
     await act(async () => {
@@ -863,7 +863,7 @@ describe('PetweenSettings — pet package & attribution (§12)', () => {
     await flushActions()
     expect(modalDialog()).toBeNull()
     expect(api.importPetPackage).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('有未保存修改')
+    expect(container.textContent).toContain('有未保存的更改')
 
     // Confirmed: the import runs, lands clean and summarizes through the notice.
     await act(async () => {
@@ -1035,9 +1035,9 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     expect(rowNamed('蓝猫').textContent).toContain('生效中')
     // the draft and the active identity are untouched by a non-active delete
     expect(findControlRow('当前宠物').querySelector('select')?.value).toBe('pet_a')
-    // …and the draft never became dirty (probe the dirty-branch save label)
-    expect(container.textContent).not.toContain('保存到「')
-    expect(container.textContent).not.toContain('保存修改（未命名配置）')
+    // …and the draft never became dirty (probe the dirty-branch state line)
+    expect(container.textContent).not.toContain('有未保存的更改')
+    expect(container.textContent).not.toContain('将应用到「')
   })
 
   it('renames and exports a non-active preset straight from its row (§2.4)', async () => {
@@ -1061,26 +1061,29 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     expect(api.exportPetPackage).toHaveBeenCalledWith('pet_b')
   })
 
-  it('the dirty save button names its target: 保存到「name」with an active pet (§5.2-2)', async () => {
+  it('the dirty state line names its target: 将应用到「name」with an active pet (§5.2-2)', async () => {
     const api = await twoPetApi()
     await render(api, true)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存到「蓝猫」')
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '应用')
     expect(save?.disabled).toBe(false)
+    expect(container.textContent).toContain('将应用到「蓝猫」')
     await act(async () => save?.click())
     expect(api.patchConfig).toHaveBeenCalledTimes(1)
   })
 
-  it('the dirty save button reads 保存修改（未命名配置）when no pet is active (§5.2-2)', async () => {
+  it('the dirty bar shows the plain 有未保存的更改 line when no pet is active (§5.2-2)', async () => {
     const api = makeApi(true)
     await render(api)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '保存修改（未命名配置）')
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === '应用')
     expect(save?.disabled).toBe(false)
+    expect(container.textContent).toContain('有未保存的更改')
+    expect(container.textContent).not.toContain('将应用到「')
   })
 
   it('a dirty-blocked switch offers 另存草稿为新宠物 inline, which forks the draft without switching (§3.3)', async () => {
@@ -1108,7 +1111,7 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     await flushActions()
     expect(applyPet).not.toHaveBeenCalled()
     const status = container.querySelector('[role="status"]')
-    expect(status?.textContent).toContain('有未保存修改——先保存，或「另存草稿为新宠物」保住它。')
+    expect(status?.textContent).toContain('有未保存的更改——先「应用」或「取消」，或用「另存草稿为新宠物」保住它。')
     const shortcut = [...(status?.querySelectorAll('button') ?? [])].find(
       (candidate) => candidate.textContent === '另存草稿为新宠物',
     )
@@ -1125,7 +1128,7 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     // no switch, no implicit save — the draft keeps editing pet_a, still dirty
     expect(select.value).toBe('pet_a')
     expect(api.patchConfig).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('有未保存修改')
+    expect(container.textContent).toContain('有未保存的更改')
   })
 
   it('pre-flip hosts (no meta feature) keep the unnamed-config option in the selector', async () => {
@@ -1268,8 +1271,9 @@ describe('PetweenSettings — manage pets & lifecycle copy (§2.4, §3.3, §5.2)
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
-    expect(container.textContent).toContain('保存到「蓝猫」')
-    expect(container.textContent).not.toContain('保存修改（未命名配置）')
+    expect(container.textContent).toContain('将应用到「蓝猫」')
+    // the unnamed-config fallback never appears while a pet is active
+    expect(container.textContent).not.toContain('未命名配置')
     // the attribution section never shows the unnamed-config hint
     act(() => collapseToggle('来源与署名').click())
     expect(container.textContent).not.toContain('当前是未命名配置')

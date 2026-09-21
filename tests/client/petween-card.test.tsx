@@ -120,12 +120,13 @@ const moveSlider = (input: HTMLInputElement, value: string): void => {
 }
 
 /**
- * The enabled dirty save button. §5.2-2: its label carries the target — the
- * card never has an active pet, so it is always 保存修改（未命名配置）.
+ * The enabled dirty apply button. §5.2-2: the button is the stable 应用 —
+ * the card never has an active pet, so its state line is the plain
+ * 有未保存的更改 fallback.
  */
 const saveButton = (): HTMLButtonElement => {
   const button = [...container.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent?.startsWith('保存修改') === true && !candidate.disabled,
+    (candidate) => candidate.textContent === '应用' && !candidate.disabled,
   )
   if (button === undefined) throw new Error('save button missing')
   return button as HTMLButtonElement
@@ -162,17 +163,18 @@ describe('PetweenCard', () => {
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
     expect(mocks.patchConfig).not.toHaveBeenCalled()
-    // §5.2-2: no active pet in the card — the dirty save button says so
-    expect(saveButton().textContent).toBe('保存修改（未命名配置）')
+    // §5.2-2: no active pet in the card — the plain state line says so
+    expect(saveButton().textContent).toBe('应用')
+    expect(container.textContent).toContain('有未保存的更改')
     // §3.4: the discard consequence is resident while dirty…
-    expect(container.textContent).toContain('关闭卡片将丢弃未保存修改')
+    expect(container.textContent).toContain('关闭卡片将丢弃未保存的更改')
     await act(async () => saveButton().click())
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1)
     expect((mocks.patchConfig.mock.calls[0][0] as ConfigPatch).enabled).toBe(false)
     expect(container.textContent).toContain('已导入 1/6 张图 · 已停用')
     expect(container.textContent).toContain('已保存')
     // …and gone again once the draft is saved
-    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存修改')
+    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存的更改')
   })
 
   it('preset authority (feature-on): the dirty save button names the active pet, never the unnamed config', async () => {
@@ -199,11 +201,12 @@ describe('PetweenCard', () => {
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
+    // §5.2-2: the target pet rides on the state line, not the button
     const button = [...container.querySelectorAll('button')].find(
-      (candidate) => candidate.textContent === '保存到「蓝猫」',
+      (candidate) => candidate.textContent === '应用',
     )
     expect(button?.disabled).toBe(false)
-    expect(container.textContent).not.toContain('保存修改（未命名配置）')
+    expect(container.textContent).toContain('将应用到「蓝猫」')
   })
 
   it('the scale slider spans 0.3..4, aligned with the full editor and host validation', async () => {
@@ -231,12 +234,12 @@ describe('PetweenCard', () => {
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
     await render(api)
     // clean boot: no hint, nothing to discard
-    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存修改')
+    expect(container.textContent).not.toContain('关闭卡片将丢弃未保存的更改')
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
     if (checkbox === null) throw new Error('enable toggle missing')
     act(() => checkbox.click())
     // dirty: the consequence is visible BEFORE the decision to close
-    expect(container.textContent).toContain('关闭卡片将丢弃未保存修改')
+    expect(container.textContent).toContain('关闭卡片将丢弃未保存的更改')
     await act(async () => {
       root.unmount()
     })

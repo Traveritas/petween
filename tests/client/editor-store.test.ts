@@ -694,7 +694,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     expect(snapshot.selectedState).toBe('thinking') // the editor selection survives
     expect(snapshot.customs.map((entry) => entry.id)).toEqual(['user:a']) // explicit-save data survives
     expect(snapshot.notice?.kind).toBe('info')
-    expect(snapshot.notice?.text).toContain('已撤回')
+    expect(snapshot.notice?.text).toContain('已取消')
 
     // clean now: saving is a no-op and the replaced file is never deleted
     await store.saveConfig()
@@ -749,7 +749,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     expect(store.getSnapshot().saveState).toBe('dirty')
     expect(store.getSnapshot().config?.global.scale).toBe(1.9)
     expect(store.getSnapshot().notice?.kind).toBe('error')
-    expect(store.getSnapshot().notice?.text).toContain('撤回失败')
+    expect(store.getSnapshot().notice?.text).toContain('取消失败')
   })
 
   it('a save queued during the revert fetch aborts the revert', async () => {
@@ -775,7 +775,7 @@ describe('EditorStore — revertConfig (UX: discard unsaved edits)', () => {
     await reverting
     await flushMicrotasks()
     expect(store.getSnapshot().config?.global.scale).toBe(1.9) // draft untouched
-    expect(store.getSnapshot().notice?.text).toContain('已取消撤回')
+    expect(store.getSnapshot().notice?.text).toContain('已中止取消')
     expect(mocks.patchConfig).toHaveBeenCalledTimes(1) // the save went through
   })
 })

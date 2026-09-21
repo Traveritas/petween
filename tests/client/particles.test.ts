@@ -11,6 +11,7 @@ import {
   PARTICLE_EFFECTS,
   ParticleEmitter,
 } from '../../src/client/overlay/particles'
+import { PARTICLE_EFFECT_IDS } from '../../src/motion/animation-definition'
 import { flushScheduler, installFakeAnimate, type FakeAnimateHarness } from '../motion/fake-animate'
 
 let harness: FakeAnimateHarness
@@ -52,6 +53,53 @@ describe('ParticleEmitter', () => {
     for (const spec of Object.values(PARTICLE_EFFECTS)) {
       expect(spec.count).toBeLessThanOrEqual(MAX_PARTICLES_PER_EMIT)
     }
+  })
+
+  it('keeps the renderer table and the ParticleEffectId enum in sync', () => {
+    expect(Object.keys(PARTICLE_EFFECTS).sort()).toEqual([...PARTICLE_EFFECT_IDS].sort())
+  })
+
+  it('emits the widened palette rows (heart-burst / petal-fall / firework)', () => {
+    const emitter = new ParticleEmitter(layer)
+    emitter.emit('heart-burst')
+    expect(layer.children).toHaveLength(PARTICLE_EFFECTS['heart-burst'].count)
+    expect(emitter.liveCount).toBe(PARTICLE_EFFECTS['heart-burst'].count)
+    emitter.dispose()
+
+    emitter.emit('petal-fall')
+    expect(layer.children).toHaveLength(PARTICLE_EFFECTS['petal-fall'].count)
+    emitter.dispose()
+
+    emitter.emit('firework')
+    expect(layer.children).toHaveLength(PARTICLE_EFFECTS.firework.count)
+    emitter.dispose()
+  })
+
+  it('styles rings hollow (border, transparent fill) and hearts via clip-path', () => {
+    const emitter = new ParticleEmitter(layer)
+    // firework is 1/3 rings (24 per burst) — one burst practically guarantees one
+    let ring: HTMLElement | null = null
+    for (let burst = 0; burst < 10 && ring === null; burst += 1) {
+      emitter.emit('firework')
+      ring =
+        ([...layer.children] as HTMLElement[]).find((child) => child.style.border !== '') ?? null
+    }
+    expect(ring).not.toBeNull()
+    expect((ring as HTMLElement).style.background).toBe('transparent')
+    expect((ring as HTMLElement).style.borderRadius).toBe('50%')
+    emitter.dispose()
+
+    // heart-burst is 2/3 hearts; only clip-path shapes carry a polygon here
+    let heart: HTMLElement | null = null
+    for (let burst = 0; burst < 10 && heart === null; burst += 1) {
+      emitter.emit('heart-burst')
+      heart =
+        ([...layer.children] as HTMLElement[]).find((child) => child.style.clipPath !== '') ??
+        null
+    }
+    expect(heart).not.toBeNull()
+    expect((heart as HTMLElement).style.clipPath).toContain('polygon')
+    emitter.dispose()
   })
 
   it('removes each element once its animation finishes', async () => {

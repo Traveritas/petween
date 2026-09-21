@@ -138,7 +138,7 @@ Scheduler 逐段执行并 `await animation.finished`，因此换图时机与视�
 （transition）**忽略**该字段——进场换哪张图由状态机决定，不由动画数据决定；因此 transition
 的 pose-swap 声明 `pose` 会被校验拒绝。
 
-**particle**：在事件点发射一次 DOM 粒子爆发（纸屑/星星/微光），由 client renderer 的粒子层
+**particle**：在事件点发射一次 DOM 粒子爆发（纸屑/星星/微光/爱心/落樱/烟花），由 client renderer 的粒子层
 执行；`effect` 必须是以下之一：
 
 | effect | 效果 |
@@ -146,6 +146,9 @@ Scheduler 逐段执行并 `await animation.finished`，因此换图时机与视�
 | `confetti` | 彩色纸屑条/圆点向外放射，带翻滚与重力下坠 |
 | `star-burst` | 漫画星星/十字小形状放射 |
 | `sparkle` | 小十字微光，短距离快速淡出 |
+| `heart-burst` | 粉彩爱心上浮飘散（负重力，向上漂） |
+| `petal-fall` | 樱花瓣椭圆缓慢飘落，强下坠慢翻滚 |
+| `firework` | 大半径烟花爆发：圆点/纸条/空心圆环混合，远射程强下坠 |
 
 particle 是纯视觉点缀：**reduced-motion 下不发射**（pose-swap 仍会发生，§22），也可由配置的
 `advanced.particles` 开关整体关闭。同一个 `at` 上允许多个事件（如 pose-swap 与 particle 同在
@@ -290,7 +293,8 @@ easing 必须逐区间一致；repeat policy 必须合法（`alternate` 不允�
 约束）；`random-interval` 要求 `1 <= minDelayMs <= maxDelayMs <= 600000`；`transition` 必须恰好 1 个
 pose-swap 且不得声明 `pose`（particle 事件 0..n 允许）；`interaction` 允许 0..n 个 pose-swap 但每个必须
 声明 `pose` 目标（particle 允许），ambient 不允许任何 events、也不得使用 transition 层的轨道（避免与
-进场过渡在同一 DOM 层打架）；particle 的 `effect` 必须是 `confetti` / `star-burst` / `sparkle` 之一；
+进场过渡在同一 DOM 层打架）；particle 的 `effect` 必须是 `confetti` / `star-burst` / `sparkle` /
+`heart-burst` / `petal-fall` / `firework` 之一；
 `durationMs` 1~60000；`id` 必须符合命名空间规范。
 
 ## 11. Motion Pack：动画包格式（P2）

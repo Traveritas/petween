@@ -30,6 +30,9 @@ export const PARTICLE_EFFECT_OPTIONS: ReadonlyArray<{ value: ParticleEffectId; l
   { value: 'confetti', label: '彩带 confetti' },
   { value: 'star-burst', label: '星芒 star-burst' },
   { value: 'sparkle', label: '火花 sparkle' },
+  { value: 'heart-burst', label: '爱心 heart-burst' },
+  { value: 'petal-fall', label: '落樱 petal-fall' },
+  { value: 'firework', label: '烟花 firework' },
 ]
 
 export function eventLabel(event: TimelineEvent): string {

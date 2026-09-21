@@ -44,9 +44,22 @@ export interface MotionTrack {
 }
 
 /** Particle burst effects the client renderer knows (spec §8.5 extension). */
-export type ParticleEffectId = 'confetti' | 'star-burst' | 'sparkle'
+export type ParticleEffectId =
+  | 'confetti'
+  | 'star-burst'
+  | 'sparkle'
+  | 'heart-burst'
+  | 'petal-fall'
+  | 'firework'
 
-export const PARTICLE_EFFECT_IDS: readonly ParticleEffectId[] = ['confetti', 'star-burst', 'sparkle']
+export const PARTICLE_EFFECT_IDS: readonly ParticleEffectId[] = [
+  'confetti',
+  'star-burst',
+  'sparkle',
+  'heart-burst',
+  'petal-fall',
+  'firework',
+]
 
 /**
  * V1 events: the pose swap plus particle bursts (spec §8.5). The union still

@@ -4,7 +4,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { AnimationDefinition } from '../../src/motion/animation-definition'
-import { parseEasing, validateAnimationDefinition } from '../../src/motion/animation-definition'
+import {
+  PARTICLE_EFFECT_IDS,
+  parseEasing,
+  validateAnimationDefinition,
+} from '../../src/motion/animation-definition'
 import { compileTimeline } from '../../src/motion/timeline-compiler'
 import { BUILTIN_AMBIENT_DEFINITIONS } from '../../src/core/ambient-presets'
 import { BUILTIN_TRANSITION_DEFINITIONS } from '../../src/core/transition-presets'
@@ -222,6 +226,19 @@ describe('validateAnimationDefinition', () => {
       { at: 0.6, type: 'particle', effect: 'fireworks' as never },
     ]
     expect(errorsOf(definition).join()).toContain('unknown particle effect')
+  })
+
+  it('accepts every id in PARTICLE_EFFECT_IDS (enum↔renderer table sync)', () => {
+    const definition = validDefinition()
+    definition.events = [
+      { at: 0.5, type: 'pose-swap' },
+      ...PARTICLE_EFFECT_IDS.map((effect, index) => ({
+        at: 0.51 + index * 0.01,
+        type: 'particle' as const,
+        effect,
+      })),
+    ]
+    expect(errorsOf(definition)).toEqual([])
   })
 
   it('rejects alternate repeat with events; eventless alternate stays legal', () => {

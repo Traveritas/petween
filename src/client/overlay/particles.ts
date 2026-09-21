@@ -10,7 +10,7 @@
  */
 
 /** Particle silhouettes, built with border-radius / clip-path only. */
-export type ParticleShape = 'strip' | 'dot' | 'star' | 'cross'
+export type ParticleShape = 'strip' | 'dot' | 'star' | 'cross' | 'heart' | 'ring' | 'petal'
 
 interface ParticleEffectSpec {
   /** Particles per burst (kept <= MAX_PARTICLES_PER_EMIT). */
@@ -23,7 +23,10 @@ interface ParticleEffectSpec {
   distance: readonly [number, number]
   /** ms lifetime range. */
   duration: readonly [number, number]
-  /** Extra downward drift in px (gravity); 0 = straight radial flight. */
+  /**
+   * Extra downward drift in px (gravity); 0 = straight radial flight.
+   * Negative values are legal — a buoyant effect drifts upward instead.
+   */
   gravity: number
   /** deg spin range, applied in a random direction. */
   spin: readonly [number, number]
@@ -36,6 +39,9 @@ export const MAX_LIVE_PARTICLES = 96
 const CONFETTI_COLORS = ['#ff5a5f', '#ffb400', '#3ec1d3', '#7c5cff', '#ff7ac8', '#59d98c']
 const STAR_COLORS = ['#ffd23f', '#ffb400', '#fff3b0', '#ff8c42']
 const SPARKLE_COLORS = ['#ffffff', '#fff3b0', '#cde7ff', '#ffe9a8']
+const HEART_COLORS = ['#ff5a8a', '#ff8fab', '#ff2e63', '#ffc2d1']
+const PETAL_COLORS = ['#ffb7c5', '#ffd1dc', '#ff8fab', '#ffe5ec']
+const FIREWORK_COLORS = ['#ff5a5f', '#ffd23f', '#3ec1d3', '#7c5cff', '#ff7ac8']
 
 /** The effect table; ids mirror ParticleEffectId in motion/animation-definition. */
 export const PARTICLE_EFFECTS: Record<string, ParticleEffectSpec> = {
@@ -72,11 +78,46 @@ export const PARTICLE_EFFECTS: Record<string, ParticleEffectSpec> = {
     gravity: 0,
     spin: [0, 90],
   },
+  // Pastel hearts buoyantly rising with a gentle tumble (negative gravity).
+  'heart-burst': {
+    count: 12,
+    shapes: ['heart', 'heart', 'dot'],
+    colors: HEART_COLORS,
+    size: [6, 10],
+    distance: [34, 72],
+    duration: [640, 940],
+    gravity: -18,
+    spin: [60, 180],
+  },
+  // Sakura petals: slow wide drift, strong fall, lazy spin.
+  'petal-fall': {
+    count: 14,
+    shapes: ['petal', 'petal', 'strip'],
+    colors: PETAL_COLORS,
+    size: [6, 10],
+    distance: [26, 58],
+    duration: [760, 1120],
+    gravity: 32,
+    spin: [150, 340],
+  },
+  // A loud radial burst: mixed silhouettes, long reach, hard fall.
+  firework: {
+    count: 24,
+    shapes: ['dot', 'strip', 'ring'],
+    colors: FIREWORK_COLORS,
+    size: [4, 7],
+    distance: [58, 108],
+    duration: [680, 1000],
+    gravity: 42,
+    spin: [100, 300],
+  },
 }
 
 const STAR_CLIP =
   'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)'
 const CROSS_CLIP = 'polygon(50% 0%, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0% 50%, 38% 38%)'
+const HEART_CLIP =
+  'polygon(50% 88%, 38% 79%, 24% 66%, 13% 50%, 10% 34%, 16% 20%, 29% 14%, 41% 18%, 50% 28%, 59% 18%, 71% 14%, 84% 20%, 90% 34%, 87% 50%, 76% 66%, 62% 79%)'
 
 function randomIn([min, max]: readonly [number, number]): number {
   return min + Math.random() * (max - min)
@@ -190,10 +231,20 @@ export class ParticleEmitter {
     style.left = '50%'
     style.top = '50%'
     style.pointerEvents = 'none'
-    style.background = pick(spec.colors)
 
+    const color = pick(spec.colors)
     const size = randomIn(spec.size)
     const shape = pick(spec.shapes)
+    if (shape === 'ring') {
+      // Hollow circle: a border instead of a fill (the only non-background shape).
+      style.width = `${Math.round(size)}px`
+      style.height = `${Math.round(size)}px`
+      style.background = 'transparent'
+      style.border = `${Math.max(2, Math.round(size * 0.3))}px solid ${color}`
+      style.borderRadius = '50%'
+      return
+    }
+    style.background = color
     if (shape === 'strip') {
       style.width = `${Math.round(size)}px`
       style.height = `${Math.round(size * 1.9)}px`
@@ -202,10 +253,14 @@ export class ParticleEmitter {
       style.width = `${Math.round(size)}px`
       style.height = `${Math.round(size)}px`
       style.borderRadius = '50%'
+    } else if (shape === 'petal') {
+      style.width = `${Math.round(size * 0.75)}px`
+      style.height = `${Math.round(size * 1.7)}px`
+      style.borderRadius = '50%'
     } else {
       style.width = `${Math.round(size)}px`
       style.height = `${Math.round(size)}px`
-      style.clipPath = shape === 'star' ? STAR_CLIP : CROSS_CLIP
+      style.clipPath = shape === 'star' ? STAR_CLIP : shape === 'heart' ? HEART_CLIP : CROSS_CLIP
     }
   }
 }

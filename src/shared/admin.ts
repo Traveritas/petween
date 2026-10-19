@@ -44,6 +44,8 @@ export interface PackInfo {
   license?: string;
   /** URL of the idle picture for a thumbnail. */
   preview?: string;
+  /** Spritesheet grid of the preview picture (show only its first frame). */
+  previewGrid?: { columns: number; rows: number };
 }
 
 export interface ChannelEntry {
@@ -87,6 +89,7 @@ export interface AdminApi {
   'pets.setScale'(p: { id: string; scale: number }): void;
   'packs.list'(): PackInfo[];
   'packs.openFolder'(): void;
+  'plugins.openFolder'(): void;
   'kernel.get'(): KernelSettings & { brains: string[]; bindings: string[]; version: string; dataDir: string };
   'kernel.set'(p: Partial<KernelSettings>): void;
   'inspector.snapshot'(): InspectorPet[];

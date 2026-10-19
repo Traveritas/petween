@@ -131,7 +131,8 @@ export default definePlugin({
         tick = follow = null;
         return;
       }
-      const parts = [`<span class="dot ${s.state}"></span><span>${LABEL[s.state]} ${fmtDuration(thinkingOf(s, Date.now()))}</span>`];
+      // The dot says what the agent is doing right now; the number is always accumulated thinking time.
+      const parts = [`<span class="dot ${s.state}" title="${LABEL[s.state]}"></span><span>思考 ${fmtDuration(thinkingOf(s, Date.now()))}</span>`];
       if (s.linesAdded || s.linesRemoved) parts.push(`<span class="sep">·</span><span class="add">+${s.linesAdded}</span><span class="del">−${s.linesRemoved}</span>`);
       pill.innerHTML = parts.join('');
       place();

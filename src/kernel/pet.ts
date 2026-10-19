@@ -77,6 +77,8 @@ export class Pet {
   readonly basePositionEv = new Emitter<Point>();
 
   velocity: Point = { x: 0, y: 0 };
+  /** Temporary pets (plugin-spawned) are not saved to instances.json. */
+  transient = false;
   z = 0;
   outline = false;
   private lastPos: Point;
@@ -107,7 +109,7 @@ export class Pet {
       }
     };
     this.appearance = new Appearance({
-      play: (ref, layer) => this.startMotion(ref, layer, 'pack'),
+      play: (ref, layer) => this.startMotion(ref, layer, `pack:${typeof ref === 'string' ? ref : ref.type}`),
       plan: (ref) => this.plan(ref),
     });
     this.appearance.clipChange.on((id) => this.clipEv.emit(id));

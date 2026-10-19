@@ -387,6 +387,12 @@ export interface PluginContext {
 
   pets: {
     list(): PetHandle[];
+    /**
+     * A new pet. `persist: false` (default) = temporary: not saved, and removed when this plugin
+     * deactivates. `position` defaults to the middle of the primary screen.
+     */
+    add(opts: { pack: string; position?: Point; scale?: number; persist?: boolean }): Promise<PetHandle>;
+    remove(id: string): void;
     on(event: 'added' | 'removed', fn: (pet: PetHandle) => void): Disposable;
   };
 
@@ -438,6 +444,8 @@ export interface SettingSpec {
   max?: number;
   step?: number;
   unit?: string;
+  /** Display = stored ÷ scale (e.g. store ms, show seconds with scale 1000). min/max/step are in stored units. */
+  scale?: number;
   options?: { value: string; label: string }[];
 }
 

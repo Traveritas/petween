@@ -106,6 +106,8 @@ export class Kernel {
       registries: this.registries,
       agent: this.agent,
       pets: () => this.pets,
+      spawnPet: (pack, at, scale, persist) => this.spawnPet(pack, at, undefined, scale, persist),
+      removePet: (id) => this.removePet(id),
       screens: () => this.screens(),
       screensChanged: this.screensChanged,
       petAdded: this.petAdded,
@@ -147,12 +149,11 @@ export class Kernel {
       settings: this.settings,
       pets: () => this.pets,
       store: (id, kind) => this.store(id, kind),
-      addPet: (pack, at, id, scale) => this.spawnPet(pack, at, id, scale),
+      addPet: async (pack, at, id, scale) => void (await this.spawnPet(pack, at, id, scale)),
       removePet: (id) => this.removePet(id),
       saveInstances: () => this.saveInstances(),
       version: APP_VERSION,
     });
-    this.addKernelTray();
     await this.restoreInstances();
     await this.listen();
     this.wake();
@@ -293,7 +294,7 @@ export class Kernel {
     this.saveInstances();
   }
 
-  private async addPet(inst: Instance) {
+  private async addPet(inst: Instance, transient = false): Promise<Pet> {
     let loaded: LoadedPack;
     try {
       loaded = await this.loadPack(inst.pack);
@@ -309,23 +310,26 @@ export class Kernel {
       wake: () => this.wake(),
     });
     pet.z = ++this.zSeq;
+    pet.transient = transient;
     pet.basePositionEv.on(() => this.saveInstances());
     pet.stateKeyEv.on((key) => this.log('info', `pet ${pet.id} → ${key}`));
     this.pets.push(pet);
     this.agent.attach(pet);
     this.petAdded.emit(pet);
     if (!this.onAnyStage(pet.pos)) this.bringBack(pet);
+    return pet;
   }
 
   /** New pet at `at` (default: middle of the primary screen). */
-  private async spawnPet(pack: string, at?: Point, id?: string, scale = 1) {
+  private async spawnPet(pack: string, at?: Point, id?: string, scale = 1, persist = true): Promise<Pet> {
     const r = Coords.globalRect(this.layout[0], this.coords.primaryScale);
     let n = this.pets.length + 1;
     while (!id && this.pets.some((p) => p.id === `pet-${n}`)) n++;
     const p = at ?? { x: r.x + r.width / 2 + (this.pets.length % 5) * 40, y: r.y + r.height * 0.8 };
-    await this.addPet({ id: id ?? `pet-${n}`, pack, x: p.x, y: p.y, scale });
+    const pet = await this.addPet({ id: id ?? `pet-${n}`, pack, x: p.x, y: p.y, scale }, !persist);
     this.saveInstances();
     this.wake();
+    return pet;
   }
 
   private removePet(id: string) {
@@ -346,7 +350,7 @@ export class Kernel {
   private saveInstances() {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
-      const pets: Instance[] = this.pets.map((p) => ({ id: p.id, pack: p.loaded.pack.id, x: Math.round(p.position.baseValue.x), y: Math.round(p.position.baseValue.y), scale: p.scale }));
+      const pets: Instance[] = this.pets.filter((p) => !p.transient).map((p) => ({ id: p.id, pack: p.loaded.pack.id, x: Math.round(p.position.baseValue.x), y: Math.round(p.position.baseValue.y), scale: p.scale }));
       void this.host.writeText(this.paths.instances, JSON.stringify({ pets }, null, 2));
     }, 800);
   }
@@ -411,19 +415,6 @@ export class Kernel {
       this.traySync = false;
       const items = [...this.trayItems].map(([id, { opts }]) => ({ id, label: opts.label, checked: opts.checked, enabled: opts.enabled }));
       void this.host.traySetItems(items);
-    });
-  }
-
-  private addKernelTray() {
-    const dev = this.addTrayItem('kernel', {
-      label: '插件开发模式（热重载）',
-      checked: this.settings.get('devMode', false),
-      onClick: () => {
-        const on = !this.settings.get('devMode', false);
-        this.settings.set('devMode', on);
-        dev.update({ checked: on });
-        this.log('info', `dev mode ${on ? 'on' : 'off'}`);
-      },
     });
   }
 

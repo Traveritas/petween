@@ -26,6 +26,8 @@ export interface KernelServices {
   registries: Registries;
   agent: AgentHub;
   pets(): Pet[];
+  spawnPet(pack: string, at: Point | undefined, scale: number, persist: boolean): Promise<Pet>;
+  removePet(id: string): void;
   screens(): Rect[];
   screensChanged: Emitter<Rect[]>;
   petAdded: Emitter<Pet>;
@@ -75,6 +77,12 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
 
     pets: {
       list: () => k.pets().map((p) => k.viewFor(id, p)),
+      async add(opts) {
+        const pet = await k.spawnPet(opts.pack, opts.position, opts.scale ?? 1, opts.persist ?? false);
+        if (!(opts.persist ?? false)) t(toDisposable(() => k.removePet(pet.id)));
+        return k.viewFor(id, pet);
+      },
+      remove: (petId) => k.removePet(petId),
       on(event, fn) {
         const ev = event === 'added' ? k.petAdded : k.petRemoved;
         return t(ev.on(safe((p: Pet) => fn(k.viewFor(id, p)), `pets.on(${event})`)));

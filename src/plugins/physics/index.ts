@@ -30,7 +30,7 @@ export const manifest: PluginManifest = {
       { key: 'minThrowSpeed', label: '起飞所需手速', type: 'number', default: 350, min: 0, max: 3000, step: 50, unit: 'px/s', description: '松手比这慢就只是放下' },
       { key: 'groundFriction', label: '地面摩擦', type: 'number', default: 2, min: 0, max: 20, step: 0.5 },
       { key: 'bounceMotion', label: '撞墙时挤压变形', type: 'boolean', default: true },
-      { key: 'hitStateMs', label: '撞墙表情持续', type: 'number', default: 0, min: 0, max: 5000, step: 100, unit: 'ms', description: '0 = 不切换；宠物包需配置 physics.hit' },
+      { key: 'hitStateMs', label: '撞墙表情持续', type: 'number', default: 0, min: 0, max: 5000, step: 100, scale: 1000, unit: '秒', description: '0 = 不切换；宠物包需配置 physics.hit' },
       { key: 'slideState', label: '滑行时切换表情', type: 'boolean', default: false, description: '宠物包需配置 physics.slide' },
     ],
     stateKeys: [

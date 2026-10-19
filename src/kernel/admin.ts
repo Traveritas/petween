@@ -202,6 +202,10 @@ export class Admin {
       await this.d.host.exec('explorer', [this.d.paths.pets.replace(/\//g, '\\')]);
     },
 
+    'plugins.openFolder': async () => {
+      await this.d.host.exec('explorer', [this.d.paths.plugins.replace(/\//g, '\\')]);
+    },
+
     'kernel.get': () => ({
       devMode: this.d.settings.get('devMode', false),
       brain: this.d.settings.get('brain', 'default'),
@@ -240,9 +244,12 @@ export class Admin {
       }),
   };
 
-  private packInfo(pack: { id: string; name?: string; attribution?: { creators?: string[]; license?: string }; clips?: Record<string, { source: string }>; states?: Record<string, { clips: string[] }> }, builtin: boolean, base: string): PackInfo {
+  private packInfo(pack: { id: string; name?: string; attribution?: { creators?: string[]; license?: string }; clips?: Record<string, { source: string; type?: string; frames?: { count: number; columns?: number } }>; states?: Record<string, { clips: string[] }> }, builtin: boolean, base: string): PackInfo {
     const idleClip = pack.states?.idle?.clips?.[0] ?? Object.keys(pack.clips ?? {})[0];
-    const src = idleClip ? pack.clips?.[idleClip]?.source : undefined;
+    const clip = idleClip ? pack.clips?.[idleClip] : undefined;
+    const src = clip?.source;
+    const count = clip?.type === 'frames' ? Math.max(1, clip.frames?.count ?? 1) : 1;
+    const columns = clip?.frames?.columns ?? count;
     return {
       id: pack.id,
       name: pack.name ?? pack.id,
@@ -250,6 +257,7 @@ export class Admin {
       creators: pack.attribution?.creators ?? [],
       license: pack.attribution?.license,
       preview: src ? new URL(src, base).href : undefined,
+      previewGrid: count > 1 ? { columns, rows: Math.ceil(count / columns) } : undefined,
     };
   }
 }

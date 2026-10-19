@@ -77,6 +77,27 @@ fn log_line(state: HostState<'_>, window: tauri::WebviewWindow, level: String, l
     state.log.write(&format!("{} {level}: {line}", window.label()));
 }
 
+/// The settings window (docs/01 §2): created on demand, focused if already open.
+pub fn open_settings_window(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.unminimize();
+        w.show()?;
+        return w.set_focus();
+    }
+    tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("settings.html".into()))
+        .title("Petween 设置")
+        .inner_size(940.0, 660.0)
+        .min_inner_size(760.0, 520.0)
+        .center()
+        .build()?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_settings(app: AppHandle) -> Result<(), String> {
+    open_settings_window(&app).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -84,8 +105,13 @@ fn quit(app: AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app.emit_to(stages::KERNEL_STAGE, "second-instance", ());
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // `petween --settings` while running opens the settings; a plain second launch flashes the pets.
+            if args.iter().any(|a| a == "--settings") {
+                let _ = open_settings_window(app);
+            } else {
+                let _ = app.emit_to(stages::KERNEL_STAGE, "second-instance", ());
+            }
         }))
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_opener::init())
@@ -110,6 +136,7 @@ pub fn run() {
             paths,
             log_line,
             quit,
+            open_settings,
             stages::get_layout,
             stages::set_hit,
             hook::hook_port,
@@ -144,6 +171,9 @@ pub fn run() {
                 None => host.log.write("rescue hotkey: all candidates taken"),
             }
             tray::set_rescue_label(&handle, used.copied());
+            if std::env::args().any(|a| a == "--settings") {
+                open_settings_window(&handle)?;
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

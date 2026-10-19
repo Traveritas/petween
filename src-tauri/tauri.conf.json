@@ -12,12 +12,21 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' http://petplugin.localhost petplugin:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: http://petpack.localhost petpack: http://petplugin.localhost petplugin:; media-src 'self' blob: http://petpack.localhost petpack:; connect-src 'self' ipc: http://ipc.localhost http://petpack.localhost petpack: http://petplugin.localhost petplugin:"
+      "csp": "default-src 'self'; script-src 'self' http://petplugin.localhost petplugin:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: http://petpack.localhost petpack: http://petplugin.localhost petplugin:; media-src 'self' blob: http://petpack.localhost petpack:; connect-src 'self' ipc: http://ipc.localhost http://petpack.localhost petpack: http://petplugin.localhost petplugin:",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ]
   }
 }

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-M0（骨架）已完成，下一步 M1，见 [docs/09](docs/09-roadmap.md)。
+M0、M1 已完成（M1 的真实 agent 接入待作者验收），下一步 M2，见 [docs/09](docs/09-roadmap.md)。
 
 ## 先读文档
 

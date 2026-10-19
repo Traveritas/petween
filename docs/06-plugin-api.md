@@ -159,7 +159,8 @@ interface PetHandle {
 | `zcode` | L4（connector） | zcode hook 接入 |
 | `brain-default` | L4（brain） | 稳定化规则 + 状态键派生（05 §4） |
 | `bubble` | L3 | 气泡渲染（`bubble` 通道的消费者） |
-| `physics` | L2 | 拖拽、抛掷、落地回弹 |
+| `physics` | L2 | 拖拽、抛掷、重力、撞墙回弹、贴地滑行（撞墙/滑行表情走 `physics.hit` / `physics.slide` 状态键） |
+| `per-session` | L4（binding） | 每个会话生成一只临时宠物，会话结束后离开 |
 | `roamer` | L2 + L3 | 自主漫游、小动作、便签 |
 | `stats-hud` | L1 + L3 | 统计面板 |
 
@@ -189,6 +190,11 @@ export default definePlugin({
 - **托盘**：`tray.addItem` 返回的句柄带 `update({ label, checked, enabled })`。
 - **宿主能力**：`host.fs`（readText / writeText〔原子写〕/ list / exists / mkdir / remove）、`host.shell.exec`、`host.openExternal`、`host.hookPort()`、`host.hookCommand(connectorId, query)`（connector 写 hook 命令时用，见 05 §1.1）、`host.paths`（home / appData）。
 - **ConnectorDef**：除 `parse` 外可选 `name`、`session`（watchdog 参数，05 §3.1）、`install` / `uninstall` / `status`——设置页用它们统一显示和操作任何 connector（包括第三方的）。
+- **宠物**：`pets.add({ pack, position?, scale?, persist? })` / `pets.remove(id)`；`persist: false`（缺省）的宠物不存盘，插件停用时自动移除。`pet.opaqueBounds` = 当前帧可见像素的包围盒（碰撞、定位气泡用）。
+- **桌面**：`desktop.screens()` 返回各显示器工作区（全局坐标，第一个是主屏），`desktop.on('change')`。
+- **文件**：`host.fs.readTail(path, maxBytes)` 读大文件末尾（对话记录）。
+- **设置页**：manifest 的 `contributes.settings` 声明字段（boolean / number / string / select / list，可带 min/max/step/unit/description；`scale` 让存毫秒、显示秒），设置窗口自动生成表单，值存在 `ctx.settings` 对应的 key 下。自定义设置页（`settings.js`）以后再加。
+- **样式**：插件可以往舞台层里插 `<style>`（宿主关闭了 Tauri 对 `style-src` 的 CSP 改写，否则运行时注入的样式会被浏览器静默拦截）。
 - **clip 通道直接给片段**时，内联 `ClipDef.source` 用绝对 URL（插件自带资源走 `http://petplugin.localhost/<插件目录>/…`）。
 
-**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件的 `settings.js` 设置页入口、插件声明的状态键在设置页展示。
+**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件的 `settings.js` 自定义设置页、插件声明的状态键在设置页展示。

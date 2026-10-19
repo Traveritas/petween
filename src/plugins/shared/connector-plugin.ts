@@ -114,23 +114,5 @@ export function connectorActivate(spec: ConnectorSpec) {
       ctx.log.info('installed hooks are stale; refreshing');
       await install().catch((e) => ctx.log.error(`refresh failed: ${e}`));
     }
-
-    // Until the settings window exists, a tray toggle is the install UI.
-    const label = () => `接入 ${spec.name}`;
-    const item = ctx.tray.addItem({
-      label: label(),
-      checked: first.installed,
-      async onClick() {
-        const { installed } = await inspect();
-        try {
-          if (installed) await uninstall();
-          else await install();
-          item.update({ label: label(), checked: !installed });
-        } catch (e) {
-          ctx.log.error(`${installed ? 'uninstall' : 'install'} failed: ${e}`);
-          item.update({ label: `接入 ${spec.name}（失败，见日志）`, checked: installed });
-        }
-      },
-    });
   };
 }

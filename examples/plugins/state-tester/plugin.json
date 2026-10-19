@@ -1,0 +1,8 @@
+{
+  "id": "state-tester",
+  "name": "状态测试器",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "main": "main.js",
+  "contributes": { "channels": ["state"] }
+}

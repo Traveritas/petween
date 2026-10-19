@@ -22,7 +22,6 @@
 | `petween-desktop/src/renderer/companions/bubbles/*` | `bubble` 插件 | |
 | `petween-desktop/src/renderer/companions/stats-hud/*` | `stats-hud` 插件 | |
 | `petween-physics` | `physics` 插件 | 改为 `position` 租约 + `spring` 动作 |
-| 编辑器 UI 组件（`TimelineEditor`、`BezierCurveEditor`、`KeyframeInspector` 等） | 设置 webview | 数据模型换成 03 的 `keyframes` 参数 |
 
 ## 不搬
 
@@ -34,13 +33,16 @@
 | 本地 HTTP 伺服页面、SSE 状态通道、`RoutesHost` | Tauri 下运行时直接持有状态，不需要 HTTP 同源绕路 |
 | `ConfigHub` 3 秒轮询 | 设置与运行时之间用 Tauri 事件 |
 | Electron 主进程（窗口、托盘、穿透） | 用 Rust 重写；思路参考 `pointer-through.ts` |
+| 动画编辑器（`TimelineEditor`、`BezierCurveEditor`、`KeyframeInspector` 等） | 作者决定（2026-10-19）：M3 **重新设计**，不搬 |
+| 设置页等所有前端 UI 的外观 | 作者决定（2026-10-19）：**重新设计**，不照搬 v0；只搬背后的逻辑 |
 
 ## v0 数据导入工具
 
-一次性导入 v0 的配置与宠物预设：
+已实现为一次性脚本 `tools/convert-v0.mjs`（作者决定不做通用导入功能）。默认读 `%APPDATA%/petween-desktop/petween-home`，写到 `%APPDATA%/com.petween.app/pets`；`--main` 同时把主宠物换成 v0 当前激活的那只。规则：
 
 - 6 个 pose 槽 → 6 个 `still` 片段（`idle`、`thinking`……）。
 - 状态映射：`idle/waiting/success/error` 同名；`thinking` → `active.thinking`；`working` → `active`。
-- `TransitionConfig` 的预设 / `animationId` → 具名动作；ambient 的 bounce / sway / breathe → `loop` 里的 `sine` / `noise` 动作。
+- `TransitionConfig` 的预设 → 具名 `keyframes` 动作（直接读 v0 源码里的预设表，`pose-swap` 时刻变成 `swap` 标记）；ambient 的 sway / breathe → `sine`，bounce（随机间隔跳动）近似为 `noise`，在报告里注明。
+- 图片统一缩到长边 ≤ 512px 的 WebP；v0 按 160px 方框显示，换算进片段的 `scale`。
 - 用户自建动画（`user:*`）→ `keyframes` 动作；带 `pose` 的 pose-swap 事件丢弃并在导入报告里列出。
 - roamer 的 per-action 图片 → `roamer.*` 状态的片段。

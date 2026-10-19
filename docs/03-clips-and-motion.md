@@ -20,6 +20,8 @@ interface Clip {
   type: 'still' | 'frames' | 'video' | string   // string：插件注册的片段类型
   source: string            // 宠物包内的相对路径
   fps?: number              // frames / video
+  /** frames 的精灵图布局；单帧尺寸 = 图宽 / columns。columns 缺省 = count（单行） */
+  frames?: { count: number; columns?: number }
   /** 分段（帧号区间）。没有 enter/exit 就整段当 loop。 */
   segments?: { enter?: [number, number]; loop?: [number, number]; exit?: [number, number] }
   /** 标记点：帧号 → 名字，例：{ 12: 'land' } */
@@ -73,6 +75,8 @@ interface MotionSource {
   readonly duration: number | null
   /** 时间点 → 标记名（一次性动作可用，例：{ 180: 'swap' }） */
   readonly markers?: Record<number, string>
+  /** 不定时长的一次性动作（如冲量弹簧）用它报告结束 */
+  isDone?(): boolean
   dispose?(): void
 }
 
@@ -150,6 +154,6 @@ B 的循环动作（base 层）                └─────────→
 
 ## 6. 性能约束
 
-- 动作在渲染循环里求值，单个 `evaluate` 应在 0.1ms 内完成。内核统计每个插件动作的耗时，连续超预算的动作会被停用并提示。
+- 动作在渲染循环里求值，单个 `evaluate` 应在 0.1ms 内完成。内核统计每个动作的耗时，**连续 30 帧超过 1ms** 的动作会被停用并记日志（浏览器计时精度约 0.1ms，所以硬阈值放宽）；抛异常的动作立即停用。
 - 舞台不可见（全屏游戏、锁屏）时暂停渲染循环，所有动作的时间冻结。
-- `reducedMotion` 为真时，内置动作类型自动降低强度或静止；插件动作应自行遵守。
+- `reducedMotion` 为真时，内置动作类型自动降低强度或静止（sine / noise 静止，keyframes / spring 降到 30%）；插件动作应自行遵守。

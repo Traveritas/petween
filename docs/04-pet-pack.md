@@ -27,7 +27,7 @@ my-cat/                     （导出时打包为 my-cat.petpack = zip）
   "clips": {
     "sit":      { "type": "still",  "source": "clips/sit.webp", "anchor": { "x": 0.5, "y": 0.96 } },
     "type":     { "type": "frames", "source": "clips/type.webp", "fps": 12,
-                  "segments": { "loop": [0, 23] } },
+                  "frames": { "count": 24, "columns": 6 }, "segments": { "loop": [0, 23] } },
     "cheer":    { "type": "frames", "source": "clips/cheer.webp", "fps": 15,
                   "segments": { "enter": [0, 9], "loop": [10, 29] }, "markers": { "9": "peak" } }
   },

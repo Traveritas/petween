@@ -16,6 +16,25 @@
 | 05 | [Agent 信号](docs/05-agent-signals.md) | 各 agent 的 hook 如何变成统一信号、如何绑定到宠物 |
 | 06 | [插件 API](docs/06-plugin-api.md) | 写插件的人能做什么、L0–L4 分级 |
 | 07 | [从 v0 迁移](docs/07-migration.md) | 旧仓库哪些搬、哪些扔 |
-| 08 | [技术原型计划](docs/08-spike.md) | 开工前要先验证的风险 |
+| 08 | [技术原型计划](docs/08-spike.md) | 开工前要先验证的风险（已验证，含实测） |
+| 09 | [路线图](docs/09-roadmap.md) | 里程碑、已确认的取舍、怎么看当前效果 |
 
 给 AI 助手的工作约定见 [AGENTS.md](AGENTS.md)。
+
+## 开发
+
+前置：Windows 10+、Node.js ≥ 20、Rust stable（MSVC）。
+
+```bash
+npm install
+npm run tauri dev     # 开发运行
+npm test              # 单元测试（vitest）
+npm run typecheck
+npm run tauri build   # NSIS 安装包 → src-tauri/target/release/bundle/nsis/
+```
+
+目录：`src-tauri/` 宿主（Rust）· `src/kernel/` 内核 · `src/render/` 渲染器 · `src/plugins/` 内置插件 · `src/api/types.ts` 插件 API 类型 · `public/packs/default/` 内置宠物包 · `examples/plugins/` 示例插件 · `tools/` 一次性脚本 · `spike/` 已冻结的技术原型。
+
+## 许可
+
+AGPL-3.0-or-later。

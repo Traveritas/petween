@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Petween",
+  "version": "0.1.0",
+  "identifier": "com.petween.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' http://petplugin.localhost petplugin:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: http://petpack.localhost petpack: http://petplugin.localhost petplugin:; media-src 'self' blob: http://petpack.localhost petpack:; connect-src 'self' ipc: http://ipc.localhost http://petpack.localhost petpack: http://petplugin.localhost petplugin:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+  }
+}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>petween stage</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      /* Pets sit on the z = 0 plane; plugin layers stack above (z > 0) or below (z < 0). */
+      #pets {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+      }
+      #layers {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .pet {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .clip {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+        background-repeat: no-repeat;
+        will-change: transform;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pets"></div>
+    <div id="layers"></div>
+    <script type="module" src="/src/stage/main.ts"></script>
+  </body>
+</html>

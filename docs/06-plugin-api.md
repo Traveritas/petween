@@ -153,6 +153,7 @@ interface PetHandle {
 
 | id | 级别 | 做什么 |
 |---|---|---|
+| `core` | L4 | 内置注册表条目：四种动作类型、四种过渡类型、`single` 绑定规则 |
 | `claude-code` | L4（connector） | Claude Code hook 接入 |
 | `codex` | L4（connector） | Codex hook 接入 |
 | `brain-default` | L4（brain） | 稳定化规则 + 状态键派生（05 §4） |
@@ -176,3 +177,16 @@ export default definePlugin({
   },
 })
 ```
+
+## 8. 实现状态（apiVersion 1，M0）
+
+**权威类型定义在 `src/api/types.ts`**，本文与它冲突时先改文档再改代码。
+
+- **入口形状**：第三方插件的 `main.js` 是 ESM，`export default { activate(ctx) { … }, deactivate?() { … } }`（也接受直接导出 `activate`）。`definePlugin` 只是给 TS 用的恒等函数。
+- **命名空间**：`register.motionType` / `register.transitionType` 的 id 必须是 `<插件 id>:<名字>`；不带前缀的名字（`keyframes`、`crossfade`…）保留给内置的 `core` 插件。这是命名规则，不是能力差异。
+- **热重载**：只在托盘「插件开发模式」打开时生效。
+- **托盘**：`tray.addItem` 返回的句柄带 `update({ label, checked, enabled })`。
+- **宿主能力**：`host.fs`（readText / writeText〔原子写〕/ list / exists / mkdir / remove）、`host.shell.exec`、`host.openExternal`、`host.hookPort()`（connector 写 hook 命令时用）、`host.paths`（home / appData）。
+- **clip 通道直接给片段**时，内联 `ClipDef.source` 用绝对 URL（插件自带资源走 `http://petplugin.localhost/<插件目录>/…`）。
+
+**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件的 `settings.js` 设置页入口、插件声明的状态键在设置页展示。

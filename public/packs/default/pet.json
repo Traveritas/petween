@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "id": "default",
+  "name": "团子",
+  "attribution": { "creators": ["Petween"], "license": "CC0-1.0" },
+  "scale": 0.42,
+
+  "clips": {
+    "idle": { "type": "frames", "source": "clips/idle.webp", "fps": 8, "frames": { "count": 12, "columns": 12 }, "anchor": { "x": 0.5, "y": 0.97 } },
+    "focus": { "type": "still", "source": "clips/focus.webp", "anchor": { "x": 0.5, "y": 0.97 } },
+    "think": { "type": "still", "source": "clips/think.webp", "anchor": { "x": 0.5, "y": 0.97 } },
+    "wait": { "type": "still", "source": "clips/wait.webp", "anchor": { "x": 0.5, "y": 0.97 } },
+    "happy": { "type": "still", "source": "clips/happy.webp", "anchor": { "x": 0.5, "y": 0.97 } },
+    "oops": { "type": "still", "source": "clips/oops.webp", "anchor": { "x": 0.5, "y": 0.97 } }
+  },
+
+  "motions": {
+    "breathe": { "type": "sine", "property": "scaleY", "amplitude": 0.015, "periodMs": 3200 },
+    "sway": { "type": "sine", "property": "rotate", "amplitude": 1.2, "periodMs": 4400 },
+    "busy": { "type": "sine", "property": "y", "amplitude": 2, "periodMs": 700 },
+    "ponder": { "type": "noise", "property": "rotate", "amplitude": 2.5, "frequency": 0.6 },
+    "pop": {
+      "type": "keyframes",
+      "tracks": {
+        "scaleY": [{ "t": 0, "v": 1 }, { "t": 90, "v": 0.88, "ease": "out" }, { "t": 220, "v": 1.06, "ease": "inOut" }, { "t": 340, "v": 1, "ease": "inOut" }],
+        "scaleX": [{ "t": 0, "v": 1 }, { "t": 90, "v": 1.08, "ease": "out" }, { "t": 220, "v": 0.97, "ease": "inOut" }, { "t": 340, "v": 1, "ease": "inOut" }]
+      },
+      "markers": { "90": "swap" }
+    },
+    "hop": {
+      "type": "keyframes",
+      "tracks": {
+        "y": [{ "t": 0, "v": 0 }, { "t": 160, "v": -22, "ease": "out" }, { "t": 320, "v": 0, "ease": "in" }, { "t": 400, "v": -5, "ease": "out" }, { "t": 480, "v": 0, "ease": "in" }],
+        "scaleY": [{ "t": 0, "v": 1 }, { "t": 60, "v": 0.9 }, { "t": 160, "v": 1.05 }, { "t": 320, "v": 0.93 }, { "t": 480, "v": 1 }]
+      },
+      "markers": { "60": "swap" }
+    },
+    "shake": {
+      "type": "keyframes",
+      "tracks": {
+        "x": [{ "t": 0, "v": 0 }, { "t": 50, "v": -6 }, { "t": 100, "v": 6 }, { "t": 150, "v": -5 }, { "t": 200, "v": 4 }, { "t": 260, "v": 0 }]
+      }
+    }
+  },
+
+  "states": {
+    "idle": { "clips": ["idle"], "loop": ["breathe", "sway"], "enter": "pop", "transition": "crossfade" },
+    "active": { "clips": ["focus"], "loop": ["busy"], "enter": "pop" },
+    "active.thinking": { "clips": ["think"], "loop": ["ponder"], "enter": "pop" },
+    "waiting": { "clips": ["wait"], "loop": ["breathe"], "enter": "hop" },
+    "success": { "clips": ["happy"], "loop": ["breathe"], "enter": "hop" },
+    "error": { "clips": ["oops"], "enter": "shake" }
+  }
+}

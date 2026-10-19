@@ -23,7 +23,7 @@ import type {
   Rect,
   TransitionRef,
 } from '../api/types';
-import type { AssetCache } from '../render/assets';
+import { opaqueBox, type AssetCache } from '../render/assets';
 import type { RenderPet } from '../render/dom2d';
 import { Appearance, type Target, type TransitionPlan } from './appearance';
 import { BubbleQueue, ExclusiveStack } from './channels';
@@ -86,6 +86,8 @@ export class Pet {
   private chosenClip = '';
   private inlineClips = new WeakMap<object, string>();
   private inlineSeq = 0;
+  /** Frame of the top layer at the last tick. */
+  private shownFrame = 0;
 
   constructor(
     readonly id: string,
@@ -252,6 +254,7 @@ export class Pet {
     const t = this.target(now);
     if (t) this.appearance.set(t, now);
     const layers = this.appearance.tick(now);
+    this.shownFrame = layers.at(-1)?.frame ?? 0;
 
     const p = this.pos;
     if (dt > 0) {
@@ -291,18 +294,33 @@ export class Pet {
     };
   }
 
-  /** Picture box on the desktop (before motion transforms). */
-  bounds(): Rect {
+  /** Asset, scale and frame of the picture on top right now. */
+  private shownPicture() {
     const t = this.appearance.current;
-    const p = this.pos;
-    if (!t) return { x: p.x, y: p.y, width: 0, height: 0 };
+    if (!t) return null;
     const count = t.clip.type === 'frames' ? Math.max(1, t.clip.frames?.count ?? 1) : 1;
     const a = this.env.assets.get(new URL(t.clip.source, this.loaded.baseUrl).href, t.clip.frames?.columns ?? count, count);
-    if (!a) return { x: p.x, y: p.y, width: 0, height: 0 };
+    if (!a) return null;
     const s = (t.clip.scale ?? 1) * (this.loaded.pack.scale ?? 1) * this.scale;
-    const w = a.frameW * s, h = a.frameH * s;
-    const anchor = t.clip.anchor ?? DEFAULT_ANCHOR;
-    return { x: p.x - anchor.x * w, y: p.y - anchor.y * h, width: w, height: h };
+    return { a, s, anchor: t.clip.anchor ?? DEFAULT_ANCHOR, frame: Math.min(this.shownFrame, a.columns * a.rows - 1) };
+  }
+
+  /** Picture box on the desktop (before motion transforms). */
+  bounds(): Rect {
+    const p = this.pos;
+    const pic = this.shownPicture();
+    if (!pic) return { x: p.x, y: p.y, width: 0, height: 0 };
+    const w = pic.a.frameW * pic.s, h = pic.a.frameH * pic.s;
+    return { x: p.x - pic.anchor.x * w, y: p.y - pic.anchor.y * h, width: w, height: h };
+  }
+
+  /** Visible-pixel box of the current frame on the desktop (physics collisions). */
+  opaqueBounds(): Rect {
+    const b = this.bounds();
+    const pic = this.shownPicture();
+    const box = pic && opaqueBox(pic.a, pic.frame);
+    if (!pic || !box) return b;
+    return { x: b.x + box.x * pic.s, y: b.y + box.y * pic.s, width: box.w * pic.s, height: box.h * pic.s };
   }
 
   get transform() {
@@ -368,6 +386,9 @@ export function petView(pet: Pet, owner: string, scope: Scope): PetHandle {
     },
     get bounds() {
       return pet.bounds();
+    },
+    get opaqueBounds() {
+      return pet.opaqueBounds();
     },
     get stateKey() {
       return pet.state.value;

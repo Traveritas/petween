@@ -139,6 +139,10 @@ export class AgentHub {
     }
   }
 
+  brainOf(petId: string) {
+    return this.brains.get(petId)?.brainId ?? '';
+  }
+
   private reattachAll() {
     for (const p of this.d.pets()) this.attach(p);
   }

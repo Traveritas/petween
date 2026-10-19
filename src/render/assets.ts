@@ -93,6 +93,34 @@ export class AssetCache {
   }
 }
 
+const opaqueCache = new WeakMap<Asset, Map<number, { x: number; y: number; w: number; h: number } | null>>();
+
+/** Visible-pixel box of one frame, in frame pixels (from the mask; cached). null = fully transparent. */
+export function opaqueBox(a: Asset, frame: number): { x: number; y: number; w: number; h: number } | null {
+  let m = opaqueCache.get(a);
+  if (!m) opaqueCache.set(a, (m = new Map()));
+  if (m.has(frame)) return m.get(frame)!;
+  const col = frame % a.columns;
+  const row = Math.floor(frame / a.columns);
+  const x0 = Math.floor(col * a.frameW * a.maskScale), y0 = Math.floor(row * a.frameH * a.maskScale);
+  const x1 = Math.min(a.maskW, Math.ceil((col + 1) * a.frameW * a.maskScale));
+  const y1 = Math.min(a.maskH, Math.ceil((row + 1) * a.frameH * a.maskScale));
+  let minX = Infinity, minY = Infinity, maxX = -1, maxY = -1;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (a.mask[y * a.maskW + x] > 32) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  const box = maxX < 0 ? null : { x: (minX - x0) / a.maskScale, y: (minY - y0) / a.maskScale, w: (maxX - minX + 1) / a.maskScale, h: (maxY - minY + 1) / a.maskScale };
+  m.set(frame, box);
+  return box;
+}
+
 /** Alpha (0..255) at frame-local pixel (u, v) of `frame`. */
 export function alphaAt(a: Asset, frame: number, u: number, v: number): number {
   if (u < 0 || v < 0 || u >= a.frameW || v >= a.frameH) return 0;

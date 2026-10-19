@@ -43,6 +43,7 @@ export interface HostEvents {
   rescue: null;
   'second-instance': null;
   'remote-input': RemoteInput;
+  'admin-call': import('../shared/admin').AdminCall;
   frame: import('../render/dom2d').RenderPet[];
 }
 
@@ -54,6 +55,7 @@ export interface Host {
   hookPort(): Promise<number>;
   hookCommand(connectorId: string, query?: string): Promise<{ command: string; args: string[] }>;
   readText(path: string): Promise<string>;
+  readTail(path: string, maxBytes: number): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
   list(path: string): Promise<{ name: string; isDir: boolean }[]>;
   exists(path: string): Promise<boolean>;
@@ -83,6 +85,7 @@ export const tauriHost: Host = {
   hookPort: () => invoke('hook_port'),
   hookCommand: (connectorId, query) => invoke('hook_command', { connectorId, query: query ?? null }),
   readText: (path) => invoke('fs_read_text', { path }),
+  readTail: (path, maxBytes) => invoke('fs_read_tail', { path, maxBytes }),
   writeText: (path, content) => invoke('fs_write_text', { path, content }),
   list: (path) => invoke('fs_list', { path }),
   exists: (path) => invoke('fs_exists', { path }),

@@ -1,11 +1,12 @@
 // The kernel (docs/01 §3): plugin lifecycle, event bus, arbitration, storage, compose + render loop.
 // Runs in stage-0 only; other stages mirror what it renders (docs/01 §2).
 
-import type { PetHandle, PluginManifest, PluginModule, Point, StageLayer, TrayItemHandle, TrayItemOptions } from '../api/types';
+import type { PetHandle, PluginManifest, PluginModule, Point, Rect, StageLayer, TrayItemHandle, TrayItemOptions } from '../api/types';
 import { AssetCache } from '../render/assets';
 import { Coords, type StageInfo } from '../render/coords';
 import { Dom2dRenderer, type RenderPet } from '../render/dom2d';
 import { BUILTIN_PLUGINS } from '../plugins';
+import { Admin } from './admin';
 import { AgentHub } from './agent';
 import { createContext, type KernelServices } from './context';
 import { Emitter } from './emitter';
@@ -29,6 +30,7 @@ const DRAG_THRESHOLD = 4;
 const HOVER_PAD = 6;
 const RESCUE_MS = 20000;
 const DEFAULT_PACK = 'default';
+const APP_VERSION = '0.1.0';
 /** docs/03 §6: ambient-only animation (breathing, idle frames) renders at this rate to save CPU. */
 const AMBIENT_FPS = 30;
 
@@ -44,6 +46,7 @@ export class Kernel {
   private pets: Pet[] = [];
   private petAdded = new Emitter<Pet>();
   private petRemoved = new Emitter<Pet>();
+  private screensChanged = new Emitter<Rect[]>();
   private stores = new Map<string, FileStore>();
   private settings!: FileStore;
   private kernelScope = new Scope();
@@ -69,6 +72,7 @@ export class Kernel {
   private mirrorHadPets = new Map<string, boolean>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private reloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private admin!: Admin;
   private reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   constructor(
@@ -102,6 +106,8 @@ export class Kernel {
       registries: this.registries,
       agent: this.agent,
       pets: () => this.pets,
+      screens: () => this.screens(),
+      screensChanged: this.screensChanged,
       petAdded: this.petAdded,
       petRemoved: this.petRemoved,
       viewFor: (owner, pet) => this.viewFor(owner, pet),
@@ -129,8 +135,23 @@ export class Kernel {
       await this.store(r.manifest.id, 'data').load();
       this.plugins.add(r);
     }
-    await this.plugins.activateAll();
+    const disabled = new Set(this.settings.get<string[]>('disabled', []));
+    await this.plugins.activateAll((id) => id === 'core' || !disabled.has(id));
 
+    this.admin = new Admin({
+      host: this.host,
+      paths: this.paths,
+      plugins: this.plugins,
+      registries: this.registries,
+      agent: this.agent,
+      settings: this.settings,
+      pets: () => this.pets,
+      store: (id, kind) => this.store(id, kind),
+      addPet: (pack, at, id, scale) => this.spawnPet(pack, at, id, scale),
+      removePet: (id) => this.removePet(id),
+      saveInstances: () => this.saveInstances(),
+      version: APP_VERSION,
+    });
     this.addKernelTray();
     await this.restoreInstances();
     await this.listen();
@@ -296,12 +317,42 @@ export class Kernel {
     if (!this.onAnyStage(pet.pos)) this.bringBack(pet);
   }
 
+  /** New pet at `at` (default: middle of the primary screen). */
+  private async spawnPet(pack: string, at?: Point, id?: string, scale = 1) {
+    const r = Coords.globalRect(this.layout[0], this.coords.primaryScale);
+    let n = this.pets.length + 1;
+    while (!id && this.pets.some((p) => p.id === `pet-${n}`)) n++;
+    const p = at ?? { x: r.x + r.width / 2 + (this.pets.length % 5) * 40, y: r.y + r.height * 0.8 };
+    await this.addPet({ id: id ?? `pet-${n}`, pack, x: p.x, y: p.y, scale });
+    this.saveInstances();
+    this.wake();
+  }
+
+  private removePet(id: string) {
+    const i = this.pets.findIndex((p) => p.id === id);
+    if (i < 0) return;
+    const [pet] = this.pets.splice(i, 1);
+    this.agent.detach(pet);
+    this.petRemoved.emit(pet);
+    pet.dispose();
+    this.kernelViews.delete(id);
+    for (const r of this.plugins.records.values()) r.views?.delete(id);
+    if (this.hover === id) this.hover = null;
+    if (this.press?.petId === id) this.press = null;
+    this.saveInstances();
+    this.wake();
+  }
+
   private saveInstances() {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       const pets: Instance[] = this.pets.map((p) => ({ id: p.id, pack: p.loaded.pack.id, x: Math.round(p.position.baseValue.x), y: Math.round(p.position.baseValue.y), scale: p.scale }));
       void this.host.writeText(this.paths.instances, JSON.stringify({ pets }, null, 2));
     }, 800);
+  }
+
+  private screens(): Rect[] {
+    return this.layout.map((s) => Coords.globalRect(s, this.coords.primaryScale));
   }
 
   private onAnyStage(p: Point) {
@@ -383,6 +434,7 @@ export class Kernel {
     await h.on('cursor', (c) => this.onCursor(this.coords.physToGlobal(c.x, c.y)));
     await h.on('layout', (l) => {
       this.setLayout(l);
+      this.screensChanged.emit(this.screens());
       for (const p of this.pets) if (!this.onAnyStage(p.pos)) this.bringBack(p);
       this.wake();
     });
@@ -391,6 +443,10 @@ export class Kernel {
     await h.on('tray-click', (id) => this.trayItems.get(id)?.opts.onClick());
     await h.on('rescue', () => this.toggleRescue());
     await h.on('second-instance', () => this.toggleRescue(true));
+    await h.on('admin-call', async (call) => {
+      const res = await this.admin.handle(call);
+      void this.host.emitTo(call.from, 'admin-result', res);
+    });
     await h.on('remote-input', (r) => this.onRemote(r));
 
     addEventListener('contextmenu', (e) => e.preventDefault());

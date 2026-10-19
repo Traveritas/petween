@@ -73,6 +73,11 @@ export class MotionStack {
     }
   }
 
+  /** Inspector view of the running motions. */
+  describe() {
+    return this.entries.map((e) => ({ owner: e.owner, layer: e.layer, blend: e.blend, weight: e.weight }));
+  }
+
   get size() {
     return this.entries.length;
   }

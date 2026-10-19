@@ -48,6 +48,21 @@ pub async fn fs_list(path: PathBuf) -> R<Vec<Entry>> {
     Ok(out)
 }
 
+/// The last `max_bytes` of a text file, starting at a line boundary (transcripts can be huge).
+#[tauri::command]
+pub async fn fs_read_tail(path: PathBuf, max_bytes: u64) -> R<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(err)?;
+    let len = f.metadata().map_err(err)?.len();
+    let start = len.saturating_sub(max_bytes);
+    f.seek(SeekFrom::Start(start)).map_err(err)?;
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    f.read_to_end(&mut buf).map_err(err)?;
+    let text = String::from_utf8_lossy(&buf);
+    // Mid-file start: drop the partial first line.
+    Ok(if start > 0 { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { text.into_owned() })
+}
+
 #[tauri::command]
 pub async fn fs_exists(path: PathBuf) -> bool {
     path.exists()

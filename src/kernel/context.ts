@@ -6,6 +6,7 @@ import type {
   PetHandle,
   PluginContext,
   Point,
+  Rect,
   StageLayer,
   TrayItemHandle,
   TrayItemOptions,
@@ -25,6 +26,8 @@ export interface KernelServices {
   registries: Registries;
   agent: AgentHub;
   pets(): Pet[];
+  screens(): Rect[];
+  screensChanged: Emitter<Rect[]>;
   petAdded: Emitter<Pet>;
   petRemoved: Emitter<Pet>;
   viewFor(owner: string, pet: Pet): PetHandle;
@@ -91,6 +94,11 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
       bindingRule: (def) => t(checkedRegister(k.registries.bindingRules, id, def, false)),
     },
 
+    desktop: {
+      screens: () => k.screens(),
+      on: (_event, fn) => t(k.screensChanged.on(safe(fn, 'desktop.on'))),
+    },
+
     stage: { addLayer: (opts) => t(k.addLayer(id, opts)) },
     tray: { addItem: (item) => t(k.addTrayItem(id, { ...item, onClick: safe(item.onClick, 'tray item') })) },
 
@@ -101,6 +109,7 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
       paths: { home: k.paths.home, appData: k.paths.appData },
       fs: {
         readText: (p) => k.host.readText(p),
+        readTail: (p, n) => k.host.readTail(p, n),
         writeText: (p, c) => k.host.writeText(p, c),
         list: (p) => k.host.list(p),
         exists: (p) => k.host.exists(p),

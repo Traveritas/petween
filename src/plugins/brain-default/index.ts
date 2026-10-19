@@ -9,6 +9,15 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   apiVersion: 1,
   dependencies: { core: '^0.1.0' },
+  contributes: {
+    settings: [
+      { key: 'successHoldMs', label: '成功表情保持', type: 'number', default: 1600, min: 0, max: 30000, step: 100, unit: 'ms' },
+      { key: 'errorHoldMs', label: '出错表情保持', type: 'number', default: 1800, min: 0, max: 30000, step: 100, unit: 'ms' },
+      { key: 'holdUntilClick', label: '成功/出错表情保持到点击宠物', type: 'boolean', default: false },
+      { key: 'idleLongMs', label: '闲置多久算「长时间闲置」', type: 'number', default: 300000, min: 30000, max: 3600000, step: 30000, unit: 'ms' },
+      { key: 'followFocus', label: '只跟随最近操作的会话', type: 'boolean', default: false, description: '多个会话同时进行时，只看你最后发过消息的那个' },
+    ],
+  },
 };
 
 export default definePlugin({

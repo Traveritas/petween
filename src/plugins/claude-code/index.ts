@@ -15,6 +15,17 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   apiVersion: 1,
   permissions: ['fs:read', 'fs:write'],
+  contributes: {
+    settings: [
+      {
+        key: 'configDirs',
+        label: 'Claude Code 配置目录',
+        type: 'list',
+        default: ['~/.claude'],
+        description: '用了 CLAUDE_CONFIG_DIR 的话把那个目录也加上；改完需重新接入',
+      },
+    ],
+  },
 };
 
 export default definePlugin({

@@ -126,14 +126,14 @@ export class PluginManager {
     this.records.set(id, rec);
   }
 
-  async activateAll() {
+  async activateAll(enabled: (id: string) => boolean = () => true) {
     const { order, failed } = orderPlugins([...this.records.values()]);
     for (const f of failed) {
       f.rec.status = 'failed';
       f.rec.error = f.reason;
       this.log('error', `plugin ${f.rec.manifest.id}: ${f.reason}`);
     }
-    for (const r of order) await this.activate(r);
+    for (const r of order) if (enabled(r.manifest.id)) await this.activate(r);
   }
 
   async activate(rec: PluginRecord) {

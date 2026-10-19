@@ -115,6 +115,7 @@ pub fn run() {
             hook::hook_port,
             hook::hook_command,
             caps::fs_read_text,
+            caps::fs_read_tail,
             caps::fs_write_text,
             caps::fs_list,
             caps::fs_exists,

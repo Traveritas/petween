@@ -221,6 +221,8 @@ export interface PetHandle {
   readonly velocity: Point;
   /** Current picture's box on the desktop (before motion transforms). */
   readonly bounds: Rect;
+  /** Box of the current frame's visible (non-transparent) pixels on the desktop, before motion transforms. */
+  readonly opaqueBounds: Rect;
   readonly stateKey: string;
 
   on(event: 'stateKey', fn: (key: string) => void): Disposable;
@@ -360,6 +362,8 @@ export interface HostApi {
   paths: { home: string; appData: string };
   fs: {
     readText(path: string): Promise<string>;
+    /** Last `maxBytes` of a text file, starting at a line boundary. */
+    readTail(path: string, maxBytes: number): Promise<string>;
     writeText(path: string, content: string): Promise<void>;
     list(path: string): Promise<{ name: string; isDir: boolean }[]>;
     exists(path: string): Promise<boolean>;
@@ -399,6 +403,12 @@ export interface PluginContext {
     bindingRule(def: BindingRuleDef): Disposable;
   };
 
+  /** Monitor work areas in global coordinates; the first is the primary. */
+  desktop: {
+    screens(): Rect[];
+    on(event: 'change', fn: (screens: Rect[]) => void): Disposable;
+  };
+
   stage: {
     addLayer(opts: { z: number; hitTest?: (p: Point) => boolean }): StageLayer;
   };
@@ -417,6 +427,20 @@ export interface PluginContext {
   requestFrame(fn: (now: number, dt: number) => void): Disposable;
 }
 
+/** One field of a plugin's auto-generated settings page (values live in ctx.settings under `key`). */
+export interface SettingSpec {
+  key: string;
+  label: string;
+  type: 'boolean' | 'number' | 'string' | 'select' | 'list';
+  default?: unknown;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  options?: { value: string; label: string }[];
+}
+
 export interface PluginManifest {
   id: string;
   name: string;
@@ -430,6 +454,8 @@ export interface PluginManifest {
     stateKeys?: { key: string; label: string }[];
     motionTypes?: string[];
     channels?: string[];
+    /** Declarative settings page: the settings window renders these fields. */
+    settings?: SettingSpec[];
   };
 }
 

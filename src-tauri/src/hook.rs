@@ -28,6 +28,23 @@ pub fn hook_port() -> u16 {
     PORT.load(Ordering::Relaxed)
 }
 
+/// The command an agent should run for a hook: this exe in forwarding mode (forward.rs).
+#[derive(Serialize)]
+pub struct HookCommand {
+    command: String,
+    args: Vec<String>,
+}
+
+#[tauri::command]
+pub fn hook_command(connector_id: String, query: Option<String>) -> Result<HookCommand, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut args = vec!["--hook".to_string(), connector_id];
+    if let Some(q) = query.filter(|q| !q.is_empty()) {
+        args.push(q);
+    }
+    Ok(HookCommand { command: exe.to_string_lossy().into_owned(), args })
+}
+
 pub fn spawn_server(app: AppHandle, host: Arc<Host>) {
     use axum::{body::Bytes, extract::{Path, RawQuery}, http::HeaderMap, routing::post, Router};
 

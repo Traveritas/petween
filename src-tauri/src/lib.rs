@@ -2,6 +2,7 @@
 //! No pet logic and no agent formats live here.
 
 mod caps;
+mod forward;
 mod hook;
 mod log;
 mod protocol;
@@ -56,6 +57,11 @@ impl Paths {
     }
 }
 
+/// Entry for `petween --hook …` (see forward.rs).
+pub fn forward_hook(args: &[String]) {
+    forward::run(args);
+}
+
 pub type HostState<'a> = tauri::State<'a, Arc<Host>>;
 
 /// Rescue hotkey candidates, first free one wins (same list as v0).
@@ -107,6 +113,7 @@ pub fn run() {
             stages::get_layout,
             stages::set_hit,
             hook::hook_port,
+            hook::hook_command,
             caps::fs_read_text,
             caps::fs_write_text,
             caps::fs_list,

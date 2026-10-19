@@ -6,7 +6,7 @@
 
 ```
 Agent CLI（Claude Code / Codex / …）
-   │ hook：curl POST 127.0.0.1:<port>/hook/<connectorId>?e=<kind>
+   │ hook：petween.exe --hook <connectorId> e=<kind>（读 stdin，POST 127.0.0.1:<port>/hook/<connectorId>?e=<kind>）
    ▼
 宿主（Rust）：不解析，原样转发 { connectorId, query, headers 子集, body, receivedAt }
    ▼
@@ -16,6 +16,14 @@ AgentEvent（事件总线主题 agent.event）
    ▼
 会话表（内核）→ 绑定规则 → 每只宠物的大脑
 ```
+
+### 1.1 hook 命令：程序自己当转发器
+
+所有内置 connector 写进 agent 配置的 hook 命令都是 **Petween 自己的可执行文件**：`petween.exe --hook <connectorId> e=<kind>`（`host.hookCommand()` 给出当前路径）。它读完 stdin、从 `<app data>/hook-port` 读端口、POST 给宿主、不打印任何东西、总是 0 退出、最多 2.5 秒。
+
+为什么不用 v0 的 curl / node：curl.exe 在 Codex 的 Windows hook 运行器里「读 stdin + 联网」会失败；node 不一定装了；PowerShell 下 `@file` 会被当成 splatting（docs/08）。自己的 exe 三个问题都没有，还省掉了每次启动重写端口的 cfg 文件。转发器不解析内容，仍然满足「宿主不懂 agent 格式」。
+
+connector 启动时检查已安装的 hook 是否指向当前 exe，不是就自动重写（程序搬家或升级后不会失联）。
 
 ## 2. 归一化事件
 
@@ -45,6 +53,17 @@ interface AgentEvent {
 - `tool.name` **保留原名**，`tool.kind` 供粗粒度使用。不同 agent 的同类工具（Bash / shell / exec_command）由 connector 映射到相同的 `kind`，名字不改。
 - v0 的 connector 曾伪造工具名（`'bash'` / `'edit'`），新设计禁止。
 
+### 2.1 `extra` 的约定字段（内置 connector 都会填，第三方 connector 尽量照做）
+
+| 字段 | 类型 | 何时有 | 用途 |
+|---|---|---|---|
+| `turnId` | string | 源提供时（CC `prompt_id`、Codex `turn_id`） | 统计按回合归并 |
+| `toolInput` | unknown | tool-start / tool-end | 原样的工具参数（统计改动行数等） |
+| `transcriptPath` | string | 源提供时 | 读对话记录（回复摘要） |
+| `cwd` | string | 源提供时 | 工作目录 |
+| `hookEvent` | string | 总是 | 源事件的原名（`PreToolUse`…），调试用 |
+| `synthetic` | `watchdog` | 内核会话表合成的事件 | 见 §3.1 |
+
 ## 3. connector 插件的职责
 
 | 职责 | 说明 |
@@ -55,6 +74,17 @@ interface AgentEvent {
 | 状态面板 | 向设置页报告：是否已安装、最近一次事件时间、活跃会话数 |
 
 超时与 watchdog 的通用逻辑（v0 `hook-connector.ts` 的 idle 衰减、滞留权限、闲置清理）放在内核的会话表里，connector 只提供参数。
+
+### 3.1 会话表的 watchdog（内核）
+
+connector 用 `session` 字段声明参数（缺省值来自 v0）：
+
+| 参数 | 缺省 | 到点后内核做什么 |
+|---|---|---|
+| `waitingTimeoutMs` | 600000 | `waiting` 后一直没有新事件 → 合成 `turn-end`（outcome `interrupted`） |
+| `disposeAfterMs` | 1800000 | 会话完全没有事件 → 合成 `session-end` |
+
+合成事件带 `extra.synthetic = watchdog`，和真实事件走同一条路（会话表 → 绑定 → 大脑，也广播给插件）。
 
 ## 4. 默认大脑
 
@@ -96,7 +126,7 @@ interface AgentEvent {
 
 绑定规则也是注册表（`bindingRules`），插件可以加「按 agent 分」「按工作目录分」等。
 
-v0 的「跟随模式」（只让用户最近操作过的会话驱动宠物）作为 `single` 规则的一个选项保留。
+v0 的「跟随模式」（只让用户最近操作过的会话驱动宠物）改为**默认大脑的合并策略** `followFocus`：只看最近有 `session-start` / `turn-start` 的那个会话（§4.3 的另一种合并法），不在绑定层过滤事件。
 
 ## 6. 其他插件怎么用信号
 

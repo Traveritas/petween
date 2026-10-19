@@ -289,6 +289,7 @@ export class Kernel {
     });
     pet.z = ++this.zSeq;
     pet.basePositionEv.on(() => this.saveInstances());
+    pet.stateKeyEv.on((key) => this.log('info', `pet ${pet.id} → ${key}`));
     this.pets.push(pet);
     this.agent.attach(pet);
     this.petAdded.emit(pet);

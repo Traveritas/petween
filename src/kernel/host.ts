@@ -52,6 +52,7 @@ export interface Host {
   setHit(hit: boolean): Promise<void>;
   log(level: 'info' | 'warn' | 'error', line: string): void;
   hookPort(): Promise<number>;
+  hookCommand(connectorId: string, query?: string): Promise<{ command: string; args: string[] }>;
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
   list(path: string): Promise<{ name: string; isDir: boolean }[]>;
@@ -80,6 +81,7 @@ export const tauriHost: Host = {
     void invoke('log_line', { level, line }).catch(() => {});
   },
   hookPort: () => invoke('hook_port'),
+  hookCommand: (connectorId, query) => invoke('hook_command', { connectorId, query: query ?? null }),
   readText: (path) => invoke('fs_read_text', { path }),
   writeText: (path, content) => invoke('fs_write_text', { path, content }),
   list: (path) => invoke('fs_list', { path }),

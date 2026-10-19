@@ -110,6 +110,7 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
       shell: { exec: (cmd, args, opts) => k.host.exec(cmd, args, opts?.cwd) },
       openExternal: (url) => k.host.openExternal(url),
       hookPort: () => k.host.hookPort(),
+      hookCommand: (id, q) => k.host.hookCommand(id, q),
     },
 
     bus: {

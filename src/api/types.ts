@@ -270,9 +270,24 @@ export interface SessionInfo {
   lastEvent: AgentEvent['type'];
 }
 
+export interface ConnectorStatus {
+  /** Hooks are present in the agent's config. */
+  installed: boolean;
+  /** Short human-readable note for the settings page (e.g. "需要重启 zcode"). */
+  detail?: string;
+}
+
 export interface ConnectorDef {
   id: string;
+  /** Display name for settings / tray. */
+  name?: string;
   parse(req: HookRequest): AgentEvent[];
+  /** Watchdog parameters for the kernel session table (docs/05 §3.1). */
+  session?: { waitingTimeoutMs?: number; disposeAfterMs?: number };
+  /** Write / remove this connector's hooks in the agent's config. Must only touch its own entries. */
+  install?(): Promise<void>;
+  uninstall?(): Promise<void>;
+  status?(): Promise<ConnectorStatus>;
 }
 
 export interface BrainInstance {
@@ -353,8 +368,13 @@ export interface HostApi {
   };
   shell: { exec(cmd: string, args: string[], opts?: { cwd?: string }): Promise<ExecResult> };
   openExternal(url: string): Promise<void>;
-  /** Port of the local hook server (docs/05 §1), for connectors writing hook commands. */
+  /** Port of the local hook server (docs/05 §1). */
   hookPort(): Promise<number>;
+  /**
+   * The command line an agent should run for a hook: this app's executable in forwarding mode.
+   * It POSTs stdin to /hook/<connectorId>?<query> and never blocks the agent.
+   */
+  hookCommand(connectorId: string, query?: string): Promise<{ command: string; args: string[] }>;
 }
 
 export interface PluginContext {

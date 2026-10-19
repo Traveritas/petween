@@ -7,7 +7,7 @@
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | **M0 骨架** | 宿主（每屏舞台、光标轮询穿透、托盘、开机自启、单实例、找回宠物热键、hook 服务、文件协议、能力接口）；内核（插件生命周期、注册表、通道仲裁、动作栈与合成、外观切换时序、存储、渲染循环）；dom2d 渲染器；宠物包格式与默认宠物包；`physics`（仅拖拽）；v0 数据转换脚本 | ✅ 2026-10-19 |
-| **M1 能替代 v0 日常使用** | `claude-code` / `codex` / `zcode` 三个 connector（hook 安装/卸载、会话卫生）；`brain-default`（移植 v0 稳定化规则 + 测试）；`bubble`、`stats-hud`；`physics` 补全抛掷、重力、边缘弹跳；设置窗口（React，重新设计）+ 通道检查器；`perSession` 绑定 | 待开始 |
+| **M1 能替代 v0 日常使用** | `claude-code` / `codex` / `zcode` 三个 connector（hook 安装/卸载、会话卫生）；`brain-default`（移植 v0 稳定化规则 + 测试）；`bubble`、`stats-hud`；`physics` 补全抛掷、重力、边缘弹跳；设置窗口（React，重新设计）+ 通道检查器；`perSession` 绑定 | 进行中：connector ×3、hook 转发器、会话 watchdog、默认大脑 ✅；其余待做 |
 | **M2 自主行为** | `roamer`（游荡、小动作、捣乱、便签）；粒子 | — |
 | **M3 编辑器** | 宠物包编辑器 + 动画编辑器（重新设计，不搬 v0） | — |
 

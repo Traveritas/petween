@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { PluginInfo } from '../../shared/admin';
 import { PluginPage } from '../PluginPage';
 import { call } from '../rpc';
@@ -15,8 +15,11 @@ function Settings({ p }: { p: PluginInfo }) {
       {p.settingsPage && <PluginPage p={p} />}
       {values.data && p.settings.length > 0 && (
         <div className="fields">
-          {p.settings.map((s) => (
-            <Field key={s.key} spec={s} value={values.data![s.key]} onChange={(v) => void run(() => call('settings.set', { plugin: p.id, key: s.key, value: v })).then(values.reload)} />
+          {p.settings.map((s, i) => (
+            <Fragment key={s.key}>
+              {s.section && s.section !== p.settings[i - 1]?.section && <div className="section">{s.section}</div>}
+              <Field spec={s} value={values.data![s.key]} onChange={(v) => void run(() => call('settings.set', { plugin: p.id, key: s.key, value: v })).then(values.reload)} />
+            </Fragment>
           ))}
         </div>
       )}

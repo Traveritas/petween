@@ -45,7 +45,7 @@ function Pet({ p }: { p: InspectorPet }) {
         <Table caption="state 通道" rows={p.state} />
         <Table caption="position 通道" rows={p.position} />
         <Table caption="clip 通道" rows={p.clipChannel} />
-        <Table caption="bubble 队列" rows={p.bubble.map((b) => ({ owner: b.owner, value: b.text, priority: b.priority, active: b.showing }))} />
+        <Table caption="bubble 队列（按 插件 / 分组 并行）" rows={p.bubble.map((b) => ({ owner: b.group ? `${b.owner} / ${b.group}` : b.owner, value: b.text, priority: b.priority, active: b.showing }))} />
       </div>
       <div className="tbl" style={{ marginTop: 10 }}>
         <div className="cap">动作（按层叠加）</div>

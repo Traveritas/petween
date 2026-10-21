@@ -1,64 +1,59 @@
-// `stats-hud` (docs/06 §6, L1 + L3): a live pill beside the main pet while the agent works
-// (thinking time, changed lines), and at turn end a bubble with the reply preview plus a summary.
-// Bubbles go through the kernel's bubble channel, so they queue with everyone else's.
+// `stats-hud` (docs/06 §6, L1): v0's stats bubbles, through the kernel's bubble channel.
+//   思考  a status chip once a session has thought for a moment, ticking live
+//   写入  a status chip per working stretch, adding up the lines as edits land (with a bump)
+//   完成  a summary at turn end (thinking time, lines, wall time)
+//   回复  the agent's last reply, quoted (read from the tail of its transcript, never stored)
+// Each session speaks in its own lanes and is tagged with its session, so the `bubble` renderer
+// gives it its own column; with per-session pets the bubbles go to that session's pet.
+// Timing policy is v0's pure reducer (hud-logic.ts) over the ledger's event ring.
 
-import { definePlugin, type AgentEvent, type Disposable, type PetHandle, type PluginContext, type PluginManifest } from '../../api/types';
+import { definePlugin, type AgentEvent, type BubbleHandle, type BubbleRequest, type PetHandle, type PluginContext, type PluginManifest } from '../../api/types';
 import * as cc from './dialogue/claude-code';
 import * as codex from './dialogue/codex';
 import { isSafeSessionId, truncatePreview, type LastReply } from './dialogue/text';
 import * as zcode from './dialogue/zcode';
-import { createStatsLedger, type LedgerSessionSummary } from './ledger';
+import { formatDuration, formatLines } from './format';
+import { createHudReducer, DEFAULT_HUD_OPTIONS, type HudCommand, type HudOptions } from './hud-logic';
+import { createStatsLedger } from './ledger';
+
+const SECONDS = 1000;
 
 export const manifest: PluginManifest = {
   id: 'stats-hud',
-  name: '统计 HUD',
-  version: '0.1.0',
+  name: '统计气泡',
+  version: '0.2.0',
   apiVersion: 1,
   permissions: ['fs:read'],
   contributes: {
     channels: ['bubble'],
     settings: [
-      { key: 'showLive', label: '工作时显示实时统计', type: 'boolean', default: true },
-      { key: 'showReply', label: '回合结束时显示回复摘要', type: 'boolean', default: true, description: '读取 agent 的对话记录末尾，只在本机显示，不保存' },
-      { key: 'showSummary', label: '回合结束时显示本轮统计', type: 'boolean', default: true },
-      { key: 'bubbleSeconds', label: '摘要气泡停留', type: 'number', default: 7, min: 2, max: 30, step: 1, unit: '秒' },
+      { key: 'multiSession', section: '显示什么', label: '每个会话单独一列', type: 'boolean', default: true, description: '关掉后只显示最近活动的那个会话' },
+      { key: 'showReply', section: '显示什么', label: '回合结束时引用回复', type: 'boolean', default: true, description: '读取 agent 对话记录的末尾，只在本机显示，不保存' },
+      { key: 'showSummary', section: '显示什么', label: '回合结束时显示本轮统计', type: 'boolean', default: true },
+      { key: 'milestoneEveryLines', section: '显示什么', label: '每写满多少行宠物弹一下', type: 'number', default: 0, min: 0, max: 500, step: 10, unit: '行', description: '0 = 不弹' },
+      { key: 'thinkingThresholdMs', section: '时间', label: '思考超过多久才显示', type: 'number', default: DEFAULT_HUD_OPTIONS.thinkingShowThresholdMs, min: 0, max: 10000, step: 500, scale: SECONDS, unit: '秒' },
+      { key: 'thinkingHoldMs', section: '时间', label: '思考气泡结束后停留', type: 'number', default: DEFAULT_HUD_OPTIONS.thinkingHoldMs, min: 0, max: 10000, step: 100, scale: SECONDS, unit: '秒' },
+      { key: 'editHoldMs', section: '时间', label: '写入气泡结束后停留', type: 'number', default: DEFAULT_HUD_OPTIONS.editHoldMs, min: 0, max: 10000, step: 100, scale: SECONDS, unit: '秒' },
+      { key: 'summaryHoldMs', section: '时间', label: '完成气泡停留', type: 'number', default: 4000, min: 1000, max: 30000, step: 500, scale: SECONDS, unit: '秒' },
+      { key: 'replyHoldMs', section: '时间', label: '回复气泡停留', type: 'number', default: 7000, min: 1000, max: 30000, step: 500, scale: SECONDS, unit: '秒' },
     ],
   },
 };
 
-const CSS = `
-.pw-hud {
-  position: absolute; left: 0; top: 0; display: flex; gap: 6px; align-items: center; white-space: nowrap;
-  padding: 4px 10px 4px 8px; border-radius: 999px;
-  font: 12px/1.3 "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; font-variant-numeric: tabular-nums;
-  color: #4a4352; background: rgba(248, 245, 240, 0.94); border: 1px solid rgba(70, 60, 90, 0.08);
-  box-shadow: 0 3px 10px rgba(40, 30, 60, 0.12);
-  opacity: 0; transition: opacity 180ms ease-out; will-change: transform;
-}
-.pw-hud.show { opacity: 1; }
-.pw-hud .dot { width: 7px; height: 7px; border-radius: 50%; background: #a493bf; animation: pw-breathe 1.6s ease-in-out infinite; }
-.pw-hud .dot.working { background: #8fae95; }
-.pw-hud .dot.waiting { background: #d3a65f; animation-duration: 0.9s; }
-.pw-hud .add { color: #5e8f68; } .pw-hud .del { color: #b0676a; }
-.pw-hud .sep { opacity: 0.35; }
-@keyframes pw-breathe { 0%, 100% { opacity: 0.45; scale: 0.85; } 50% { opacity: 1; scale: 1; } }
-@media (prefers-color-scheme: dark) {
-  .pw-hud { color: #ddd6e6; background: rgba(46, 42, 54, 0.94); border-color: rgba(255, 255, 255, 0.08); }
-  .pw-hud .add { color: #93c79c; } .pw-hud .del { color: #e09a9d; }
-}
-@media (prefers-reduced-motion: reduce) { .pw-hud .dot { animation: none; } }
-`;
+const TICK_MS = 250;
+const MILESTONE_THROTTLE_MS = 10_000;
+/** The agent may still be flushing its transcript when Stop fires. */
+const REPLY_RETRIES = 3;
+const REPLY_RETRY_MS = 700;
 
-const LABEL: Record<string, string> = { thinking: '思考', working: '动手', waiting: '等你' };
-
-function fmtDuration(ms: number) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return m < 60 ? `${m}m${String(s % 60).padStart(2, '0')}s` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
-}
-
-const thinkingOf = (s: LedgerSessionSummary, now: number) => s.thinkingMs + (s.thinkingSince !== null ? now - s.thinkingSince : 0);
+/** v0's click-pop, as an inline motion (played on a line milestone). */
+const MILESTONE_POP = {
+  type: 'keyframes',
+  tracks: {
+    scaleX: [{ t: 0, v: 1 }, { t: 90, v: 1.08, ease: 'out' }, { t: 220, v: 0.97, ease: 'inOut' }, { t: 320, v: 1, ease: 'inOut' }],
+    scaleY: [{ t: 0, v: 1 }, { t: 90, v: 0.9, ease: 'out' }, { t: 220, v: 1.05, ease: 'inOut' }, { t: 320, v: 1, ease: 'inOut' }],
+  },
+};
 
 // ---------- reply preview ----------
 
@@ -78,12 +73,13 @@ function transcriptFor(ctx: PluginContext, e: AgentEvent): { path: string; parse
   return null;
 }
 
-async function replyPreview(ctx: PluginContext, e: AgentEvent): Promise<string | null> {
+/** The reply for this turn; null when the transcript has not caught up with the turn yet. */
+async function replyPreview(ctx: PluginContext, e: AgentEvent, exact: boolean): Promise<string | null> {
   const t = transcriptFor(ctx, e);
   if (!t || !(await ctx.host.fs.exists(t.path))) return null;
   const lines = (await ctx.host.fs.readTail(t.path, TAIL_BYTES)).split('\n');
   const turnId = typeof e.extra?.turnId === 'string' ? e.extra.turnId : undefined;
-  const r = t.parse(lines, turnId) ?? (turnId ? t.parse(lines) : null);
+  const r = t.parse(lines, turnId) ?? (turnId && !exact ? t.parse(lines) : null);
   return r ? truncatePreview(r.text) : null;
 }
 
@@ -93,86 +89,138 @@ export default definePlugin({
   activate(ctx) {
     const ledger = createStatsLedger();
     const opt = <T,>(k: string, d: T) => ctx.settings.get<T>(k, d);
+    const hudOptions = (): Partial<HudOptions> => ({
+      multiSession: opt('multiSession', true),
+      turnSummary: opt('showSummary', true),
+      milestoneEveryLines: Math.max(0, opt('milestoneEveryLines', 0)),
+      thinkingShowThresholdMs: Math.max(0, opt('thinkingThresholdMs', DEFAULT_HUD_OPTIONS.thinkingShowThresholdMs)),
+      thinkingHoldMs: Math.max(0, opt('thinkingHoldMs', DEFAULT_HUD_OPTIONS.thinkingHoldMs)),
+      editHoldMs: Math.max(0, opt('editHoldMs', DEFAULT_HUD_OPTIONS.editHoldMs)),
+    });
+    const reducer = createHudReducer(hudOptions);
+    let cursor = 0;
 
-    const layer = ctx.stage.addLayer({ z: 15 });
-    const style = document.createElement('style');
-    style.textContent = CSS;
-    layer.el.appendChild(style);
-    const pill = document.createElement('div');
-    pill.className = 'pw-hud';
-    layer.el.appendChild(pill);
+    /** agent per ledger session (the ledger keys by raw session id). */
+    const agentOf = new Map<string, string>();
+    /** The last turn-end event per session, for the reply preview. */
+    const lastTurnEnd = new Map<string, AgentEvent>();
+    const thinking = new Map<string, { handle: BubbleHandle; startedAt: number; done: boolean }>();
+    const edits = new Map<string, BubbleHandle>();
+    const lastMilestone = new Map<string, number>();
 
-    let follow: Disposable | null = null;
-    let tick: Disposable | null = null;
-    const pet = (): PetHandle | undefined => ctx.pets.list()[0];
-
-    const place = () => {
-      const p = pet();
-      if (!p) return;
-      const b = p.opaqueBounds;
-      const w = pill.offsetWidth;
-      const screen = ctx.desktop.screens().find((r) => b.x >= r.x && b.x <= r.x + r.width) ?? ctx.desktop.screens()[0];
-      // Right of the pet by default; flip left near the screen edge.
-      let x = b.x + b.width + 6;
-      if (screen && x + w > screen.x + screen.width - 6) x = b.x - w - 6;
-      const l = layer.toLocal({ x, y: b.y + b.height * 0.3 });
-      pill.style.transform = `translate(${Math.round(l.x)}px, ${Math.round(l.y)}px)`;
+    const petFor = (sessionId: string): PetHandle | undefined => {
+      const agent = agentOf.get(sessionId);
+      return (agent ? ctx.agent.petsFor(agent, sessionId)[0] : undefined) ?? ctx.pets.list()[0];
     };
-
-    const render = () => {
-      const snap = ledger.snapshot(Number.MAX_SAFE_INTEGER);
-      const id = snap.focusedSessionId;
-      const s = id ? snap.sessions[id] : undefined;
-      const live = opt('showLive', true) && !!s && s.state in LABEL;
-      if (!live) {
-        pill.classList.remove('show');
-        tick?.dispose();
-        follow?.dispose();
-        tick = follow = null;
-        return;
-      }
-      // The dot says what the agent is doing right now; the number is always accumulated thinking time.
-      const parts = [`<span class="dot ${s.state}" title="${LABEL[s.state]}"></span><span>思考 ${fmtDuration(thinkingOf(s, Date.now()))}</span>`];
-      if (s.linesAdded || s.linesRemoved) parts.push(`<span class="sep">·</span><span class="add">+${s.linesAdded}</span><span class="del">−${s.linesRemoved}</span>`);
-      pill.innerHTML = parts.join('');
-      place();
-      pill.classList.add('show');
-      tick ??= ctx.setInterval(render, 1000);
-      follow ??= ctx.requestFrame(place);
+    const say = (sessionId: string, lane: string, req: Omit<BubbleRequest, 'group' | 'session'>): BubbleHandle | null => {
+      const pet = petFor(sessionId);
+      return pet ? pet.say(req.text, { ...req, group: `${lane}:${sessionId}`, session: `${agentOf.get(sessionId) ?? ''}:${sessionId}` }) : null;
     };
+    const later = (fn: () => void, ms: number) => ctx.setTimeout(fn, ms);
 
-    const onTurnEnd = async (e: AgentEvent) => {
-      const p = pet();
-      if (!p) return;
-      const ttlMs = Math.max(2, Math.min(30, opt('bubbleSeconds', 7))) * 1000;
-      if (opt('showReply', true)) {
-        // The agent may still be flushing its transcript when Stop fires.
-        await new Promise((r) => setTimeout(r, 300));
+    const quoteReply = (sessionId: string) => {
+      const e = lastTurnEnd.get(sessionId);
+      if (!e || !opt('showReply', true)) return;
+      const attempt = async (left: number) => {
         try {
-          const text = await replyPreview(ctx, e);
-          if (text) p.say(text, { priority: 50, ttlMs });
+          const text = await replyPreview(ctx, e, left > 0);
+          if (text) say(sessionId, 'reply', { kind: 'reply', label: '回复', text, ttlMs: Math.max(1000, opt('replyHoldMs', 7000)) });
+          else if (left > 0) later(() => void attempt(left - 1), REPLY_RETRY_MS);
         } catch (err) {
           ctx.log.warn(`reply preview failed: ${err}`);
         }
-      }
-      if (opt('showSummary', true)) {
-        const sum = ledger
-          .snapshot()
-          .events.filter((x) => x.type === 'turn-summary' && x.sessionId === e.sessionId)
-          .at(-1)?.summary;
-        if (sum && (sum.edits > 0 || sum.thinkingMs >= 3000)) {
-          const bits = [`本轮 ${fmtDuration(sum.durationMs)}`];
-          if (sum.thinkingMs >= 1000) bits.push(`思考 ${fmtDuration(sum.thinkingMs)}`);
-          if (sum.edits > 0) bits.push(`改动 +${sum.linesAdded} −${sum.linesRemoved}`);
-          p.say(bits.join(' · '), { priority: 45, ttlMs });
+      };
+      later(() => void attempt(REPLY_RETRIES), 300);
+    };
+
+    const execute = (c: HudCommand) => {
+      switch (c.type) {
+        case 'thinking-show': {
+          const value = formatDuration(Date.now() - c.startedAt);
+          const handle = say(c.sessionId, 'thinking', { kind: 'status', label: '思考', value, text: `思考 ${value}`, ttlMs: 0 });
+          if (handle) thinking.set(c.sessionId, { handle, startedAt: c.startedAt, done: false });
+          break;
+        }
+        case 'thinking-hide': {
+          const live = thinking.get(c.sessionId);
+          if (!live) break;
+          // Freeze at the final total, then let it go after the hold.
+          live.done = true;
+          const value = formatDuration(c.totalMs || Date.now() - live.startedAt);
+          live.handle.update({ value, text: `思考 ${value}` });
+          later(() => {
+            live.handle.dispose();
+            if (thinking.get(c.sessionId) === live) thinking.delete(c.sessionId);
+          }, c.holdMs);
+          break;
+        }
+        case 'edit-show':
+        case 'edit-update': {
+          const value = formatLines(c.added, c.removed);
+          const note = c.files > 1 ? `${c.files} 个文件` : undefined;
+          const live = edits.get(c.sessionId);
+          if (live && c.type === 'edit-update') live.update({ value, note, text: `写入 ${value}` }, { pulse: true });
+          else {
+            const handle = say(c.sessionId, 'edit', { kind: 'status', label: '写入', value, note, text: `写入 ${value}`, ttlMs: 0 });
+            if (handle) edits.set(c.sessionId, handle);
+          }
+          break;
+        }
+        case 'edit-hide': {
+          const handle = edits.get(c.sessionId);
+          if (!handle) break;
+          edits.delete(c.sessionId);
+          later(() => handle.dispose(), c.holdMs);
+          break;
+        }
+        case 'turn-show': {
+          const parts: string[] = [];
+          if (c.thinkingMs > 0) parts.push(`思考 ${formatDuration(c.thinkingMs)}`);
+          if (c.linesAdded !== 0 || c.linesRemoved !== 0) parts.push(formatLines(c.linesAdded, c.linesRemoved));
+          else if (c.edits > 0) parts.push(`${c.edits} 次编辑`);
+          if (parts.length === 0) parts.push('回合结束');
+          parts.push(formatDuration(c.durationMs));
+          say(c.sessionId, 'turn', { kind: 'summary', label: '完成', text: parts.join(' · '), ttlMs: Math.max(1000, opt('summaryHoldMs', 4000)) });
+          quoteReply(c.sessionId);
+          break;
+        }
+        case 'edit-milestone': {
+          const last = lastMilestone.get(c.sessionId) ?? -Infinity;
+          if (Date.now() - last < MILESTONE_THROTTLE_MS) break;
+          lastMilestone.set(c.sessionId, Date.now());
+          petFor(c.sessionId)?.play(MILESTONE_POP);
+          break;
         }
       }
     };
 
+    const step = () => {
+      const snap = ledger.snapshot(cursor);
+      cursor = snap.cursor;
+      for (const c of reducer.apply(snap, Date.now())) execute(c);
+    };
+
     ctx.agent.on('event', (e) => {
+      if (e.type === 'session-end') agentOf.delete(e.sessionId);
+      else agentOf.set(e.sessionId, e.agent);
       ledger.record(e);
-      render();
-      if (e.type === 'turn-end' && e.outcome !== 'interrupted' && !e.extra?.synthetic) void onTurnEnd(e);
+      // Reply previews only follow turns that ended normally (no reply to quote otherwise).
+      if (e.type === 'turn-end') {
+        if (e.outcome === 'success' && !e.extra?.synthetic) lastTurnEnd.set(e.sessionId, e);
+        else lastTurnEnd.delete(e.sessionId);
+      }
+      // A tick later, so the kernel has routed the event and petsFor() knows the session's pet.
+      ctx.setTimeout(step, 0);
     });
+
+    // Reconcile (thinking threshold, runaway episodes) and keep live timers ticking.
+    ctx.setInterval(() => {
+      step();
+      for (const live of thinking.values()) {
+        if (live.done) continue;
+        const value = formatDuration(Date.now() - live.startedAt);
+        live.handle.update({ value, text: `思考 ${value}` });
+      }
+    }, TICK_MS);
   },
 });

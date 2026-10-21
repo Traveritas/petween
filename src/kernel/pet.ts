@@ -369,6 +369,7 @@ export function petView(pet: Pet, owner: string, scope: Scope): PetHandle {
       get current() {
         return pet.bubble.current;
       },
+      showing: () => pet.bubble.showing(),
       entries: () => pet.bubble.entries(),
     } satisfies BubbleChannel,
   };
@@ -402,6 +403,7 @@ export function petView(pet: Pet, owner: string, scope: Scope): PetHandle {
         : event === 'input' ? pet.inputEv
         : event === 'playback' ? pet.playbackEv
         : event === 'bubble' ? pet.bubbleEv
+        : event === 'bubbles' ? pet.bubble.list
         : null;
       if (!ev) throw new Error(`unknown pet event ${event}`);
       return track((ev as Emitter<unknown>).on(fn as (v: unknown) => void));

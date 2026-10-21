@@ -78,12 +78,12 @@ describe('ExclusiveStack (docs/02 §2)', () => {
 });
 
 describe('BubbleQueue', () => {
-  it('higher priority cuts in line but does not interrupt', () => {
+  it('higher priority cuts in line (within a lane) but does not interrupt', () => {
     vi.useFakeTimers();
     const q = new BubbleQueue();
     q.say({ text: 'first', priority: 10, ttlMs: 1000 }, 'a');
-    q.say({ text: 'low', priority: 10, ttlMs: 1000 }, 'b');
-    q.say({ text: 'urgent', priority: 80, ttlMs: 1000 }, 'c');
+    q.say({ text: 'low', priority: 10, ttlMs: 1000 }, 'a');
+    q.say({ text: 'urgent', priority: 80, ttlMs: 1000 }, 'a');
     expect(q.current?.text).toBe('first');
     vi.advanceTimersByTime(1000);
     expect(q.current?.text).toBe('urgent');
@@ -100,5 +100,40 @@ describe('BubbleQueue', () => {
     const b = q.say({ text: 'b', ttlMs: 0 }, 'x');
     b.dispose();
     expect(q.entries().map((e) => e.text)).toEqual(['a']);
+  });
+
+  it('different plugins and different groups show at the same time', () => {
+    const q = new BubbleQueue();
+    q.say({ text: 'hi', ttlMs: 0 }, 'a');
+    q.say({ text: 'yo', ttlMs: 0 }, 'b');
+    q.say({ text: 's1', ttlMs: 0, group: 's1', kind: 'status', session: 'cc:1' }, 'hud');
+    q.say({ text: 's2', ttlMs: 0, group: 's2', kind: 'status', session: 'cc:2' }, 'hud');
+    q.say({ text: 's2 later', ttlMs: 0, group: 's2' }, 'hud');
+    expect(q.showing().map((b) => b.text)).toEqual(['hi', 'yo', 's1', 's2']);
+    expect(q.showing()[2]).toMatchObject({ kind: 'status', session: 'cc:1', group: 's1', owner: 'hud' });
+    expect(q.current?.text).toBe('s2');
+  });
+
+  it('the next bubble in a lane takes over when the shown one goes', () => {
+    const q = new BubbleQueue();
+    const a = q.say({ text: 'a', ttlMs: 0, group: 'g' }, 'x');
+    q.say({ text: 'b', ttlMs: 0, group: 'g' }, 'x');
+    q.say({ text: 'other', ttlMs: 0 }, 'y');
+    a.dispose();
+    expect(q.showing().map((b) => b.text)).toEqual(['other', 'b']);
+  });
+
+  it('update changes a shown bubble in place and reports it', () => {
+    const q = new BubbleQueue();
+    const lists: string[][] = [];
+    q.list.on((l) => lists.push(l.map((b) => `${b.value}/${b.pulse}`)));
+    const b = q.say({ text: '思考 1s', label: '思考', value: '1s', ttlMs: 0 }, 'hud');
+    const id = q.showing()[0].id;
+    b.update({ value: '2s', text: '思考 2s' });
+    b.update({ value: '3s' }, { pulse: true });
+    expect(lists).toEqual([['1s/0'], ['2s/0'], ['3s/1']]);
+    expect(q.showing()[0].id).toBe(id);
+    b.dispose();
+    expect(lists.at(-1)).toEqual([]);
   });
 });

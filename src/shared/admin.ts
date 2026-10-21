@@ -67,7 +67,7 @@ export interface InspectorPet {
   state: ChannelEntry[];
   clipChannel: ChannelEntry[];
   position: ChannelEntry[];
-  bubble: { owner: string; text: string; priority: number; showing: boolean }[];
+  bubble: { owner: string; text: string; priority: number; showing: boolean; group: string; kind: string }[];
   motions: { owner: string; layer: string; blend: string; weight: number }[];
 }
 

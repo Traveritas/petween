@@ -158,11 +158,11 @@ interface PetHandle {
 | `codex` | L4（connector） | Codex hook 接入 |
 | `zcode` | L4（connector） | zcode hook 接入 |
 | `brain-default` | L4（brain） | 稳定化规则 + 状态键派生（05 §4） |
-| `bubble` | L3 | 气泡渲染（`bubble` 通道的消费者） |
+| `bubble` | L3 | 气泡渲染（`bubble` 通道的消费者）：v0 的排布（每会话一列、回复在左、完成在下、列位置记忆）和 7 种外观、出入场动画，按气泡类型分别设置 |
 | `physics` | L2 | 拖拽、抛掷、重力、撞墙回弹、贴地滑行（撞墙/滑行表情走 `physics.hit` / `physics.slide` 状态键） |
 | `per-session` | L4（binding） | 每个会话生成一只临时宠物，会话结束后离开 |
 | `roamer` | L2 + L3 | 自主漫游、小动作、便签（**暂缓**：作者打算以后重新设计，见 09） |
-| `stats-hud` | L1 + L3 | 统计面板 |
+| `stats-hud` | L1 | v0 的统计气泡：思考计时、写入行数、完成摘要、回复引用、写满 N 行宠物弹一下；按会话分组说话，每会话一只宠物时说到那只宠物身上 |
 | `particles` | L3 | 粒子特效（撒花、星星、闪光、爱心、落樱、烟花）。触发方式见下 |
 
 **`particles` 的三种触发方式**：
@@ -200,9 +200,11 @@ export default definePlugin({
 - **宿主能力**：`host.fs`（readText / writeText〔原子写〕/ list / exists / mkdir / remove）、`host.shell.exec`、`host.openExternal`、`host.hookPort()`、`host.hookCommand(connectorId, query)`（connector 写 hook 命令时用，见 05 §1.1）、`host.paths`（home / appData）。
 - **ConnectorDef**：除 `parse` 外可选 `name`、`session`（watchdog 参数，05 §3.1）、`install` / `uninstall` / `status`——设置页用它们统一显示和操作任何 connector（包括第三方的）。
 - **宠物**：`pets.add({ pack, position?, scale?, persist? })` / `pets.remove(id)`；`persist: false`（缺省）的宠物不存盘，插件停用时自动移除。`pet.opaqueBounds` = 当前帧可见像素的包围盒（碰撞、定位气泡用）。
+- **气泡**：`pet.say(text, { group, kind, session, label, value, note, priority, ttlMs })`，`ttlMs: 0` = 直到 dispose；句柄 `update({ text, label, value, note }, { pulse })`。渲染插件订阅 `pet.on('bubbles', list)` 拿到所有正在显示的气泡（`'bubble'` 事件保留，只给最近一个）。规则见 02 §1。
+- **会话 → 宠物**：`agent.petsFor(agent, sessionId)` = 这个会话最近一个事件被绑定规则送到了哪些宠物。`agent.on('event')` 的回调在路由之前运行，要查就晚一拍（`setTimeout(…, 0)`）。
 - **桌面**：`desktop.screens()` 返回各显示器工作区（全局坐标，第一个是主屏），`desktop.on('change')`。
 - **文件**：`host.fs.readTail(path, maxBytes)` 读大文件末尾（对话记录）。
-- **设置页**：manifest 的 `contributes.settings` 声明字段（boolean / number / string / select / list，可带 min/max/step/unit/description；`scale` 让存毫秒、显示秒），设置窗口自动生成表单，值存在 `ctx.settings` 对应的 key 下。
+- **设置页**：manifest 的 `contributes.settings` 声明字段（boolean / number / string / select / list，可带 min/max/step/unit/description；`scale` 让存毫秒、显示秒；`section` 给字段分组加小标题），设置窗口自动生成表单，值存在 `ctx.settings` 对应的 key 下。
 - **自带设置页**（M2）：manifest 的 `settings` 指向插件文件夹里的一个 ESM 文件，导出 `mount(el, api)`（可返回清理函数）。设置窗口在该插件的「设置」展开处把它挂进一个 shadow root：插件的样式漏不出去，设置窗口的样式表复制进去，所以 `btn` / `input` / `field` / `card` 等类和 `--text` / `--accent` 等颜色变量可以直接用。`api` 提供 `settings.all()` / `settings.set(key, value)`（就是运行中插件的 `ctx.settings`）、`call(method, params)`（请求运行中的插件，插件那边用 `ctx.settingsPage.handle(method, fn)` 应答；插件没在运行时报错）、`toast(msg, bad?)`、`baseUrl`。每次展开都重新加载文件，改了不用重启。同时声明了 `contributes.settings` 的话，自动表单排在自带页下面。设置是改了就生效，没有「取消 / 应用」。目前只有第三方插件能带；示例见 `examples/plugins/state-tester`。需要大窗口的界面（如编辑器）以后用 `stage.openWindow`。
 - **样式**：插件可以往舞台层里插 `<style>`（宿主关闭了 Tauri 对 `style-src` 的 CSP 改写，否则运行时注入的样式会被浏览器静默拦截）。
 - **clip 通道直接给片段**时，内联 `ClipDef.source` 用绝对 URL（插件自带资源走 `http://petplugin.localhost/<插件目录>/…`）。

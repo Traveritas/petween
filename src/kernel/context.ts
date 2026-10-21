@@ -96,6 +96,7 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
     agent: {
       on: (_event, fn) => t(k.agent.event.on(safe(fn, 'agent.on'))),
       sessions: () => k.agent.list(),
+      petsFor: (agent, sessionId) => k.agent.petsFor(agent, sessionId).map((p) => k.viewFor(id, p)),
     },
 
     register: {

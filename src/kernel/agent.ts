@@ -23,6 +23,8 @@ const DEFAULT_POLICY: Required<SessionPolicy> = { waitingTimeoutMs: 600_000, dis
 export class AgentHub {
   private sessions = new Map<string, SessionInfo>();
   private brains = new Map<string, { brainId: string; instance: BrainInstance }>();
+  /** Pet ids each session's latest event was routed to (`agent:sessionId` → ids). */
+  private routed = new Map<string, string[]>();
   /** Watchdog timers per session (docs/05 §3.1). */
   private watch = new Map<string, { policy: Required<SessionPolicy>; waiting?: ReturnType<typeof setTimeout>; dispose?: ReturnType<typeof setTimeout> }>();
   readonly event = new Emitter<AgentEvent>();
@@ -33,6 +35,12 @@ export class AgentHub {
 
   list(): SessionInfo[] {
     return [...this.sessions.values()];
+  }
+
+  /** Pets the session's latest event went to (still alive). */
+  petsFor(agent: string, sessionId: string): Pet[] {
+    const ids = this.routed.get(`${agent}:${sessionId}`) ?? [];
+    return this.d.pets().filter((p) => ids.includes(p.id));
   }
 
   ingest(req: HookRequest) {
@@ -72,6 +80,8 @@ export class AgentHub {
     } catch (err) {
       this.d.log('error', `binding rule ${rule.id} failed: ${err}`);
     }
+    if (e.type === 'session-end') this.routed.delete(key);
+    else this.routed.set(key, targets.map((t) => t.id));
     for (const t of targets) {
       const pet = pets.find((p) => p.id === t.id);
       if (!pet) continue;

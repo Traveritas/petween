@@ -118,23 +118,69 @@ export interface ClipIntent {
   enter?: MotionRef;
 }
 
+/**
+ * Bubble kinds the built-in renderer knows how to place and skin (docs/02 §1). Any other string is
+ * allowed and drawn like 'speech'.
+ *  - speech:  something the pet says (default)
+ *  - status:  a short live chip (thinking time, lines being written)
+ *  - reply:   a paragraph quoted from an agent
+ *  - summary: a one-line wrap-up (turn finished)
+ */
+export type BubbleKind = 'speech' | 'status' | 'reply' | 'summary' | (string & {});
+
 export interface BubbleRequest {
+  /** Plain text; renderers that understand `label` / `value` / `note` may show those instead. */
   text: string;
   priority?: number;
+  /** How long it stays once shown, in ms. 0 = until disposed. Default 4000. */
   ttlMs?: number;
+  /**
+   * Lane within the speaking plugin. Bubbles in the same lane queue (one shows at a time);
+   * different lanes show at the same time. Default: one lane per plugin.
+   */
+  group?: string;
+  kind?: BubbleKind;
+  /** The agent session this is about (`agent:sessionId`); renderers may give each session its own column. */
+  session?: string;
+  /** Short caption, e.g. '思考'. */
+  label?: string;
+  /** The figure to emphasise, e.g. '12s' or '+40 −3 行'. */
+  value?: string;
+  /** Secondary detail, e.g. '3 个文件'. */
+  note?: string;
 }
 
 export interface BubbleHandle extends Disposable {
   readonly showing: boolean;
+  /** Change what it says without re-queueing. `pulse` asks the renderer for a little bump. */
+  update(patch: Partial<Pick<BubbleRequest, 'text' | 'label' | 'value' | 'note'>>, opts?: { pulse?: boolean }): void;
   onShow(fn: () => void): Disposable;
   onHide(fn: () => void): Disposable;
 }
 
+/** A bubble that is on screen, as renderers see it. `id` is stable for the bubble's life. */
+export interface ShownBubble {
+  id: number;
+  owner: string;
+  text: string;
+  kind: BubbleKind;
+  group: string;
+  session?: string;
+  label?: string;
+  value?: string;
+  note?: string;
+  priority: number;
+  /** Increments on every update({ pulse: true }). */
+  pulse: number;
+}
+
 export interface BubbleChannel {
   say(req: BubbleRequest): BubbleHandle;
-  /** The bubble currently on screen (owner + text), or null. */
+  /** The most recently shown bubble (owner + text), or null. Kept for single-bubble renderers. */
   readonly current: { owner: string; text: string } | null;
-  entries(): { owner: string; text: string; priority: number; showing: boolean }[];
+  /** Everything on screen now, oldest first. */
+  showing(): ShownBubble[];
+  entries(): { owner: string; text: string; priority: number; showing: boolean; group: string; kind: BubbleKind }[];
 }
 
 // ---------- input ----------
@@ -205,7 +251,7 @@ export interface PetPackInfo {
 
 // ---------- pets ----------
 
-export type PetEvent = 'stateKey' | 'clip' | 'input' | 'playback' | 'bubble';
+export type PetEvent = 'stateKey' | 'clip' | 'input' | 'playback' | 'bubble' | 'bubbles';
 
 export interface PlaybackEvent {
   clip: string;
@@ -229,7 +275,10 @@ export interface PetHandle {
   on(event: 'clip', fn: (clipId: string) => void): Disposable;
   on(event: 'input', fn: (e: InputEvent) => void): Disposable;
   on(event: 'playback', fn: (e: PlaybackEvent) => void): Disposable;
+  /** The most recently shown bubble (single-bubble renderers). */
   on(event: 'bubble', fn: (b: { owner: string; text: string } | null) => void): Disposable;
+  /** Everything on screen, whenever a bubble shows, changes or hides. */
+  on(event: 'bubbles', fn: (shown: ShownBubble[]) => void): Disposable;
 
   channel(name: 'state'): ExclusiveChannel<string>;
   channel(name: 'clip'): ExclusiveChannel<ClipIntent | null>;
@@ -239,7 +288,7 @@ export interface PetHandle {
   motion: { add(source: MotionSource | MotionRef, opts?: MotionOptions): MotionHandle };
 
   showState(key: string, opts?: { priority?: number; releaseOn?: 'never' | 'signal-change' }): Lease<string>;
-  say(text: string, opts?: { priority?: number; ttlMs?: number }): BubbleHandle;
+  say(text: string, opts?: Omit<BubbleRequest, 'text'>): BubbleHandle;
   play(motion: MotionRef, opts?: MotionOptions): MotionHandle;
   pluginConfig<T>(): T | undefined;
 }
@@ -397,8 +446,11 @@ export interface PluginContext {
   };
 
   agent: {
+    /** Listeners run before the event is routed to pets; use petsFor() a tick later to see where it went. */
     on(event: 'event', fn: (e: AgentEvent) => void): Disposable;
     sessions(): SessionInfo[];
+    /** The pets this session's latest event was routed to by the binding rule (empty if none yet). */
+    petsFor(agent: string, sessionId: string): PetHandle[];
   };
 
   register: {
@@ -452,6 +504,8 @@ export interface SettingSpec {
   /** Display = stored ÷ scale (e.g. store ms, show seconds with scale 1000). min/max/step are in stored units. */
   scale?: number;
   options?: { value: string; label: string }[];
+  /** Heading this field sits under; consecutive fields with the same section share one heading. */
+  section?: string;
 }
 
 export interface PluginManifest {

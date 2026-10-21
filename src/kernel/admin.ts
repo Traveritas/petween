@@ -26,6 +26,10 @@ export interface AdminDeps {
   removePet(id: string): void;
   saveInstances(): void;
   pageHandlers: Map<string, (params: unknown) => unknown>;
+  reloadPack(id: string): Promise<void>;
+  tryPack(petId: string, raw: unknown, baseUrl: string): Promise<void>;
+  tryEnd(petId: string): Promise<void>;
+  forceState(petId: string, key: string | null): void;
   version: string;
 }
 
@@ -176,6 +180,10 @@ export class Admin {
       this.d.removePet(id);
       await this.d.addPet(pack, at, id, scale);
     },
+    'packs.reload': ({ id }) => this.d.reloadPack(id),
+    'pets.tryPack': ({ petId, pack, baseUrl }) => this.d.tryPack(petId, pack, baseUrl),
+    'pets.tryEnd': ({ petId }) => this.d.tryEnd(petId),
+    'pets.forceState': ({ petId, key }) => this.d.forceState(petId, key),
     'pets.setScale': ({ id, scale }) => {
       const p = this.d.pets().find((x) => x.id === id);
       if (!p) throw new Error(`没有宠物 ${id}`);

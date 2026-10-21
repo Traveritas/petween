@@ -3,7 +3,11 @@
 // queued behind a handshake: ping until the kernel answers once, then send.
 
 import { emitTo, listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { AdminApi, AdminCall, AdminMethod, AdminResult } from '../shared/admin';
+
+// Used by the settings window and the editor; results are sent back to whichever window asked.
+const self = getCurrentWebviewWindow();
 
 let seq = 0;
 const pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
@@ -18,7 +22,7 @@ const listening = listen<AdminResult>('admin-result', (e) => {
 
 function send<M extends AdminMethod>(method: M, params: unknown, timeoutMs: number): Promise<unknown> {
   const id = ++seq;
-  const msg: AdminCall = { id, from: 'settings', method, params };
+  const msg: AdminCall = { id, from: self.label, method, params };
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
     void emitTo('stage-0', 'admin-call', msg);

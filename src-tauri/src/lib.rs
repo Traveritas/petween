@@ -98,6 +98,48 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
     open_settings_window(&app).map_err(|e| e.to_string())
 }
 
+/// The pet pack editor (docs/09 M3a): one window, focused if already open. `pack` = which pack to open.
+pub fn open_editor_window(app: &AppHandle, pack: Option<&str>) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window("editor") {
+        if let Some(p) = pack {
+            let _ = app.emit_to("editor", "editor-open", p.to_string());
+        }
+        let _ = w.unminimize();
+        w.show()?;
+        return w.set_focus();
+    }
+    let url = match pack {
+        Some(p) => format!(
+            "editor.html?pack={}",
+            p.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>()
+        ),
+        None => "editor.html".to_string(),
+    };
+    tauri::WebviewWindowBuilder::new(app, "editor", tauri::WebviewUrl::App(url.into()))
+        .title("Petween 宠物编辑器")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(980.0, 620.0)
+        .center()
+        // Let the page receive HTML drag-and-drop (files dropped onto the clip library).
+        .disable_drag_drop_handler()
+        .build()?
+        // Whatever the editor was showing on the desktop (draft try-on, forced state) ends with it.
+        .on_window_event({
+            let app = app.clone();
+            move |e| {
+                if let tauri::WindowEvent::Destroyed = e {
+                    let _ = app.emit_to(stages::KERNEL_STAGE, "editor-closed", ());
+                }
+            }
+        });
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_editor(app: AppHandle, pack: Option<String>) -> Result<(), String> {
+    open_editor_window(&app, pack.as_deref()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -109,6 +151,8 @@ pub fn run() {
             // `petween --settings` while running opens the settings; a plain second launch flashes the pets.
             if args.iter().any(|a| a == "--settings") {
                 let _ = open_settings_window(app);
+            } else if args.iter().any(|a| a == "--editor") {
+                let _ = open_editor_window(app, None);
             } else {
                 let _ = app.emit_to(stages::KERNEL_STAGE, "second-instance", ());
             }
@@ -137,6 +181,7 @@ pub fn run() {
             log_line,
             quit,
             open_settings,
+            open_editor,
             stages::get_layout,
             stages::set_hit,
             hook::hook_port,
@@ -144,6 +189,8 @@ pub fn run() {
             caps::fs_read_text,
             caps::fs_read_tail,
             caps::fs_write_text,
+            caps::fs_read_bytes,
+            caps::fs_write_bytes,
             caps::fs_list,
             caps::fs_exists,
             caps::fs_mkdir,
@@ -173,6 +220,9 @@ pub fn run() {
             tray::set_rescue_label(&handle, used.copied());
             if std::env::args().any(|a| a == "--settings") {
                 open_settings_window(&handle)?;
+            }
+            if std::env::args().any(|a| a == "--editor") {
+                open_editor_window(&handle, None)?;
             }
             Ok(())
         })

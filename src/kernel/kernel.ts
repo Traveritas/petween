@@ -1,7 +1,7 @@
 // The kernel (docs/01 §3): plugin lifecycle, event bus, arbitration, storage, compose + render loop.
 // Runs in stage-0 only; other stages mirror what it renders (docs/01 §2).
 
-import type { PetHandle, PluginManifest, PluginModule, Point, Rect, StageLayer, TrayItemHandle, TrayItemOptions } from '../api/types';
+import type { Lease, PetHandle, PluginManifest, PluginModule, Point, Rect, StageLayer, TrayItemHandle, TrayItemOptions } from '../api/types';
 import { AssetCache } from '../render/assets';
 import { Coords, type StageInfo } from '../render/coords';
 import { Dom2dRenderer, type RenderPet } from '../render/dom2d';
@@ -154,6 +154,10 @@ export class Kernel {
       addPet: async (pack, at, id, scale) => void (await this.spawnPet(pack, at, id, scale)),
       removePet: (id) => this.removePet(id),
       saveInstances: () => this.saveInstances(),
+      reloadPack: (id) => this.reloadPack(id),
+      tryPack: (petId, raw, baseUrl) => this.tryPack(petId, raw, baseUrl),
+      tryEnd: (petId) => this.tryEnd(petId),
+      forceState: (petId, key) => this.forceState(petId, key),
       pageHandlers: this.pageHandlers,
       version: APP_VERSION,
     });
@@ -273,8 +277,13 @@ export class Kernel {
       raw = await res.json();
       baseUrl = new URL(`packs/${id}/`, location.href).href;
     }
+    return this.preparePack(raw, baseUrl, id);
+  }
+
+  /** Validate a parsed pet.json and decode its clips (also used for editor drafts). */
+  private async preparePack(raw: unknown, baseUrl: string, label: string): Promise<LoadedPack> {
     const { pack, warnings } = validatePack(raw);
-    for (const w of warnings) this.log('warn', `pack ${id}: ${w}`);
+    for (const w of warnings) this.log('warn', `pack ${label}: ${w}`);
     // Decode every clip up front so bounds and hit masks are ready on first frame.
     await Promise.all(
       Object.values(pack.clips).map((c) => {
@@ -283,6 +292,52 @@ export class Kernel {
       }),
     );
     return { pack, baseUrl };
+  }
+
+  // ---------- editor support (docs/09 M3a) ----------
+
+  /** Pets trying on an editor draft → the pack they really wear. */
+  private trying = new Map<string, string>();
+  /** States the editor forces on a pet while it is open. */
+  private forced = new Map<string, Lease<string>>();
+
+  /** A pack changed on disk: every pet wearing it (and not trying a draft) picks it up in place. */
+  private async reloadPack(id: string) {
+    const users = this.pets.filter((p) => p.loaded.pack.id === id && !this.trying.has(p.id));
+    if (!users.length) return;
+    const loaded = await this.loadPack(id);
+    for (const p of users) p.swapPack(loaded);
+  }
+
+  /** Show an editor draft on a pet until tryEnd (nothing is saved). */
+  private async tryPack(petId: string, raw: unknown, baseUrl: string) {
+    const pet = this.pets.find((p) => p.id === petId);
+    if (!pet) throw new Error(`没有宠物 ${petId}`);
+    const loaded = await this.preparePack(raw, baseUrl, 'draft');
+    if (!this.trying.has(petId)) this.trying.set(petId, pet.loaded.pack.id);
+    pet.swapPack(loaded);
+  }
+
+  private async tryEnd(petId: string) {
+    const original = this.trying.get(petId);
+    this.forced.get(petId)?.release();
+    this.forced.delete(petId);
+    if (original === undefined) return;
+    this.trying.delete(petId);
+    const pet = this.pets.find((p) => p.id === petId);
+    if (!pet) return;
+    try {
+      pet.swapPack(await this.loadPack(original));
+    } catch (e) {
+      this.log('error', `pet ${petId}: could not put pack ${original} back: ${e}`);
+    }
+  }
+
+  private forceState(petId: string, key: string | null) {
+    this.forced.get(petId)?.release();
+    this.forced.delete(petId);
+    const pet = this.pets.find((p) => p.id === petId);
+    if (pet && key) this.forced.set(petId, pet.state.request({ priority: 95, value: key }, 'editor'));
   }
 
   private async restoreInstances() {
@@ -356,7 +411,7 @@ export class Kernel {
   private saveInstances() {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
-      const pets: Instance[] = this.pets.filter((p) => !p.transient).map((p) => ({ id: p.id, pack: p.loaded.pack.id, x: Math.round(p.position.baseValue.x), y: Math.round(p.position.baseValue.y), scale: p.scale }));
+      const pets: Instance[] = this.pets.filter((p) => !p.transient).map((p) => ({ id: p.id, pack: this.trying.get(p.id) ?? p.loaded.pack.id, x: Math.round(p.position.baseValue.x), y: Math.round(p.position.baseValue.y), scale: p.scale }));
       void this.host.writeText(this.paths.instances, JSON.stringify({ pets }, null, 2));
     }, 800);
   }
@@ -445,6 +500,9 @@ export class Kernel {
       void this.host.emitTo(call.from, 'admin-result', res);
     });
     await h.on('remote-input', (r) => this.onRemote(r));
+    await h.on('editor-closed', () => {
+      for (const id of new Set([...this.trying.keys(), ...this.forced.keys()])) void this.tryEnd(id);
+    });
 
     addEventListener('contextmenu', (e) => e.preventDefault());
     addEventListener('pointerdown', (e) => {

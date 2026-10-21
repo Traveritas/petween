@@ -43,6 +43,7 @@ export interface HostEvents {
   rescue: null;
   'second-instance': null;
   'remote-input': RemoteInput;
+  'editor-closed': null;
   'admin-call': import('../shared/admin').AdminCall;
   frame: import('../render/dom2d').RenderPet[];
 }
@@ -57,6 +58,9 @@ export interface Host {
   readText(path: string): Promise<string>;
   readTail(path: string, maxBytes: number): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
+  readBytes(path: string): Promise<Uint8Array>;
+  /** Atomic, like writeText. */
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   list(path: string): Promise<{ name: string; isDir: boolean }[]>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
@@ -87,6 +91,8 @@ export const tauriHost: Host = {
   readText: (path) => invoke('fs_read_text', { path }),
   readTail: (path, maxBytes) => invoke('fs_read_tail', { path, maxBytes }),
   writeText: (path, content) => invoke('fs_write_text', { path, content }),
+  readBytes: async (path) => new Uint8Array(await invoke<ArrayBuffer>('fs_read_bytes', { path })),
+  writeBytes: (path, bytes) => invoke('fs_write_bytes', bytes, { headers: { 'x-path': encodeURIComponent(path) } }),
   list: (path) => invoke('fs_list', { path }),
   exists: (path) => invoke('fs_exists', { path }),
   mkdir: (path) => invoke('fs_mkdir', { path }),

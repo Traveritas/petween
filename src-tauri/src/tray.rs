@@ -65,6 +65,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         owned.push(Box::new(PredefinedMenuItem::separator(app)?));
     }
     owned.push(Box::new(MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?));
+    owned.push(Box::new(MenuItem::with_id(app, "editor", "宠物编辑器…", true, None::<&str>)?));
     let rescue = match &model.rescue_hotkey {
         Some(k) => format!("找回宠物（{k}）"),
         None => "找回宠物".to_string(),
@@ -98,6 +99,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "settings" => {
                 if let Err(e) = crate::open_settings_window(app) {
                     eprintln!("open settings failed: {e}");
+                }
+            }
+            "editor" => {
+                if let Err(e) = crate::open_editor_window(app, None) {
+                    eprintln!("open editor failed: {e}");
                 }
             }
             "rescue" => {

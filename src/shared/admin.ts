@@ -93,6 +93,13 @@ export interface AdminApi {
   'pets.setPack'(p: { id: string; pack: string }): void;
   'pets.setScale'(p: { id: string; scale: number }): void;
   'packs.list'(): PackInfo[];
+  /** The pack changed on disk (editor saved): pets wearing it pick it up in place. */
+  'packs.reload'(p: { id: string }): void;
+  /** Show an unsaved draft on a desktop pet until pets.tryEnd. `baseUrl` = where its clip files are. */
+  'pets.tryPack'(p: { petId: string; pack: unknown; baseUrl: string }): void;
+  'pets.tryEnd'(p: { petId: string }): void;
+  /** Hold a pet in a state (editor preview); null lets go. */
+  'pets.forceState'(p: { petId: string; key: string | null }): void;
   'packs.openFolder'(): void;
   'plugins.openFolder'(): void;
   'kernel.get'(): KernelSettings & { brains: string[]; bindings: string[]; version: string; dataDir: string };

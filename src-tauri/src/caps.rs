@@ -30,6 +30,44 @@ pub async fn fs_write_text(path: PathBuf, content: String) -> R<()> {
     std::fs::rename(&tmp, &path).map_err(err)
 }
 
+/// Whole file as raw bytes (no JSON number arrays: pictures can be megabytes).
+#[tauri::command]
+pub async fn fs_read_bytes(path: PathBuf) -> R<tauri::ipc::Response> {
+    std::fs::read(path).map(tauri::ipc::Response::new).map_err(err)
+}
+
+/// Atomic binary write. The body is the raw bytes; the target path comes percent-encoded in the
+/// `x-path` header (header values must be ASCII, user paths often are not).
+#[tauri::command]
+pub async fn fs_write_bytes(request: tauri::ipc::Request<'_>) -> R<()> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw bytes".into()) };
+    let encoded = request.headers().get("x-path").and_then(|v| v.to_str().ok()).ok_or("missing x-path")?;
+    let path = PathBuf::from(percent_decode(encoded)?);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(err)?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
+    std::fs::write(&tmp, bytes).map_err(err)?;
+    std::fs::rename(&tmp, &path).map_err(err)
+}
+
+fn percent_decode(s: &str) -> R<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 3 <= b.len() {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).map_err(err)?;
+            out.push(u8::from_str_radix(hex, 16).map_err(err)?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(err)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {

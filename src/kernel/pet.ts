@@ -143,6 +143,19 @@ export class Pet {
     this.picker.resetSticky();
   }
 
+  /**
+   * Wear another pack in place (editor saves, desktop try-on): position, leases, plugins and brain
+   * stay; the picture restarts from the current state of the new pack.
+   */
+  swapPack(loaded: LoadedPack) {
+    this.loaded = loaded;
+    this.resolvedKey = '';
+    this.chosenClip = '';
+    this.picker.resetSticky();
+    this.appearance.dispose();
+    this.env.wake();
+  }
+
   // ---------- motion refs ----------
 
   resolveMotion(ref: MotionRef): { type: string; params: Record<string, unknown> } | null {

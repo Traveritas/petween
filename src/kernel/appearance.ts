@@ -13,6 +13,24 @@ export type Target =
   | { kind: 'state'; resolvedKey: string; appearance: StateAppearance; clipId: string; clip: ClipDef }
   | { kind: 'clip'; token: object; clipId: string; clip: ClipDef; enter?: MotionRef; transition?: TransitionRef };
 
+/** Loop motions ease in and out over this long instead of snapping on and off (docs/03 §4). */
+export const LOOP_FADE_MS = 250;
+
+/** A loop motion and the weight ramp it is on; `start` is filled in on the next tick. */
+interface Loop {
+  /** The motion reference, so a loop both states share keeps running without a restart. */
+  key: string;
+  handle: MotionHandle;
+  from: number;
+  to: 0 | 1;
+  start: number | null;
+  weight: number;
+}
+
+const smooth = (p: number) => p * p * (3 - 2 * p);
+
+const loopKeys = (t: Target) => new Set(t.kind === 'state' ? (t.appearance.loop ?? []).map((r) => JSON.stringify(r)) : []);
+
 export interface TransitionPlan {
   crossfadeMs: number;
   waitFor?: { marker: string } | 'loop-end';
@@ -55,7 +73,7 @@ function sameTarget(a: Target, b: Target): boolean {
 export class Appearance {
   private shown: { pb: ClipPlayback; target: Target } | null = null;
   private fade: { pb: ClipPlayback; start: number; ms: number; frame: number } | null = null;
-  private loops: MotionHandle[] = [];
+  private loops: Loop[] = [];
   private flow: Flow | null = null;
   private target: Target | null = null;
 
@@ -143,7 +161,7 @@ export class Appearance {
     flow.phase = 'enter';
     flow.exitMotion?.dispose();
     flow.exitMotion = null;
-    this.stopLoops();
+    this.stopLoops(loopKeys(flow.to));
     const ref = flow.to.kind === 'state' ? flow.to.appearance.enter : flow.to.enter;
     const enter = ref ? this.deps.play(ref, 'transition') : null;
     if (!enter) {
@@ -166,17 +184,43 @@ export class Appearance {
   }
 
   private startLoops(t: Target) {
-    this.stopLoops();
+    this.stopLoops(loopKeys(t));
     if (t.kind !== 'state') return;
     for (const ref of t.appearance.loop ?? []) {
+      const key = JSON.stringify(ref);
+      const same = this.loops.find((l) => l.key === key && l.handle.active);
+      if (same) {
+        if (same.to === 0) Object.assign(same, { from: same.weight, to: 1, start: null });
+        continue;
+      }
       const m = this.deps.play(ref, 'base');
-      if (m) this.loops.push(m.handle);
+      if (!m) continue;
+      m.handle.setWeight(0);
+      this.loops.push({ key, handle: m.handle, from: 0, to: 1, start: null, weight: 0 });
     }
   }
 
-  private stopLoops() {
-    for (const l of this.loops) l.dispose();
-    this.loops = [];
+  /** Fade the running loops out from wherever they are (except those in `keep`); disposed once silent. */
+  private stopLoops(keep: Set<string>) {
+    for (const l of this.loops) {
+      if (l.to === 0 || keep.has(l.key)) continue;
+      l.from = l.weight;
+      l.to = 0;
+      l.start = null;
+    }
+  }
+
+  private rampLoops(now: number) {
+    for (const l of [...this.loops]) {
+      l.start ??= now;
+      const p = Math.min(1, (now - l.start) / LOOP_FADE_MS);
+      l.weight = l.from + (l.to - l.from) * smooth(p);
+      l.handle.setWeight(l.weight);
+      if (p >= 1 && l.to === 0) {
+        l.handle.dispose();
+        this.loops.splice(this.loops.indexOf(l), 1);
+      }
+    }
   }
 
   private cancelFlow() {
@@ -198,6 +242,7 @@ export class Appearance {
   }
 
   tick(now: number): ShownLayer[] {
+    this.rampLoops(now);
     if (!this.shown) return [];
     const res = this.shown.pb.tick(now);
     const clipId = this.shown.target.clipId;
@@ -246,7 +291,8 @@ export class Appearance {
 
   dispose() {
     this.cancelFlow();
-    this.stopLoops();
+    for (const l of this.loops) l.handle.dispose();
+    this.loops = [];
     this.shown = null;
     this.fade = null;
     this.target = null;

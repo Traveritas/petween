@@ -46,7 +46,10 @@ function value(v, strength) {
   return v.base + v.amount * (v.parameter === 'strength' ? strength : 1);
 }
 
-/** v0 AnimationDefinition → v1 keyframes motion. pose-swap → 'swap' marker (timing only, docs/03 §4). */
+/**
+ * v0 AnimationDefinition → v1 keyframes motion. v0's pose-swap timing is dropped on purpose: v1
+ * packs switch the picture first and let the enter motion play as a reaction (docs/03 §4).
+ */
 function toKeyframes(def, strength, durationMs) {
   const dur = durationMs ?? def.durationMs;
   const tracks = {};
@@ -61,9 +64,7 @@ function toKeyframes(def, strength, durationMs) {
     }));
     tracks[prop] = keys;
   }
-  const markers = {};
-  for (const e of def.events ?? []) if (e.type === 'pose-swap') markers[Math.round(e.at * dur)] = 'swap';
-  return { type: 'keyframes', tracks, ...(Object.keys(markers).length ? { markers } : {}), durationMs: dur };
+  return { type: 'keyframes', tracks, durationMs: dur };
 }
 
 // ---------- conversion ----------

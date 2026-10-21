@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ClipDef, MotionRef, StateAppearance } from '../api/types';
-import { Appearance, type AppearanceDeps, type Target } from './appearance';
+import { Appearance, LOOP_FADE_MS, type AppearanceDeps, type Target } from './appearance';
 import { keyframes, sine } from './motion/builtin';
 import { MotionStack } from './motion/stack';
 
@@ -102,5 +102,41 @@ describe('Appearance switch timing (docs/03 §4)', () => {
     h.ap.set(st('active', 'type', a), 400);
     h.step(410);
     expect(h.started).toEqual(['transition:pop']);
+  });
+});
+
+describe('Loop motions fade instead of snapping', () => {
+  const weights = (h: ReturnType<typeof harness>) => h.stack.describe().filter((m) => m.layer === 'base').map((m) => Math.round(m.weight * 100) / 100);
+
+  it('fades the old loop out and the new one in', () => {
+    const h = harness({ a: LOOP, b: { type: 'sine', property: 'rotate' } });
+    h.ap.set(st('idle', 'sit', { clips: ['sit'], loop: ['a'] }), 0);
+    h.step(0);
+    h.step(LOOP_FADE_MS);
+    expect(weights(h)).toEqual([1]);
+
+    h.ap.set(st('active', 'type', { clips: ['type'], loop: ['b'] }), 1000);
+    h.step(1000); // ramps start: old at 1, new at 0
+    expect(weights(h)).toEqual([1, 0]);
+    h.step(1000 + LOOP_FADE_MS / 2);
+    const [out, inn] = weights(h);
+    expect(out).toBeGreaterThan(0);
+    expect(out).toBeLessThan(1);
+    expect(inn).toBeGreaterThan(0);
+    h.step(1000 + LOOP_FADE_MS);
+    expect(weights(h)).toEqual([1]); // old one disposed
+  });
+
+  it('keeps a loop both states share running, without a restart', () => {
+    const h = harness({ breathe: LOOP, pop: POP });
+    h.ap.set(st('idle', 'sit', { clips: ['sit'], loop: ['breathe'] }), 0);
+    h.step(0);
+    h.step(LOOP_FADE_MS);
+    h.ap.set(st('success', 'happy', { clips: ['happy'], loop: ['breathe'], enter: 'pop' }), 1000);
+    for (let t = 1000; t <= 1400; t += 50) {
+      h.step(t);
+      expect(weights(h)).toEqual([1]);
+    }
+    expect(h.started.filter((s) => s === 'base:breathe')).toHaveLength(1);
   });
 });

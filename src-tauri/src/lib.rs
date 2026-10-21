@@ -2,6 +2,7 @@
 //! No pet logic and no agent formats live here.
 
 mod caps;
+mod cli;
 mod forward;
 mod hook;
 mod log;
@@ -60,6 +61,11 @@ impl Paths {
 /// Entry for `petween --hook …` (see forward.rs).
 pub fn forward_hook(args: &[String]) {
     forward::run(args);
+}
+
+/// Entry for `petween --pack …` (see cli.rs); returns the process exit code.
+pub fn pack_cli(args: &[String]) -> i32 {
+    cli::run(args)
 }
 
 pub type HostState<'a> = tauri::State<'a, Arc<Host>>;
@@ -186,6 +192,7 @@ pub fn run() {
             stages::set_hit,
             hook::hook_port,
             hook::hook_command,
+            hook::pack_cli_reply,
             caps::fs_read_text,
             caps::fs_read_tail,
             caps::fs_write_text,

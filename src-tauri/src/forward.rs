@@ -15,7 +15,7 @@ use std::time::Duration;
 const IDENTIFIER: &str = "com.petween.app";
 const MAX_BODY: u64 = 4 * 1024 * 1024;
 
-fn port_file() -> Option<PathBuf> {
+pub(crate) fn port_file() -> Option<PathBuf> {
     #[cfg(windows)]
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
     #[cfg(target_os = "macos")]

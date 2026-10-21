@@ -48,6 +48,7 @@ pub fn hook_command(connector_id: String, query: Option<String>) -> Result<HookC
 pub fn spawn_server(app: AppHandle, host: Arc<Host>) {
     use axum::{body::Bytes, extract::{Path, RawQuery}, http::HeaderMap, routing::post, Router};
 
+    let app_for_pack = app.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("tokio");
         rt.block_on(async move {
@@ -81,10 +82,58 @@ pub fn spawn_server(app: AppHandle, host: Arc<Host>) {
                     "ok"
                 }
             };
-            let router = Router::new().route("/hook/{connector}", post(handler));
+            let pack_app = app_for_pack.clone();
+            let pack = move |body: Bytes| {
+                let app = pack_app.clone();
+                async move { relay_pack(&app, body).await }
+            };
+            let router = Router::new().route("/hook/{connector}", post(handler)).route("/pack", post(pack));
             if let Err(e) = axum::serve(listener, router).await {
                 host.log.write(&format!("hook server stopped: {e}"));
             }
         });
     });
+}
+
+// ---------- `petween --pack` relay (cli.rs) ----------
+// The host only relays: the kernel does the pack work and answers through `pack_cli_reply`.
+
+static PACK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn pack_waiters() -> &'static std::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<(bool, String)>>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<(bool, String)>>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+#[derive(Serialize, Clone)]
+struct PackCall {
+    id: u64,
+    request: serde_json::Value,
+}
+
+async fn relay_pack(app: &AppHandle, body: axum::body::Bytes) -> (axum::http::StatusCode, String) {
+    use axum::http::StatusCode;
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return (StatusCode::BAD_REQUEST, r#"{"ok":false,"error":"bad request"}"#.into());
+    };
+    let id = PACK_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    pack_waiters().lock().unwrap().insert(id, tx);
+    let _ = app.emit_to(crate::stages::KERNEL_STAGE, "pack-cli", PackCall { id, request });
+    match tokio::time::timeout(std::time::Duration::from_secs(290), rx).await {
+        Ok(Ok((true, json))) => (StatusCode::OK, json),
+        Ok(Ok((false, json))) => (StatusCode::UNPROCESSABLE_ENTITY, json),
+        _ => {
+            pack_waiters().lock().unwrap().remove(&id);
+            (StatusCode::GATEWAY_TIMEOUT, r#"{"ok":false,"error":"内核没有回应"}"#.into())
+        }
+    }
+}
+
+/// The kernel's answer to a `pack-cli` event.
+#[tauri::command]
+pub fn pack_cli_reply(id: u64, ok: bool, json: String) {
+    if let Some(tx) = pack_waiters().lock().unwrap().remove(&id) {
+        let _ = tx.send((ok, json));
+    }
 }

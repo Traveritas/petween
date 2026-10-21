@@ -57,6 +57,11 @@ export async function copyPack(from: OpenPack, id: string, name: string): Promis
   return { pack, baseUrl: userBase(id), builtin: false };
 }
 
+/** Where exports go: the user's Downloads folder (created if missing). */
+export async function exportPath(fileName: string) {
+  return joinPath((await P()).home, 'Downloads', fileName);
+}
+
 export async function openFolder(id: string) {
   await host.exec('explorer', [(await packDir(id)).replace(/\//g, '\\')]);
 }

@@ -11,7 +11,9 @@ import { call } from '../settings/rpc';
 import '../settings/styles.css';
 import { Mark, Slider, ToastHost, useToast } from '../settings/ui';
 import './editor.css';
-import { copyPack, openFolder, openPack, packExists, savePack, writePackFile, type OpenPack } from './files';
+import { tauriHost } from '../kernel/host';
+import { copyPack, exportPath, openFolder, openPack, packExists, savePack, writePackFile, type OpenPack } from './files';
+import { exportPetpack, unpackPetpack } from './petpack';
 import { importFile } from './import/importer';
 import { ClipPanel, PackPanel, StatePanel, type Edit } from './Inspector';
 import { checkPack, emptyPack, packIdFrom, setClip, stateTree, usedClips, type TreeRow } from './model';
@@ -212,6 +214,43 @@ function App() {
     return () => removeEventListener('keydown', k);
   }, [save]);
 
+  // ---------- .petpack ----------
+
+  const packInput = useRef<HTMLInputElement>(null);
+  const exportCurrent = async () => {
+    if (!draft || !open) return;
+    setBusy('导出中…');
+    try {
+      const bytes = await exportPetpack({ ...open, pack: draft });
+      const out = await exportPath(`${draft.id}.petpack`);
+      await tauriHost.writeBytes(out, bytes);
+      await tauriHost.exec('explorer', [`/select,${out.replace(/\//g, '\\')}`]);
+      toast(`已导出到 ${out}`);
+    } catch (e) {
+      toast(`导出失败：${e instanceof Error ? e.message : e}`, true);
+    } finally {
+      setBusy('');
+    }
+  };
+  const importPack = async (file: File | undefined) => {
+    if (!file) return;
+    if (dirty && !confirm('当前宠物包有改动没保存，确定导入并切换过去？')) return;
+    setBusy('导入宠物包…');
+    try {
+      const u = await unpackPetpack(new Uint8Array(await file.arrayBuffer()), new Set(packs.map((p) => p.id)));
+      for (const f of u.files) await writePackFile(u.pack.id, f.path, f.data);
+      await savePack(u.pack);
+      await refreshPacks();
+      await load(u.pack.id, false, true);
+      const notes = [...(u.renamedFrom ? [`id ${u.renamedFrom} 已被占用，改为 ${u.pack.id}`] : []), ...u.warnings];
+      toast(notes.length ? `已导入。${notes.join('；')}` : `已导入「${u.pack.name}」`, notes.length > 0);
+    } catch (e) {
+      toast(`导入失败：${e instanceof Error ? e.message : e}`, true);
+    } finally {
+      setBusy('');
+    }
+  };
+
   const newPack = async () => {
     if (dirty && !confirm('当前宠物包有改动没保存，确定新建？')) return;
     const name = prompt('新宠物包叫什么名字？')?.trim();
@@ -314,6 +353,13 @@ function App() {
         <button className="btn small" onClick={() => void duplicate()}>
           复制一份
         </button>
+        <button className="btn small" onClick={() => packInput.current?.click()}>
+          导入 .petpack
+        </button>
+        <button className="btn small" onClick={() => void exportCurrent()}>
+          导出
+        </button>
+        <input ref={packInput} type="file" accept=".petpack,.zip" hidden onChange={(e) => (void importPack(e.target.files?.[0]), (e.target.value = ''))} />
         {!readOnly && (
           <button className="btn small quiet" onClick={() => void openFolder(draft.id)}>
             打开文件夹

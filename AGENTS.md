@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-M0、M1、M2 已完成（M1 的真实 agent 接入待作者验收；roamer 暂缓，作者以后重做），下一步 M3，见 [docs/09](docs/09-roadmap.md)。
+M0、M1（含气泡补完）、M2、M3a 已完成，待作者实测的见 [docs/09](docs/09-roadmap.md)；roamer 暂缓（作者以后重做）。下一步 M3b 动作编辑。宠物包命令行与给 agent 的指南见 [docs/10](docs/10-agent-guide.md)。
 
 ## 先读文档
 

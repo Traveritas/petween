@@ -12,6 +12,7 @@ import { createContext, type KernelServices } from './context';
 import { Emitter } from './emitter';
 import { joinPath, PACK_BASE, PLUGIN_BASE, type Host, type HostPaths, type RemoteInput } from './host';
 import { validatePack } from './pack/resolve';
+import { runPackCli, type Admin as PackAdmin } from './pack-cli';
 import { Pet, petView, type LoadedPack } from './pet';
 import { PluginManager, type PluginRecord } from './plugins';
 import { Registries } from './registry';
@@ -500,6 +501,16 @@ export class Kernel {
       void this.host.emitTo(call.from, 'admin-result', res);
     });
     await h.on('remote-input', (r) => this.onRemote(r));
+    await h.on('pack-cli', async ({ id, request }) => {
+      const admin: PackAdmin = async (method, params) => {
+        const r = await this.admin.handle({ id: 0, from: 'cli', method, params });
+        if (!r.ok) throw new Error(r.error ?? '失败');
+        return r.value as never;
+      };
+      const res = await runPackCli(Array.isArray(request?.args) ? request.args.map(String) : [], String(request?.cwd ?? ''), admin);
+      this.log(res.ok ? 'info' : 'warn', `pack cli ${(request?.args ?? []).join(' ')} → ${res.ok ? 'ok' : res.error}`);
+      void this.host.packCliReply(id, res.ok, JSON.stringify(res, null, 2));
+    });
     await h.on('editor-closed', () => {
       for (const id of new Set([...this.trying.keys(), ...this.forced.keys()])) void this.tryEnd(id);
     });

@@ -7,5 +7,9 @@ fn main() {
         petween_lib::forward_hook(&args[1..]);
         return;
     }
+    // Pack tooling for scripts and agents (cli.rs): talks to the running app, prints JSON.
+    if args.first().map(String::as_str) == Some("--pack") {
+        std::process::exit(petween_lib::pack_cli(&args[1..]));
+    }
     petween_lib::run()
 }

@@ -44,6 +44,7 @@ export interface HostEvents {
   'second-instance': null;
   'remote-input': RemoteInput;
   'editor-closed': null;
+  'pack-cli': { id: number; request: { args: string[]; cwd: string } };
   'admin-call': import('../shared/admin').AdminCall;
   frame: import('../render/dom2d').RenderPet[];
 }
@@ -58,7 +59,7 @@ export interface Host {
   readText(path: string): Promise<string>;
   readTail(path: string, maxBytes: number): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
-  readBytes(path: string): Promise<Uint8Array>;
+  readBytes(path: string): Promise<Uint8Array<ArrayBuffer>>;
   /** Atomic, like writeText. */
   writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   list(path: string): Promise<{ name: string; isDir: boolean }[]>;
@@ -69,6 +70,8 @@ export interface Host {
   openExternal(url: string): Promise<void>;
   traySetItems(items: TrayItemWire[]): Promise<void>;
   quit(): Promise<void>;
+  /** Answer a `petween --pack` call (pack-cli.ts). */
+  packCliReply(id: number, ok: boolean, json: string): Promise<void>;
   on<K extends keyof HostEvents>(event: K, fn: (payload: HostEvents[K]) => void): Promise<() => void>;
   emitTo(label: string, event: string, payload: unknown): Promise<void>;
 }
@@ -101,6 +104,7 @@ export const tauriHost: Host = {
   openExternal: (url) => invoke('open_external', { url }),
   traySetItems: (items) => invoke('tray_set_items', { items }),
   quit: () => invoke('quit'),
+  packCliReply: (id, ok, json) => invoke('pack_cli_reply', { id, ok, json }),
   on: (event, fn) => listen(event, (e) => fn(e.payload as never)),
   emitTo: (label, event, payload) => emitTo(label, event, payload),
 };

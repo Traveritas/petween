@@ -8,6 +8,10 @@ import { Scope } from './scope';
 export interface PluginRecord {
   manifest: PluginManifest;
   builtin: boolean;
+  /** Third-party plugins: URL of the plugin folder, ending in `/`. */
+  baseUrl?: string;
+  /** URL of the plugin's own settings page module (manifest `settings`). */
+  settingsPage?: string;
   load(): Promise<PluginModule>;
   status: 'inactive' | 'active' | 'failed';
   error?: string;

@@ -58,6 +58,7 @@ export class Kernel {
   private traySync = false;
   private bus = new Map<string, Emitter<unknown>>();
   private services = new Map<string, { owner: string; impl: unknown }>();
+  private pageHandlers = new Map<string, (params: unknown) => unknown>();
 
   private running = false;
   private ambientTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,6 +125,7 @@ export class Kernel {
       log: this.log,
       bus: this.bus,
       services: this.services,
+      pageHandlers: this.pageHandlers,
     };
     this.plugins = new PluginManager((rec, scope) => createContext(rec, scope, services), this.log);
 
@@ -152,6 +154,7 @@ export class Kernel {
       addPet: async (pack, at, id, scale) => void (await this.spawnPet(pack, at, id, scale)),
       removePet: (id) => this.removePet(id),
       saveInstances: () => this.saveInstances(),
+      pageHandlers: this.pageHandlers,
       version: APP_VERSION,
     });
     await this.restoreInstances();
@@ -210,10 +213,13 @@ export class Kernel {
       const manifest = JSON.parse(await this.host.readText(file)) as PluginManifest;
       if (manifest.id !== dir) this.log('warn', `plugin folder "${dir}" holds id "${manifest.id}"`);
       const main = manifest.main ?? 'main.js';
+      const base = `${PLUGIN_BASE}/${encodeURIComponent(dir)}/`;
       return {
         manifest,
         builtin: false,
         status: 'inactive',
+        baseUrl: base,
+        settingsPage: manifest.settings ? base + manifest.settings : undefined,
         load: async () => {
           const url = `${PLUGIN_BASE}/${encodeURIComponent(dir)}/${main}?v=${Date.now()}`;
           const mod = await import(/* @vite-ignore */ url);

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { PluginInfo } from '../../shared/admin';
+import { PluginPage } from '../PluginPage';
 import { call } from '../rpc';
 import { Field, Toggle, useAction, useLoad } from '../ui';
 
@@ -9,13 +10,17 @@ const PROVIDES: Record<string, string> = { connector: '接入', brain: '大脑',
 function Settings({ p }: { p: PluginInfo }) {
   const values = useLoad(() => call('settings.get', { plugin: p.id }), [p.id]);
   const { run } = useAction();
-  if (!values.data) return null;
   return (
-    <div className="fields">
-      {p.settings.map((s) => (
-        <Field key={s.key} spec={s} value={values.data![s.key]} onChange={(v) => void run(() => call('settings.set', { plugin: p.id, key: s.key, value: v })).then(values.reload)} />
-      ))}
-    </div>
+    <>
+      {p.settingsPage && <PluginPage p={p} />}
+      {values.data && p.settings.length > 0 && (
+        <div className="fields">
+          {p.settings.map((s) => (
+            <Field key={s.key} spec={s} value={values.data![s.key]} onChange={(v) => void run(() => call('settings.set', { plugin: p.id, key: s.key, value: v })).then(values.reload)} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -55,7 +60,7 @@ export function Plugins() {
                 </div>
                 {p.error && <div className="err">{p.error}</div>}
               </div>
-              {p.settings.length > 0 && (
+              {(p.settings.length > 0 || p.settingsPage) && (
                 <button className="btn small" onClick={() => setOpen(open === p.id ? null : p.id)} aria-expanded={open === p.id}>
                   {open === p.id ? '收起' : '设置'}
                 </button>

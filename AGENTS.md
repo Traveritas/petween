@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-M0、M1 已完成（M1 的真实 agent 接入待作者验收），下一步 M2，见 [docs/09](docs/09-roadmap.md)。
+M0、M1、M2 已完成（M1 的真实 agent 接入待作者验收；roamer 暂缓，作者以后重做），下一步 M3，见 [docs/09](docs/09-roadmap.md)。
 
 ## 先读文档
 

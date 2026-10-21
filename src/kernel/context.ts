@@ -40,7 +40,11 @@ export interface KernelServices {
   log(level: 'info' | 'warn' | 'error', line: string): void;
   bus: Map<string, Emitter<unknown>>;
   services: Map<string, { owner: string; impl: unknown }>;
+  /** Settings-page request handlers, keyed by pageHandlerKey(plugin, method). */
+  pageHandlers: Map<string, (params: unknown) => unknown>;
 }
+
+export const pageHandlerKey = (plugin: string, method: string) => `${plugin}\n${method}`;
 
 /** Built-in names without a plugin prefix are reserved for the `core` plugin. */
 const CORE = 'core';
@@ -151,6 +155,17 @@ export function createContext(rec: PluginRecord, scope: Scope, k: KernelServices
         }));
       },
       use: <T,>(name: string) => k.services.get(name)?.impl as T | undefined,
+    },
+
+    settingsPage: {
+      handle(method, fn) {
+        const key = pageHandlerKey(id, method);
+        if (k.pageHandlers.has(key)) throw new Error(`settings page method "${method}" already handled`);
+        k.pageHandlers.set(key, fn);
+        return t(toDisposable(() => {
+          if (k.pageHandlers.get(key) === fn) k.pageHandlers.delete(key);
+        }));
+      },
     },
 
     setTimeout(fn, ms) {

@@ -14,7 +14,7 @@
 plugins/roamer/
 ├─ plugin.json
 ├─ main.js          运行时入口（ESM），跑在舞台 webview
-├─ settings.js      （可选）设置页入口，跑在设置 webview
+├─ settings.js      （可选）自带设置页，跑在设置窗口（§8）
 ├─ assets/          （可选）插件自带的图、片段
 └─ bin/             （可选）L4 sidecar 可执行文件
 ```
@@ -161,8 +161,17 @@ interface PetHandle {
 | `bubble` | L3 | 气泡渲染（`bubble` 通道的消费者） |
 | `physics` | L2 | 拖拽、抛掷、重力、撞墙回弹、贴地滑行（撞墙/滑行表情走 `physics.hit` / `physics.slide` 状态键） |
 | `per-session` | L4（binding） | 每个会话生成一只临时宠物，会话结束后离开 |
-| `roamer` | L2 + L3 | 自主漫游、小动作、便签 |
+| `roamer` | L2 + L3 | 自主漫游、小动作、便签（**暂缓**：作者打算以后重新设计，见 09） |
 | `stats-hud` | L1 + L3 | 统计面板 |
+| `particles` | L3 | 粒子特效（撒花、星星、闪光、爱心、落樱、烟花）。触发方式见下 |
+
+**`particles` 的三种触发方式**：
+
+1. **进入状态**：设置里的「成功时 / 出错时」是用户默认值；宠物包可以在 `plugins.particles.onState` 里加、改或关掉（`null`），宠物包优先（04 §5）。键按点号前缀匹配，最长者胜（`success` 覆盖 `success.big`）。粒子等新画面真正换上时才放（最多等 1.5 秒），所以和换脸同步。
+2. **片段标记**：片段的 `markers` 里名字为 `particle:<特效>` 的标记，播到那一帧就放。
+3. **其他插件**：`ctx.services.use('particles')` 得到 `{ burst(宠物或坐标, 特效, { amount? }), define(id, spec), effects() }`。`define` 加的特效 id 用 `<插件 id>:<名字>`，插件停用时自己 dispose。
+
+系统开了「减少动态效果」时不放粒子。
 
 注意：`bubble` 通道由内核仲裁（谁的气泡先显示），但气泡**长什么样**由 `bubble` 插件画。第三方可以替换成自己的气泡样式。
 
@@ -193,8 +202,9 @@ export default definePlugin({
 - **宠物**：`pets.add({ pack, position?, scale?, persist? })` / `pets.remove(id)`；`persist: false`（缺省）的宠物不存盘，插件停用时自动移除。`pet.opaqueBounds` = 当前帧可见像素的包围盒（碰撞、定位气泡用）。
 - **桌面**：`desktop.screens()` 返回各显示器工作区（全局坐标，第一个是主屏），`desktop.on('change')`。
 - **文件**：`host.fs.readTail(path, maxBytes)` 读大文件末尾（对话记录）。
-- **设置页**：manifest 的 `contributes.settings` 声明字段（boolean / number / string / select / list，可带 min/max/step/unit/description；`scale` 让存毫秒、显示秒），设置窗口自动生成表单，值存在 `ctx.settings` 对应的 key 下。自定义设置页（`settings.js`）以后再加。
+- **设置页**：manifest 的 `contributes.settings` 声明字段（boolean / number / string / select / list，可带 min/max/step/unit/description；`scale` 让存毫秒、显示秒），设置窗口自动生成表单，值存在 `ctx.settings` 对应的 key 下。
+- **自带设置页**（M2）：manifest 的 `settings` 指向插件文件夹里的一个 ESM 文件，导出 `mount(el, api)`（可返回清理函数）。设置窗口在该插件的「设置」展开处把它挂进一个 shadow root：插件的样式漏不出去，设置窗口的样式表复制进去，所以 `btn` / `input` / `field` / `card` 等类和 `--text` / `--accent` 等颜色变量可以直接用。`api` 提供 `settings.all()` / `settings.set(key, value)`（就是运行中插件的 `ctx.settings`）、`call(method, params)`（请求运行中的插件，插件那边用 `ctx.settingsPage.handle(method, fn)` 应答；插件没在运行时报错）、`toast(msg, bad?)`、`baseUrl`。每次展开都重新加载文件，改了不用重启。同时声明了 `contributes.settings` 的话，自动表单排在自带页下面。设置是改了就生效，没有「取消 / 应用」。目前只有第三方插件能带；示例见 `examples/plugins/state-tester`。需要大窗口的界面（如编辑器）以后用 `stage.openWindow`。
 - **样式**：插件可以往舞台层里插 `<style>`（宿主关闭了 Tauri 对 `style-src` 的 CSP 改写，否则运行时注入的样式会被浏览器静默拦截）。
 - **clip 通道直接给片段**时，内联 `ClipDef.source` 用绝对 URL（插件自带资源走 `http://petplugin.localhost/<插件目录>/…`）。
 
-**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件的 `settings.js` 自定义设置页、插件声明的状态键在设置页展示。
+**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件声明的状态键在设置页展示。

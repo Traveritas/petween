@@ -4,6 +4,7 @@
 import type { ClipIntent, Point } from '../api/types';
 import type { AdminApi, AdminCall, AdminResult, InspectorPet, PackInfo } from '../shared/admin';
 import type { AgentHub } from './agent';
+import { pageHandlerKey } from './context';
 import type { Host, HostPaths } from './host';
 import { joinPath, PACK_BASE } from './host';
 import type { Pet } from './pet';
@@ -24,6 +25,7 @@ export interface AdminDeps {
   addPet(pack: string, at?: Point, id?: string, scale?: number): Promise<void>;
   removePet(id: string): void;
   saveInstances(): void;
+  pageHandlers: Map<string, (params: unknown) => unknown>;
   version: string;
 }
 
@@ -79,6 +81,8 @@ export class Admin {
           permissions: r.manifest.permissions ?? [],
           provides: this.registryOwners(r.manifest.id),
           settings: r.manifest.contributes?.settings ?? [],
+          settingsPage: r.settingsPage,
+          baseUrl: r.baseUrl,
           manifest: r.manifest,
         }))
         .sort((a, b) => Number(b.builtin) - Number(a.builtin) || a.id.localeCompare(b.id));
@@ -113,6 +117,14 @@ export class Admin {
 
     'settings.get': ({ plugin }) => this.d.store(plugin, 'settings').all(),
     'settings.set': ({ plugin, key, value }) => this.d.store(plugin, 'settings').set(key, value),
+    'plugins.call': async ({ plugin, method, params }) => {
+      const fn = this.d.pageHandlers.get(pageHandlerKey(plugin, method));
+      if (!fn) {
+        const running = this.d.plugins.records.get(plugin)?.status === 'active';
+        throw new Error(running ? `插件 ${plugin} 没有处理 ${method}` : `插件 ${plugin} 没有在运行`);
+      }
+      return fn(params);
+    },
 
     'connectors.list': async () => {
       const sessions = this.d.agent.list();

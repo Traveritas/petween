@@ -97,9 +97,12 @@ roamer.doze         → roamer         → idle
 
 ```jsonc
 "plugins": {
-  "roamer": { "walkSpeed": 0.6 }
+  "roamer": { "walkSpeed": 0.6 },
+  "particles": { "onState": { "success": "heart-burst", "active.edit": "sparkle", "error": null } }
 }
 ```
+
+（`particles` 的规则见 06 §6。）
 
 内核只校验大小和 JSON 合法性，**内容由对应插件解释**。插件未安装时原样保留，不丢弃。
 

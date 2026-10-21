@@ -427,6 +427,11 @@ export interface PluginContext {
   bus: { emit(topic: string, payload: unknown): void; on(topic: string, fn: (payload: unknown) => void): Disposable };
   services: { provide(name: string, impl: unknown): Disposable; use<T>(name: string): T | undefined };
 
+  /** Requests from this plugin's own settings page (manifest `settings`, `SettingsPageApi.call`). */
+  settingsPage: {
+    handle(method: string, fn: (params: unknown) => unknown): Disposable;
+  };
+
   setTimeout(fn: () => void, ms: number): Disposable;
   setInterval(fn: () => void, ms: number): Disposable;
   /** Called every rendered frame with (now, dt) in ms. */
@@ -455,6 +460,7 @@ export interface PluginManifest {
   version: string;
   apiVersion: number;
   main?: string;
+  /** Own settings page: an ESM file exporting `mount` (SettingsPageModule). Third-party plugins only for now. */
   settings?: string;
   dependencies?: Record<string, string>;
   permissions?: string[];
@@ -465,6 +471,31 @@ export interface PluginManifest {
     /** Declarative settings page: the settings window renders these fields. */
     settings?: SettingSpec[];
   };
+}
+
+/**
+ * A plugin's own settings page (manifest `settings`). It runs in the settings window, inside a
+ * shadow root under the plugin's entry. The settings window's stylesheet is copied in, so its
+ * classes (`btn`, `input`, `field`, `card`…) and colour tokens (`--text`, `--accent`…) work there.
+ */
+export interface SettingsPageModule {
+  /** Draw into `el`. Return a cleanup function if the page leaves timers or listeners behind. */
+  mount(el: HTMLElement, api: SettingsPageApi): void | (() => void) | Promise<void | (() => void)>;
+}
+
+export interface SettingsPageApi {
+  readonly pluginId: string;
+  /** URL of the plugin folder, ending in `/` (for the page's own pictures). */
+  readonly baseUrl: string;
+  /** The same values the running plugin sees as `ctx.settings`. */
+  settings: {
+    all(): Promise<Record<string, unknown>>;
+    /** `undefined` deletes the key. */
+    set(key: string, value: unknown): Promise<void>;
+  };
+  /** Ask the running plugin (`ctx.settingsPage.handle`). Fails when the plugin is not running. */
+  call<T = unknown>(method: string, params?: unknown): Promise<T>;
+  toast(message: string, bad?: boolean): void;
 }
 
 export interface PluginModule {

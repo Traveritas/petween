@@ -138,6 +138,8 @@ select:focus, .input:focus, .btn:focus-visible, .toggle:focus-visible, .nav:focu
 
 /* ---------- plugin settings form ---------- */
 .fields { border-top: 1px solid var(--line); padding: 4px 16px 10px 16px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); border-radius: 0 0 var(--radius) var(--radius); }
+.plugin-page { border-top: 1px solid var(--line); padding: 12px 16px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); }
+.plugin-page:last-child { border-radius: 0 0 var(--radius) var(--radius); }
 .field { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
 .field + .field { border-top: 1px dashed var(--line); }
 .field .label { flex: 1; min-width: 0; }

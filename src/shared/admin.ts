@@ -15,6 +15,9 @@ export interface PluginInfo {
   /** Registered extension points owned by this plugin (connectors, brains…), for the "替换了默认大脑" notes. */
   provides: string[];
   settings: SettingSpec[];
+  /** URL of the plugin's own settings page module, if it has one. */
+  settingsPage?: string;
+  baseUrl?: string;
   manifest: PluginManifest;
 }
 
@@ -79,6 +82,8 @@ export interface AdminApi {
   'plugins.setEnabled'(p: { id: string; enabled: boolean }): void;
   'settings.get'(p: { plugin: string }): Record<string, unknown>;
   'settings.set'(p: { plugin: string; key: string; value: unknown }): void;
+  /** A plugin's settings page asking its running plugin (ctx.settingsPage.handle). */
+  'plugins.call'(p: { plugin: string; method: string; params?: unknown }): unknown;
   'connectors.list'(): ConnectorInfo[];
   'connectors.install'(p: { id: string }): void;
   'connectors.uninstall'(p: { id: string }): void;

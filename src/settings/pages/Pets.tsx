@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 import { call } from '../rpc';
 import { Slider, Thumb, useAction, useLoad } from '../ui';
@@ -78,10 +79,16 @@ export function Pets() {
               {k.builtin ? '内置' : k.creators.join('、') || '未署名'}
               {k.license && ` · ${k.license}`}
             </div>
+            <button className="btn small" onClick={() => void invoke('open_editor', { pack: k.id })}>
+              {k.builtin ? '查看' : '编辑'}
+            </button>
           </div>
         ))}
       </div>
       <div className="toolbar">
+        <button className="btn primary" onClick={() => void invoke('open_editor', { pack: null })}>
+          宠物编辑器
+        </button>
         <button className="btn" onClick={() => void run(() => call('packs.openFolder'))}>
           打开宠物包文件夹
         </button>

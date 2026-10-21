@@ -13,7 +13,7 @@ export const manifest: PluginManifest = {
 
 const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 
-const TRANSITIONS: TransitionTypeDef[] = [
+export const BUILTIN_TRANSITIONS: TransitionTypeDef[] = [
   { id: 'cut', plan: () => ({ crossfadeMs: 0 }) },
   { id: 'crossfade', plan: (p) => ({ crossfadeMs: Math.max(0, num(p.durationMs, 200)) }) },
   { id: 'onMarker', plan: (p) => ({ crossfadeMs: 0, waitFor: { marker: typeof p.marker === 'string' ? p.marker : 'swap' } }) },
@@ -23,7 +23,7 @@ const TRANSITIONS: TransitionTypeDef[] = [
 export default definePlugin({
   activate(ctx) {
     for (const m of BUILTIN_MOTION_TYPES) ctx.register.motionType(m);
-    for (const t of TRANSITIONS) ctx.register.transitionType(t);
+    for (const t of BUILTIN_TRANSITIONS) ctx.register.transitionType(t);
     // docs/05 §5: every session drives the main pet (the first one).
     ctx.register.bindingRule({ id: 'single', route: (_e, pets) => pets.slice(0, 1) });
   },

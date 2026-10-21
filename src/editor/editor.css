@@ -1,0 +1,94 @@
+/* Pet pack editor. Shares the settings window's tokens and controls (styles.css); this file only lays
+   out the three panes and the editor-specific pieces. */
+
+.ed { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+
+/* ---------- top bar ---------- */
+.ed-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--side); }
+.ed-top .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ed-top .title b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ed-top .grow { flex: 1; }
+.ed-top select { max-width: 220px; }
+.dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); display: inline-block; }
+
+/* ---------- panes ---------- */
+.ed-main { display: grid; grid-template-columns: 270px 1fr 340px; min-height: 0; }
+.pane { min-height: 0; overflow: auto; }
+.pane-left { border-right: 1px solid var(--line); display: grid; grid-template-rows: 1fr auto; overflow: hidden; }
+.pane-right { border-left: 1px solid var(--line); background: var(--surface); }
+.pane h3 { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; margin: 0; padding: 12px 14px 6px; display: flex; align-items: center; gap: 8px; }
+.pane h3 .grow { flex: 1; }
+
+/* state tree */
+.tree { overflow: auto; padding: 0 6px 10px; }
+.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; text-align: left; padding: 5px 8px; border-radius: 7px; cursor: pointer; color: var(--text); }
+.tree-row:hover { background: rgba(127, 108, 166, 0.07); }
+.tree-row.on { background: var(--accent-soft); }
+.tree-row .key { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.tree-row .lbl { color: var(--muted); font-size: 12px; }
+.tree-row .fb { margin-left: auto; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.tree-row .mark { width: 7px; height: 7px; border-radius: 50%; flex: none; border: 1.5px solid var(--faint); }
+.tree-row .mark.own { background: var(--accent); border-color: var(--accent); }
+.tree-add { display: flex; gap: 6px; padding: 6px 8px 0; }
+.tree-add .input { flex: 1; font-size: 12px; }
+
+/* clip library */
+.lib { border-top: 1px solid var(--line); height: 42vh; display: flex; flex-direction: column; min-height: 220px; }
+.lib-grid { overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; padding: 0 10px 10px; }
+.lib-item { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 4px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.lib-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.lib-item .name { font-size: 11px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-item.unused .name { font-style: italic; }
+.lib.drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.lib-opts { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; font-size: 12px; color: var(--muted); }
+.lib-empty { padding: 10px 14px 14px; color: var(--muted); font-size: 12.5px; }
+
+.cthumb { width: 56px; height: 56px; background-repeat: no-repeat; background-position: center; background-size: contain; border-radius: 6px; flex: none; }
+.cthumb.sheet { background-position: 0 0; }
+.cthumb.big { width: 140px; height: 140px; }
+.checker { background-color: #e9e5ee; background-image: linear-gradient(45deg, rgba(0,0,0,.05) 25%, transparent 25%), linear-gradient(-45deg, rgba(0,0,0,.05) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(0,0,0,.05) 75%), linear-gradient(-45deg, transparent 75%, rgba(0,0,0,.05) 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+
+/* ---------- preview ---------- */
+.pane-center { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; background: var(--bg); }
+.pv-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.pv-bar .label { font-weight: 600; }
+.pv-bar .grow { flex: 1; }
+.pv-stage { position: relative; overflow: hidden; min-height: 0; }
+.pv-stage .pets { position: absolute; inset: 0; }
+.pv-stage .pets .pet { position: absolute; left: 0; top: 0; }
+.pv-stage .pets .clip { position: absolute; left: 0; top: 0; transform-origin: 0 0; background-repeat: no-repeat; }
+.pv-stage .ground { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); pointer-events: none; }
+.pv-stage .feet { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; pointer-events: none; }
+.pv-stage .feet::before, .pv-stage .feet::after { content: ""; position: absolute; background: var(--bad); }
+.pv-stage .feet::before { left: 6px; top: 0; width: 2px; height: 14px; }
+.pv-stage .feet::after { top: 6px; left: 0; height: 2px; width: 14px; }
+.pv-stage.aligning { cursor: move; }
+.pv-hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: var(--surface); padding: 3px 8px; border-radius: 6px; box-shadow: var(--shadow); }
+.pv-foot { padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; min-height: 30px; }
+.issue { display: flex; gap: 6px; align-items: baseline; }
+.issue.error { color: var(--bad); }
+.issue.warn { color: var(--warn); }
+
+/* ---------- inspector ---------- */
+.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.tab { border: 0; background: none; padding: 7px 12px; border-radius: 7px 7px 0 0; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.insp { padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+.insp .head .key { font-family: "Cascadia Mono", Consolas, monospace; font-size: 15px; font-weight: 600; }
+.insp .head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.insp .callout { background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.grp { display: flex; flex-direction: column; gap: 8px; }
+.grp > .t { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; }
+.row2 { display: flex; align-items: center; gap: 8px; }
+.row2 > .l { width: 76px; flex: none; color: var(--muted); font-size: 12.5px; }
+.row2 select, .row2 .input:not(.num) { flex: 1; }
+.chips { display: flex; flex-direction: column; gap: 6px; }
+.chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
+.chip .cthumb { width: 36px; height: 36px; }
+.chip .n { flex: 1; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.check { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; }
+.check.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.danger { color: var(--bad); }
+.welcome { display: grid; place-items: center; height: 100%; }
+.welcome .card { padding: 28px 32px; max-width: 460px; display: flex; flex-direction: column; gap: 12px; }

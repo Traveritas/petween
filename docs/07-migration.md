@@ -42,7 +42,7 @@
 
 - 6 个 pose 槽 → 6 个 `still` 片段（`idle`、`thinking`……）。
 - 状态映射：`idle/waiting/success/error` 同名；`thinking` → `active.thinking`；`working` → `active`。
-- `TransitionConfig` 的预设 → 具名 `keyframes` 动作（直接读 v0 源码里的预设表，`pose-swap` 时刻变成 `swap` 标记）；ambient 的 sway / breathe → `sine`，bounce（随机间隔跳动）近似为 `noise`，在报告里注明。
+- `TransitionConfig` 的预设 → 具名 `keyframes` 动作（直接读 v0 源码里的预设表，`pose-swap` 时刻变成 `swap` 标记）；ambient 的 sway / breathe → `sine`，bounce（随机间隔跳动）→ 同一条 v0 跳动曲线的 `keyframes` + `repeat: { gapMs: [间隔下限, 间隔上限] }`。
 - 图片统一缩到长边 ≤ 512px 的 WebP；v0 按 160px 方框显示，换算进片段的 `scale`。
 - 用户自建动画（`user:*`）→ `keyframes` 动作；带 `pose` 的 pose-swap 事件丢弃并在导入报告里列出。
 - roamer 的 per-action 图片 → `roamer.*` 状态的片段。

@@ -140,6 +140,51 @@ export const keyframes: MotionType = {
       end = Math.max(end, ks[ks.length - 1].t);
     }
     const duration = num(params.durationMs, end);
+    const sample = (t: number, s: number): TransformDelta => {
+      const d: TransformDelta = {};
+      for (const [p, ks] of tracks) {
+        let v: number;
+        if (t <= ks[0].t) v = ks[0].v;
+        else if (t >= ks[ks.length - 1].t) v = ks[ks.length - 1].v;
+        else {
+          let i = 1;
+          while (ks[i].t < t) i++;
+          const a = ks[i - 1], b = ks[i];
+          const f = easing(b.ease)((t - a.t) / Math.max(1e-6, b.t - a.t));
+          v = a.v + (b.v - a.v) * f;
+        }
+        d[p] = restValue(p) + (v - restValue(p)) * s;
+      }
+      return d;
+    };
+
+    const repeat = parseRepeat(params.repeat);
+    if (repeat) {
+      // A repeating keyframe motion is a loop (docs/03 §3.2): every pass is preceded by a gap drawn
+      // from [min, max]; it never ends, carries no markers and goes still under reducedMotion.
+      const r = rng(num(params.seed, Math.floor(Math.random() * 1e9)));
+      const gap = () => repeat.min + (repeat.max - repeat.min) * ((r() + 1) / 2);
+      let cycleStart = 0;
+      let nextGap = gap();
+      const period = () => Math.max(1, nextGap + duration);
+      return {
+        duration: null,
+        evaluate(t, _dt, ctx) {
+          if (t < cycleStart) {
+            cycleStart = 0;
+            nextGap = gap();
+          }
+          while (t >= cycleStart + period()) {
+            cycleStart += period();
+            nextGap = gap();
+          }
+          const s = strengthOf(ctx, 0);
+          if (s === 0) return {};
+          return sample(Math.max(0, t - cycleStart - nextGap), s);
+        },
+      };
+    }
+
     const markers: Record<number, string> = {};
     for (const [ms, name] of Object.entries((params.markers ?? {}) as Record<string, string>)) {
       if (Number.isFinite(Number(ms)) && typeof name === 'string') markers[Number(ms)] = name;
@@ -147,27 +192,20 @@ export const keyframes: MotionType = {
     const source: MotionSource = {
       duration,
       markers,
-      evaluate(t, _dt, ctx) {
-        const s = strengthOf(ctx, 0.3);
-        const d: TransformDelta = {};
-        for (const [p, ks] of tracks) {
-          let v: number;
-          if (t <= ks[0].t) v = ks[0].v;
-          else if (t >= ks[ks.length - 1].t) v = ks[ks.length - 1].v;
-          else {
-            let i = 1;
-            while (ks[i].t < t) i++;
-            const a = ks[i - 1], b = ks[i];
-            const f = easing(b.ease)((t - a.t) / Math.max(1e-6, b.t - a.t));
-            v = a.v + (b.v - a.v) * f;
-          }
-          d[p] = restValue(p) + (v - restValue(p)) * s;
-        }
-        return d;
-      },
+      evaluate: (t, _dt, ctx) => sample(t, strengthOf(ctx, 0.3)),
     };
     return source;
   },
 };
+
+/** `repeat: true` loops back to back; `{ gapMs: n }` / `{ gapMs: [min, max] }` waits a (random) gap before each pass. */
+function parseRepeat(v: unknown): { min: number; max: number } | null {
+  if (v === true) return { min: 0, max: 0 };
+  if (!v || typeof v !== 'object') return null;
+  const g = (v as { gapMs?: unknown }).gapMs;
+  const [a, b] = Array.isArray(g) ? [num(g[0], 0), num(g[1], num(g[0], 0))] : [num(g, 0), num(g, 0)];
+  const min = Math.max(0, Math.min(a, b));
+  return { min, max: Math.max(min, a, b) };
+}
 
 export const BUILTIN_MOTION_TYPES: MotionType[] = [keyframes, spring, noise, sine];

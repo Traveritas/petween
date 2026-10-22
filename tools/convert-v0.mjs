@@ -27,12 +27,17 @@ const MAX_EDGE = 512;
 
 // ---------- v0 preset tables ----------
 
-async function loadPresets() {
+async function loadV0Module(file) {
   const esbuild = await import(pathToFileURL(join(here, '..', 'node_modules', 'esbuild', 'lib', 'main.js')).href);
-  const out = join(tmpdir(), `petween-v0-presets-${process.pid}.mjs`);
-  await esbuild.build({ entryPoints: [join(V0_SRC, 'core', 'transition-presets.ts')], bundle: true, format: 'esm', outfile: out, logLevel: 'error' });
+  const out = join(tmpdir(), `petween-v0-${file.replace(/\W/g, '-')}-${process.pid}.mjs`);
+  await esbuild.build({ entryPoints: [join(V0_SRC, 'core', file)], bundle: true, format: 'esm', outfile: out, logLevel: 'error' });
   const mod = await import(pathToFileURL(out).href);
   rmSync(out);
+  return mod;
+}
+
+async function loadPresets() {
+  const mod = await loadV0Module('transition-presets.ts');
   const byPreset = {};
   for (const d of mod.BUILTIN_TRANSITION_DEFINITIONS) byPreset[d.id.replace(/^builtin:/, '')] = d;
   return byPreset;
@@ -82,7 +87,7 @@ function convertImage(src, dest) {
   return Math.max(w, h);
 }
 
-function convertPet(v0pet, assets, config, presets, report) {
+function convertPet(v0pet, assets, config, presets, bounceDef, report) {
   const id = slug(v0pet.name, `v0-${v0pet.id.replace(/^pet_/, '').slice(0, 6)}`);
   const dir = join(OUT, id);
   mkdirSync(join(dir, 'clips'), { recursive: true });
@@ -135,11 +140,13 @@ function convertPet(v0pet, assets, config, presets, report) {
       loop.push(`sway-${v0key}`);
     }
     if (a.bounce?.enabled) {
-      // v0 bounce is a random-interval hop; the closest loop is noise on y (docs/07).
-      const every = ((a.bounce.intervalMinMs ?? 800) + (a.bounce.intervalMaxMs ?? 1300)) / 2;
-      motions[`bounce-${v0key}`] = { type: 'noise', property: 'y', amplitude: +(4.5 * (a.bounce.strength ?? 0.35)).toFixed(2), frequency: +(1000 / every).toFixed(3) };
+      // v0 bounce is a random-interval hop: the same keyframe curve, repeating with a random gap (docs/07).
+      const b = a.bounce;
+      motions[`bounce-${v0key}`] = {
+        ...toKeyframes(bounceDef, b.strength ?? 0.35, b.durationMs),
+        repeat: { gapMs: [b.intervalMinMs ?? 800, b.intervalMaxMs ?? 1300] },
+      };
       loop.push(`bounce-${v0key}`);
-      report.push(`${id}: ${v0key} 的 bounce（随机间隔跳动）近似为 noise`);
     }
     if (loop.length) st.loop = loop;
     states[key] = st;
@@ -162,13 +169,14 @@ function convertPet(v0pet, assets, config, presets, report) {
 // ---------- main ----------
 
 const presets = await loadPresets();
+const { BUILTIN_BOUNCE } = await loadV0Module('ambient-presets.ts');
 const assets = JSON.parse(readFileSync(join(V0, 'assets.json'), 'utf8'));
 const config = existsSync(join(V0, 'config.json')) ? JSON.parse(readFileSync(join(V0, 'config.json'), 'utf8')) : {};
 const report = [];
 const converted = {};
 for (const f of readdirSync(join(V0, 'pets')).filter((f) => f.endsWith('.json'))) {
   const v0pet = JSON.parse(readFileSync(join(V0, 'pets', f), 'utf8'));
-  converted[v0pet.id] = convertPet(v0pet, assets, config, presets, report);
+  converted[v0pet.id] = convertPet(v0pet, assets, config, presets, BUILTIN_BOUNCE, report);
   console.log(`✓ ${v0pet.name} → ${join(OUT, converted[v0pet.id])}`);
 }
 

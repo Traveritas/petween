@@ -75,6 +75,10 @@ describe('edits', () => {
     expect(loop).toContain('breathe');
     expect(loop).not.toContain('pop'); // the pack's own one-shot motion
     expect(motionChoices(ensureMotion(p, 'sway'), 'enter').map((c) => c.value)).not.toContain('sway');
+    // A repeating keyframe motion is a loop, not an enter.
+    const hopLoop = { ...p, motions: { ...p.motions, 'hop-loop': { type: 'keyframes', tracks: {}, repeat: { gapMs: [500, 800] } } } };
+    expect(motionChoices(hopLoop, 'loop').map((c) => c.value)).toContain('hop-loop');
+    expect(motionChoices(hopLoop, 'enter').map((c) => c.value)).not.toContain('hop-loop');
   });
 
   it('usedClips', () => {

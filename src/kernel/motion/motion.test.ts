@@ -94,6 +94,44 @@ describe('built-in motion types', () => {
     expect(k.evaluate(50, 16, ctx({ strength: 0.5 })).y).toBeCloseTo(-2.5);
     expect(k.markers).toEqual({ 50: 'swap' });
   });
+
+  it('repeating keyframes loop with a gap before each pass and never end', () => {
+    const k = keyframes.create({ tracks: { y: [{ t: 0, v: 0 }, { t: 100, v: -10 }] }, repeat: { gapMs: 50 }, markers: { 50: 'swap' } });
+    expect(k.duration).toBeNull();
+    expect(k.markers).toBeUndefined();
+    expect(k.evaluate(25, 16, ctx()).y).toBeCloseTo(0); // first gap
+    expect(k.evaluate(100, 16, ctx()).y).toBeCloseTo(-5); // first pass
+    expect(k.evaluate(175, 16, ctx()).y).toBeCloseTo(0); // second gap
+    expect(k.evaluate(250, 16, ctx()).y).toBeCloseTo(-5); // second pass
+    expect(k.evaluate(150 * 67 + 100, 16, ctx()).y).toBeCloseTo(-5); // still looping after a long jump
+    expect(k.evaluate(10_100, 16, ctx({ reducedMotion: true }))).toEqual({});
+  });
+
+  it('repeating keyframes draw random gaps inside the range', () => {
+    const k = keyframes.create({ tracks: { y: [{ t: 0, v: 0 }, { t: 10, v: -1 }, { t: 20, v: 0 }] }, repeat: { gapMs: [100, 200] }, seed: 7 });
+    // Sample at 1ms resolution and measure the rest stretches between passes.
+    const gaps: number[] = [];
+    let run = 0;
+    for (let t = 0; t < 5000; t++) {
+      if (k.evaluate(t, 1, ctx()).y === 0) run++;
+      else if (run) {
+        gaps.push(run);
+        run = 0;
+      }
+    }
+    expect(gaps.length).toBeGreaterThan(15);
+    for (const g of gaps) {
+      expect(g).toBeGreaterThanOrEqual(100);
+      expect(g).toBeLessThanOrEqual(202);
+    }
+    expect(new Set(gaps.map((g) => Math.round(g / 10))).size).toBeGreaterThan(1);
+  });
+
+  it('repeat: true loops back to back', () => {
+    const k = keyframes.create({ tracks: { x: [{ t: 0, v: 0 }, { t: 100, v: 10 }] }, repeat: true });
+    expect(k.evaluate(50, 16, ctx()).x).toBeCloseTo(5);
+    expect(k.evaluate(150, 16, ctx()).x).toBeCloseTo(5);
+  });
 });
 
 describe('MotionStack', () => {

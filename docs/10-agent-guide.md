@@ -90,3 +90,4 @@ petween --pack export my-cat                          # 导出 .petpack 到「�
 - 不要往宠物包里放任何脚本或可执行文件：宠物包是纯数据，Petween 只读 pet.json 和图片。
 - 不要手写精灵图：`import` 会把 GIF / 视频拆帧、裁边、拼成精灵图。
 - 可以直接改 `pet.json`（在 `%APPDATA%/com.petween.app/pets/<id>/`），改完 `reload`；格式见 docs/04。但优先用命令，命令会帮你检查。
+  - 想要「隔一阵蹦一下」这类持续动作：在 `motions` 里写一个 `keyframes` 动作并加 `"repeat": { "gapMs": [800, 1300] }`（每遍之前随机等 0.8–1.3 秒；`"repeat": true` 则首尾相接），然后放进状态的 `loop`。带 `repeat` 的动作不能当进入 / 离开动作（永远播不完），格式见 docs/03 §3.2。

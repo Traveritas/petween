@@ -130,7 +130,8 @@ export const MOTION_PRESETS: Record<string, { label: string; kind: 'enter' | 'lo
 
 /** One-shot motion types play on enter / exit; the rest run on as loops. */
 const ONE_SHOT = new Set(['keyframes', 'spring']);
-export const motionKind = (def: { type: string }): 'enter' | 'loop' => (ONE_SHOT.has(def.type) ? 'enter' : 'loop');
+export const motionKind = (def: { type: string; repeat?: unknown }): 'enter' | 'loop' =>
+  ONE_SHOT.has(def.type) && !def.repeat ? 'enter' : 'loop';
 
 /** Motions a state can pick: the pack's own of the right kind, plus presets it doesn't have yet. */
 export function motionChoices(pack: PetPack, kind: 'enter' | 'loop'): { value: string; label: string }[] {
@@ -163,6 +164,10 @@ export function checkPack(pack: PetPack): Issue[] {
     if (missing.length) out.push({ level: 'warn', text: `状态 ${k} 用到了不存在的片段 ${missing.join('、')}` });
     for (const r of [a.enter, a.exit, ...(a.loop ?? [])]) {
       if (typeof r === 'string' && !pack.motions?.[r]) out.push({ level: 'warn', text: `状态 ${k} 用到了不存在的动作 ${r}` });
+    }
+    for (const r of [a.enter, a.exit]) {
+      const def = typeof r === 'string' ? pack.motions?.[r] : r;
+      if (def && motionKind(def) === 'loop') out.push({ level: 'warn', text: `状态 ${k} 的进入/退出动作 ${refName(r)} 是循环动作，永远播不完` });
     }
   }
   const unused = Object.keys(pack.clips).filter((c) => !usedClips(pack).has(c));

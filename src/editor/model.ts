@@ -92,7 +92,7 @@ export function usedClips(pack: PetPack): Set<string> {
   return new Set(Object.values(pack.states).flatMap((a) => a.clips));
 }
 
-// ---------- motion presets (M3a: pick, don't edit; editing comes in M3b) ----------
+// ---------- motion presets (built in, read-only; picking one copies it into the pack) ----------
 
 export const MOTION_PRESETS: Record<string, { label: string; kind: 'enter' | 'loop'; def: { type: string; [k: string]: unknown } }> = {
   breathe: { label: '呼吸', kind: 'loop', def: { type: 'sine', property: 'scaleY', amplitude: 0.015, periodMs: 3200 } },
@@ -128,10 +128,10 @@ export const MOTION_PRESETS: Record<string, { label: string; kind: 'enter' | 'lo
   },
 };
 
-/** One-shot motion types play on enter / exit; the rest run on as loops. */
+/** One-shot motion types play on enter / exit; the rest run on as loops (so do repeating keyframes and driven springs). */
 const ONE_SHOT = new Set(['keyframes', 'spring']);
-export const motionKind = (def: { type: string; repeat?: unknown }): 'enter' | 'loop' =>
-  ONE_SHOT.has(def.type) && !def.repeat ? 'enter' : 'loop';
+export const motionKind = (def: { type: string; repeat?: unknown; drive?: unknown }): 'enter' | 'loop' =>
+  ONE_SHOT.has(def.type) && !def.repeat && !def.drive ? 'enter' : 'loop';
 
 /** Motions a state can pick: the pack's own of the right kind, plus presets it doesn't have yet. */
 export function motionChoices(pack: PetPack, kind: 'enter' | 'loop'): { value: string; label: string }[] {

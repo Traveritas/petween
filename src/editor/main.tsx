@@ -12,15 +12,18 @@ import '../settings/styles.css';
 import { Mark, Slider, ToastHost, useToast } from '../settings/ui';
 import './editor.css';
 import { tauriHost } from '../kernel/host';
-import { copyPack, exportPath, openFolder, openPack, packExists, savePack, writePackFile, type OpenPack } from './files';
+import { copyPack, exportPath, loadLibrary, openFolder, openPack, packExists, saveLibrary, savePack, writePackFile, type OpenPack } from './files';
 import { exportPetpack, unpackPetpack } from './petpack';
 import { importFile } from './import/importer';
 import { ClipPanel, PackPanel, StatePanel, type Edit } from './Inspector';
-import { checkPack, emptyPack, packIdFrom, setClip, stateTree, usedClips, type TreeRow } from './model';
+import { checkPack, emptyPack, MOTION_PRESETS, motionKind, packIdFrom, setClip, stateTree, usedClips, type TreeRow } from './model';
+import { MotionList, MotionPanel, type MotionSource } from './MotionEditor';
+import { addMotion, deleteMotion, emptyLibrary, libraryPut, libraryRemove, NEW_MOTIONS, renameMotion, uniqueName, type MotionDef, type MotionLibrary } from './motions';
+import { resolveAppearance } from '../kernel/pack/resolve';
 import { Preview } from './preview';
 import { ClipThumb } from './widgets';
 
-type Selection = { kind: 'state'; key: string } | { kind: 'clip'; id: string } | { kind: 'pack' };
+type Selection = { kind: 'state'; key: string } | { kind: 'clip'; id: string } | { kind: 'motion'; name: string; from: MotionSource } | { kind: 'pack' };
 
 function App() {
   const toast = useToast();
@@ -33,6 +36,11 @@ function App() {
   const [extraKeys, setExtraKeys] = useState<string[]>([]);
   const [busy, setBusy] = useState('');
   const [trying, setTrying] = useState<string | null>(null);
+  const [library, setLibrary] = useState<MotionLibrary>(emptyLibrary);
+  const [libTab, setLibTab] = useState<'clips' | 'motions'>('clips');
+  /** The state last looked at: motions preview over its picture. */
+  const lastState = useRef('idle');
+  if (sel.kind === 'state') lastState.current = sel.key;
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -64,6 +72,7 @@ function App() {
       const list = await call('packs.list');
       setPacks(list);
       setPlugins(await call('plugins.list'));
+      setLibrary(await loadLibrary().catch(() => emptyLibrary()));
       const want = new URLSearchParams(location.search).get('pack') ?? (await call('pets.list'))[0]?.pack ?? list[0]?.id;
       if (want) await load(want, list.find((p) => p.id === want)?.builtin);
     })();
@@ -120,7 +129,11 @@ function App() {
     if (!p) return;
     if (sel.kind === 'clip') p.showClip(sel.id);
     else if (sel.kind === 'state') p.showState(sel.key);
-  }, [sel, draft]);
+    else if (sel.kind === 'motion' && draft) {
+      const def = motionDef(draft, library, sel.name, sel.from);
+      if (def) p.showMotion(def, resolveAppearance(draft, lastState.current).appearance.clips.slice(0, 1), motionKind(def) === 'loop');
+    }
+  }, [sel, draft, library]);
 
   useEffect(() => preview.current?.setZoom(zoom), [zoom]);
 
@@ -310,6 +323,35 @@ function App() {
     void importFiles([...e.dataTransfer.files]);
   };
 
+  // ---------- motions ----------
+
+  const effects = useMemo(() => {
+    const spec = plugins.find((p) => p.id === 'particles')?.manifest.contributes?.settings?.find((s) => s.key === 'successEffect');
+    return (spec?.options ?? []).filter((o) => o.value !== 'none');
+  }, [plugins]);
+
+  const pickMotion = (name: string, from: MotionSource) => setSel({ kind: 'motion', name, from });
+  const putLibrary = async (next: MotionLibrary, done: string) => {
+    try {
+      await saveLibrary(next);
+      setLibrary(next);
+      toast(done);
+    } catch (e) {
+      toast(`动作库保存失败：${e instanceof Error ? e.message : e}`, true);
+    }
+  };
+  const copyIn = (name: string, def: MotionDef) => {
+    if (!draft) return;
+    const r = addMotion(draft, name, def);
+    setDraft(r.pack);
+    setSel({ kind: 'motion', name: r.name, from: 'pack' });
+    return r.name;
+  };
+  const newMotion = (template: string) => {
+    const t = NEW_MOTIONS.find((m) => m.id === template);
+    if (t && draft) copyIn(uniqueName(Object.keys(draft.motions ?? {}), '新动作'), t.def);
+  };
+
   // ---------- render ----------
 
   if (!draft || !open) {
@@ -327,6 +369,8 @@ function App() {
   const clipIds = Object.keys(draft.clips);
   const used = usedClips(draft);
   const selClip: ClipDef | undefined = sel.kind === 'clip' ? draft.clips[sel.id] : undefined;
+  const selMotion = sel.kind === 'motion' ? motionDef(draft, library, sel.name, sel.from) : undefined;
+  const motionCount = Object.keys(draft.motions ?? {}).length;
   const stateKeys = tree.map((r) => r.key);
   const stageH = stageRef.current?.clientHeight ?? 0;
 
@@ -418,23 +462,31 @@ function App() {
             </div>
           </div>
 
-          <section className={`lib${dropping ? ' drop' : ''}`} onDragOver={(e) => (e.preventDefault(), setDropping(true))} onDragLeave={() => setDropping(false)} onDrop={onDrop}>
-            <h3>
-              片段 <span className="note">{clipIds.length}</span>
+          <section className={`lib${dropping ? ' drop' : ''}`} onDragOver={(e) => (e.preventDefault(), setDropping(true), setLibTab('clips'))} onDragLeave={() => setDropping(false)} onDrop={onDrop}>
+            <h3 className="lib-tabs">
+              <button className={`lib-tab${libTab === 'clips' ? ' on' : ''}`} onClick={() => setLibTab('clips')}>
+                片段 <span className="note">{clipIds.length}</span>
+              </button>
+              <button className={`lib-tab${libTab === 'motions' ? ' on' : ''}`} onClick={() => setLibTab('motions')}>
+                动作 <span className="note">{motionCount}</span>
+              </button>
               <span className="grow" />
-              {!readOnly && (
+              {libTab === 'clips' && !readOnly && (
                 <button className="btn small" onClick={() => fileInput.current?.click()}>
                   导入素材
                 </button>
               )}
             </h3>
-            {!readOnly && (
+            {libTab === 'motions' && (
+              <MotionList pack={draft} library={library} sel={sel.kind === 'motion' ? sel : null} onPick={pickMotion} onNew={newMotion} readOnly={readOnly} />
+            )}
+            {libTab === 'clips' && !readOnly && (
               <label className="lib-opts">
                 <input type="checkbox" checked={removeBg} onChange={(e) => setRemoveBg(e.target.checked)} /> 导入时去掉纯色背景
               </label>
             )}
             <input ref={fileInput} type="file" multiple accept="image/*,video/*,.apng" hidden onChange={(e) => (void importFiles([...(e.target.files ?? [])]), (e.target.value = ''))} />
-            {clipIds.length === 0 ? (
+            {libTab !== 'clips' ? null : clipIds.length === 0 ? (
               <div className="lib-empty">把图片、GIF 或短视频拖到这里，或点「导入素材」。</div>
             ) : (
               <div className="lib-grid">
@@ -452,7 +504,8 @@ function App() {
         {/* ---------- middle: preview ---------- */}
         <main className="pane-center">
           <div className="pv-bar">
-            <span className="label">{sel.kind === 'state' ? sel.key : sel.kind === 'clip' ? `片段 ${sel.id}` : draft.name}</span>
+            <span className="label">{sel.kind === 'state' ? sel.key : sel.kind === 'clip' ? `片段 ${sel.id}` : sel.kind === 'motion' ? `动作 ${sel.name}` : draft.name}</span>
+            {sel.kind === 'motion' && <span className="note">在「{lastState.current}」的画面上反复播放；选一个状态可以换画面</span>}
             {sel.kind === 'state' && (
               <>
                 <button className="btn small" onClick={() => preview.current?.replay(from || undefined)}>
@@ -507,7 +560,44 @@ function App() {
 
         {/* ---------- right: properties ---------- */}
         <aside className="pane pane-right">
-          {sel.kind === 'state' && row && <StatePanel pack={draft} baseUrl={open.baseUrl} row={row} edit={edit} readOnly={readOnly} onPickClip={(id) => setSel({ kind: 'clip', id })} />}
+          {sel.kind === 'state' && row && (
+            <StatePanel pack={draft} baseUrl={open.baseUrl} row={row} edit={edit} readOnly={readOnly} onPickClip={(id) => setSel({ kind: 'clip', id })} onPickMotion={(name) => (setLibTab('motions'), pickMotion(name, 'pack'))} />
+          )}
+          {sel.kind === 'motion' && selMotion && (
+            <MotionPanel
+              key={`${sel.from}:${sel.name}`}
+              pack={draft}
+              name={sel.name}
+              from={sel.from}
+              def={selMotion}
+              edit={edit}
+              readOnly={readOnly}
+              library={library}
+              effects={effects}
+              onRename={(to) => {
+                const name = to.trim();
+                if (!name || name === sel.name) return;
+                if (draft.motions?.[name]) return toast(`已经有叫「${name}」的动作`, true);
+                edit((p) => renameMotion(p, sel.name, name));
+                setSel({ kind: 'motion', name, from: 'pack' });
+              }}
+              onAddToPack={() => {
+                const n = copyIn(sel.name, selMotion);
+                if (n) toast(n === sel.name ? '已加到宠物包' : `已加到宠物包，改名为「${n}」`);
+              }}
+              onSaveToLibrary={() => void putLibrary(libraryPut(library, sel.name, selMotion), `已存到动作库：${sel.name}`)}
+              onRemoveFromLibrary={() => {
+                void putLibrary(libraryRemove(library, sel.name), `已从动作库删除：${sel.name}`);
+                setSel({ kind: 'state', key: lastState.current });
+              }}
+              onDuplicate={() => copyIn(sel.name, selMotion)}
+              onDelete={() => {
+                edit((p) => deleteMotion(p, sel.name));
+                setSel({ kind: 'state', key: lastState.current });
+              }}
+              onPickState={(key) => setSel({ kind: 'state', key })}
+            />
+          )}
           {sel.kind === 'clip' && selClip && <ClipPanel pack={draft} baseUrl={open.baseUrl} id={sel.id} edit={edit} readOnly={readOnly} aligning={aligning} setAligning={setAligning} />}
           {sel.kind === 'pack' && <PackPanel pack={draft} edit={edit} readOnly={readOnly} />}
           {readOnly && (
@@ -524,6 +614,13 @@ function App() {
       </div>
     </div>
   );
+}
+
+/** The definition behind a motion in the list, wherever it comes from. */
+function motionDef(pack: PetPack, library: MotionLibrary, name: string, from: MotionSource): MotionDef | undefined {
+  if (from === 'pack') return pack.motions?.[name];
+  if (from === 'library') return library.motions[name]?.def;
+  return MOTION_PRESETS[name]?.def;
 }
 
 createRoot(document.getElementById('root')!).render(

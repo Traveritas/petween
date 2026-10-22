@@ -48,6 +48,8 @@ export class MotionStack {
   private entries: Entry[] = [];
   /** Reports motions stopped for blowing the frame budget. */
   onOverBudget?: (owner: string) => void;
+  /** Every marker any motion crosses, with that motion's owner. */
+  onMarker?: (marker: string, owner: string) => void;
 
   add(
     source: MotionSource,
@@ -115,7 +117,10 @@ export class MotionStack {
       if (markers) {
         for (const [ms, name] of Object.entries(markers)) {
           const m = Number(ms);
-          if (m > e.lastT && m <= tt) e.markerEv.emit(name);
+          if (m > e.lastT && m <= tt) {
+            e.markerEv.emit(name);
+            this.onMarker?.(name, e.owner);
+          }
         }
       }
       e.lastT = tt;

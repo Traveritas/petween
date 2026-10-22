@@ -159,6 +159,15 @@ describe('MotionStack', () => {
     expect(st.size).toBe(0);
   });
 
+  it('reports every crossed marker to the stack listener with its owner', () => {
+    const st = new MotionStack();
+    const seen: string[] = [];
+    st.onMarker = (m, owner) => seen.push(`${owner}:${m}`);
+    st.add(keyframes.create({ tracks: { y: [{ t: 0, v: 0 }, { t: 100, v: 1 }] }, markers: { 60: 'particle:confetti' } }), { layer: 'transition' }, 'pack:hop');
+    for (const now of [1000, 1050, 1070, 1200]) st.evaluate(now, 16, ctxFor);
+    expect(seen).toEqual(['pack:hop:particle:confetti']);
+  });
+
   it('dispose removes without firing end', () => {
     const st = new MotionStack();
     const h = st.add(sine.create({}), {}, 't');

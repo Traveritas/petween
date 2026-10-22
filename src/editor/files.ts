@@ -2,6 +2,7 @@
 // built-in packs ship with the app and are read-only (copy one to change it).
 
 import type { PetPack } from '../api/types';
+import { parseLibrary, type MotionLibrary } from './motions';
 import { joinPath, PACK_BASE, tauriHost as host, type HostPaths } from '../kernel/host';
 
 let paths: Promise<HostPaths> | null = null;
@@ -60,6 +61,22 @@ export async function copyPack(from: OpenPack, id: string, name: string): Promis
 /** Where exports go: the user's Downloads folder (created if missing). */
 export async function exportPath(fileName: string) {
   return joinPath((await P()).home, 'Downloads', fileName);
+}
+
+/** The user's motion library (docs/04 §6): one JSON file in app data, outside every pack. */
+async function libraryPath() {
+  return joinPath((await P()).appData, 'motion-library.json');
+}
+
+export async function loadLibrary(): Promise<MotionLibrary> {
+  const path = await libraryPath();
+  if (!(await host.exists(path))) return parseLibrary(null);
+  return parseLibrary(JSON.parse(await host.readText(path)));
+}
+
+export async function saveLibrary(lib: MotionLibrary) {
+  await host.writeText(await libraryPath(), `${JSON.stringify(lib, null, 2)}
+`);
 }
 
 export async function openFolder(id: string) {

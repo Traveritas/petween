@@ -2,7 +2,7 @@
 // Three ways to set one off:
 //   - a pet entering a state: the user's defaults (settings) merged with the pack's
 //     `plugins.particles.onState`; the burst waits for the picture switch, so it lands with the new face;
-//   - a clip marker named `particle:<effect>` (frame-exact, for animated clips);
+//   - a clip or motion marker named `particle:<effect>` (frame-exact / on the motion's beat);
 //   - other plugins, through the `particles` service.
 
 import { definePlugin, type Disposable, type PetHandle, type PluginManifest, type Point } from '../../api/types';
@@ -103,6 +103,10 @@ export default definePlugin({
       pet.on('clip', fire);
       pet.on('playback', (e) => {
         const effect = e.kind === 'marker' ? markerEffect(e.marker) : null;
+        if (effect) burst(pet, effect);
+      });
+      pet.on('motionMarker', (e) => {
+        const effect = markerEffect(e.marker);
         if (effect) burst(pet, effect);
       });
       return cancel;

@@ -18,6 +18,7 @@ import type {
   PetHandle,
   PetPack,
   PetPackInfo,
+  MotionMarkerEvent,
   PlaybackEvent,
   Point,
   Rect,
@@ -73,6 +74,7 @@ export class Pet {
   readonly clipEv = new Emitter<string>();
   readonly inputEv = new Emitter<InputEvent>();
   readonly playbackEv = new Emitter<PlaybackEvent>();
+  readonly motionMarkerEv = new Emitter<MotionMarkerEvent>();
   readonly bubbleEv = new Emitter<{ owner: string; text: string } | null>();
   readonly basePositionEv = new Emitter<Point>();
 
@@ -122,6 +124,7 @@ export class Pet {
     this.position.change.on(() => env.wake());
     this.bubble.change.on((b) => this.bubbleEv.emit(b));
     this.motions.onOverBudget = (owner) => env.log('warn', `motion from ${owner} stopped: over frame budget`);
+    this.motions.onMarker = (marker, motion) => this.motionMarkerEv.emit({ marker, motion });
   }
 
   get packInfo(): PetPackInfo {
@@ -415,6 +418,7 @@ export function petView(pet: Pet, owner: string, scope: Scope): PetHandle {
         : event === 'clip' ? pet.clipEv
         : event === 'input' ? pet.inputEv
         : event === 'playback' ? pet.playbackEv
+        : event === 'motionMarker' ? pet.motionMarkerEv
         : event === 'bubble' ? pet.bubbleEv
         : event === 'bubbles' ? pet.bubble.list
         : null;

@@ -18,10 +18,41 @@ function out(p: Property, offset: number, strength: number): TransformDelta {
 
 const strengthOf = (ctx: MotionContext, reducedFactor: number) => ctx.strength * (ctx.reducedMotion ? reducedFactor : 1);
 
+// ---------- params schemas (docs/03 §3.2: the editor builds its panels from these) ----------
+
+/** What each property means to a person, and its unit. */
+export const PROPERTY_LABELS: Record<Property, string> = {
+  x: '左右移动（px）',
+  y: '上下移动（px，向下为正）',
+  rotate: '旋转（度）',
+  skewX: '横向斜切（度）',
+  skewY: '纵向斜切（度）',
+  scaleX: '横向缩放（倍）',
+  scaleY: '纵向缩放（倍）',
+  opacity: '透明度（倍）',
+};
+
+const propertySchema = (fallback: Property) => ({
+  type: 'string',
+  title: '作用于',
+  default: fallback,
+  oneOf: (Object.keys(PROPERTY_LABELS) as Property[]).map((p) => ({ const: p, title: PROPERTY_LABELS[p] })),
+});
+
+
 // ---------- sine ----------
 
 export const sine: MotionType = {
   id: 'sine',
+  paramsSchema: {
+    type: 'object',
+    properties: {
+      property: propertySchema('y'),
+      amplitude: { type: 'number', title: '幅度', description: '偏离静止值的最大量；缩放用 0.02 这样的小数', default: 4 },
+      periodMs: { type: 'number', title: '周期（ms）', minimum: 100, maximum: 20000, default: 3000 },
+      phase: { type: 'number', title: '相位（圈）', minimum: 0, maximum: 1, default: 0 },
+    },
+  },
   create(params) {
     const p = prop(params.property, 'y');
     const amp = num(params.amplitude, p === 'scaleX' || p === 'scaleY' ? 0.02 : 4);
@@ -52,6 +83,14 @@ function rng(seed: number) {
 
 export const noise: MotionType = {
   id: 'noise',
+  paramsSchema: {
+    type: 'object',
+    properties: {
+      property: propertySchema('rotate'),
+      amplitude: { type: 'number', title: '幅度', description: '偏离静止值的最大量；缩放用 0.01 这样的小数', default: 1 },
+      frequency: { type: 'number', title: '快慢（次 / 秒）', minimum: 0.01, maximum: 20, default: 2 },
+    },
+  },
   create(params) {
     const p = prop(params.property, 'rotate');
     const amp = num(params.amplitude, p === 'scaleX' || p === 'scaleY' ? 0.01 : 1);
@@ -80,6 +119,26 @@ export const noise: MotionType = {
 
 export const spring: MotionType = {
   id: 'spring',
+  paramsSchema: {
+    type: 'object',
+    properties: {
+      property: propertySchema('scaleY'),
+      impulse: { type: 'number', title: '初始冲量', description: '一开始被弹一下的速度；缩放用 1 左右，位移用几百', default: 0 },
+      stiffness: { type: 'number', title: '刚度', description: '越大弹得越快', minimum: 1, maximum: 2000, default: 180 },
+      damping: { type: 'number', title: '阻尼', description: '越大停得越快', minimum: 0, maximum: 200, default: 12 },
+      drive: {
+        type: 'string',
+        title: '跟随',
+        default: '',
+        oneOf: [
+          { const: '', title: '不跟随（弹完就停）' },
+          { const: 'velocityX', title: '跟随左右速度（一直持续）' },
+          { const: 'velocityY', title: '跟随上下速度（一直持续）' },
+        ],
+      },
+      gain: { type: 'number', title: '跟随强度', default: 0.01 },
+    },
+  },
   create(params) {
     const p = prop(params.property, 'scaleY');
     const k = Math.max(1, num(params.stiffness, 180));

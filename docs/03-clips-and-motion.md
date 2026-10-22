@@ -101,6 +101,10 @@ interface MotionType {
 
 插件注册新类型后（例如「心跳」「受风吹」），宠物包就能用 `{ type: 'my-plugin:wind', ... }` 引用。
 
+**参数面板**：`sine` / `noise` / `spring` 和插件类型一样通过 `paramsSchema`（JSON Schema 的子集：顶层 `object` 的 `properties`，每项 `number` / `string` / `boolean`，可带 `title`、`description`、`minimum`、`maximum`、`default`，选项用 `enum` 或 `oneOf: [{ const, title }]`）描述参数，编辑器按它生成参数面板；`keyframes` 的轨道另有专门的 K 帧编辑。没有 `paramsSchema` 的类型在编辑器里只能改 JSON。
+
+**标记**：`swap` 由内核用来决定换图时刻（§4）；其余标记（如 `particle:confetti`）内核不解释，作为宠物的 `motionMarker` 事件发给所有插件（06 §4）。带 `repeat` 的动作不发标记。
+
 ### 3.3 合成
 
 每个活跃动作带三个属性：

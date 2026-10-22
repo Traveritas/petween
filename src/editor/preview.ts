@@ -1,7 +1,7 @@
 // The editor's live preview: a tiny kernel with one pet, the real Pet / Appearance / motion code and
 // the dom2d renderer, so what you see here is what the desktop shows. No plugins run here.
 
-import type { ClipDef, PetHandle, PetPack, Rect } from '../api/types';
+import type { ClipDef, MotionHandle, PetHandle, PetPack, Rect } from '../api/types';
 import { BUILTIN_MOTION_TYPES } from '../kernel/motion/builtin';
 import { Pet, petView, type LoadedPack } from '../kernel/pet';
 import { validatePack } from '../kernel/pack/resolve';
@@ -11,6 +11,8 @@ import { BUILTIN_TRANSITIONS } from '../plugins/core';
 import { AssetCache } from '../render/assets';
 import { Coords } from '../render/coords';
 import { Dom2dRenderer, type RenderPet } from '../render/dom2d';
+
+const SOLO_KEY = '__editor.motion';
 
 export class Preview {
   private registries = new Registries();
@@ -25,6 +27,8 @@ export class Preview {
   private ghostClip: { clip: ClipDef; baseUrl: string; opacity: number } | null = null;
   private key = 'idle';
   private pending: ReturnType<typeof setTimeout> | null = null;
+  /** Motion being previewed on its own: shown over a still state that has no motions of its own. */
+  private solo: { def: { type: string; [k: string]: unknown }; clips: string[]; handle: MotionHandle | null } | null = null;
   private resize: ResizeObserver;
   /** Where the pet's feet stand, as fractions of the preview box. */
   readonly ground = { x: 0.5, y: 0.8 };
@@ -69,7 +73,31 @@ export class Preview {
       this.view = petView(this.pet, 'editor', this.scope);
       this.place();
     } else this.pet.swapPack(loaded);
-    this.pet.state.setBase(this.key);
+    if (this.solo) valid.states[SOLO_KEY] = { clips: this.solo.clips };
+    this.pet.state.setBase(this.solo ? SOLO_KEY : this.key);
+  }
+
+  /**
+   * Play one motion alone, over `clips` (the picture it will be seen on): one-shots replay after a short
+   * pause, loops just run. Any other show* call stops it.
+   */
+  showMotion(def: { type: string; [k: string]: unknown }, clips: string[], loop: boolean) {
+    this.cancel();
+    const pet = this.pet;
+    if (!pet) return;
+    this.solo = { def, clips, handle: null };
+    pet.loaded.pack.states[SOLO_KEY] = { clips };
+    pet.clip.setBase(null);
+    pet.state.setBase(SOLO_KEY);
+    const solo = this.solo;
+    const play = () => {
+      if (this.solo !== solo) return;
+      const h = pet.addMotion(def, { layer: loop ? 'base' : 'transition' }, 'editor');
+      solo.handle = h;
+      if (!loop) h.onEnd(() => (this.pending = setTimeout(play, 700)));
+    };
+    // Let the state switch settle before the first run.
+    this.pending = setTimeout(play, 250);
   }
 
   /** Change one clip's anchor / scale in place, without restarting the picture (dragging). */
@@ -104,6 +132,8 @@ export class Preview {
   private cancel() {
     if (this.pending) clearTimeout(this.pending);
     this.pending = null;
+    this.solo?.handle?.dispose();
+    this.solo = null;
   }
 
   setZoom(z: number) {

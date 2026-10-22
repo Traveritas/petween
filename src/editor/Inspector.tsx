@@ -3,14 +3,14 @@
 import type { ClipDef, MotionRef, PetPack, StateAppearance, TransitionRef } from '../api/types';
 import { resolveAppearance } from '../kernel/pack/resolve';
 import { Slider } from '../settings/ui';
-import { ensureMotion, fallbackText, motionChoices, refName, setClip, setState, usedClips, type TreeRow } from './model';
+import { ensureMotion, fallbackText, MOTION_PRESETS, motionChoices, refName, setClip, setState, usedClips, type TreeRow } from './model';
 import { ClipThumb, Group, NumberInput, Row, TextInput } from './widgets';
 
 export type Edit = (fn: (p: PetPack) => PetPack) => void;
 
 // ---------- state ----------
 
-export function StatePanel({ pack, baseUrl, row, edit, readOnly, onPickClip }: { pack: PetPack; baseUrl: string; row: TreeRow; edit: Edit; readOnly: boolean; onPickClip(id: string): void }) {
+export function StatePanel({ pack, baseUrl, row, edit, readOnly, onPickClip, onPickMotion }: { pack: PetPack; baseUrl: string; row: TreeRow; edit: Edit; readOnly: boolean; onPickClip(id: string): void; onPickMotion(name: string): void }) {
   const key = row.key;
   const a = pack.states[key];
   const own = !!a?.clips.length;
@@ -53,6 +53,7 @@ export function StatePanel({ pack, baseUrl, row, edit, readOnly, onPickClip }: {
     loops.includes(name)
       ? edit((p) => setState(p, key, { ...p.states[key], loop: (p.states[key].loop ?? []).filter((r: MotionRef) => refName(r) !== name) }))
       : withMotion(name, (p) => setState(p, key, { ...p.states[key], loop: [...(p.states[key].loop ?? []), name] }));
+  const usedMotions = [...new Set([a.enter, ...(a.loop ?? []), a.exit].filter((r): r is string => typeof r === 'string' && !!pack.motions?.[r]))];
   const tType = typeof a.transition === 'string' ? a.transition : (a.transition?.type ?? 'cut');
   const fadeMs = typeof a.transition === 'object' && typeof a.transition.durationMs === 'number' ? a.transition.durationMs : 200;
   const setTransition = (t: TransitionRef | undefined) => put({ ...a, transition: t });
@@ -134,7 +135,17 @@ export function StatePanel({ pack, baseUrl, row, edit, readOnly, onPickClip }: {
               ))}
             </select>
           </Row>
-          <div className="note">动作先换图再播（docs/03 §4）。想细调动作的形状，等 M3b 的动作编辑。</div>
+          {usedMotions.length > 0 && (
+            <div className="checks">
+              <span className="note">调形状：</span>
+              {usedMotions.map((n) => (
+                <button key={n} className="btn quiet small" onClick={() => onPickMotion(n)}>
+                  {MOTION_PRESETS[n]?.label ?? n} →
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="note">先换图再播进入动作；进入动作里有「换图」标记时，到那一刻才换。</div>
         </Group>
 
         <Group title="切换">

@@ -251,12 +251,19 @@ export interface PetPackInfo {
 
 // ---------- pets ----------
 
-export type PetEvent = 'stateKey' | 'clip' | 'input' | 'playback' | 'bubble' | 'bubbles';
+export type PetEvent = 'stateKey' | 'clip' | 'input' | 'playback' | 'motionMarker' | 'bubble' | 'bubbles';
 
 export interface PlaybackEvent {
   clip: string;
   kind: 'marker' | 'loop' | 'end';
   marker?: string;
+}
+
+/** A motion on the pet crossed one of its markers (docs/03 §3.2). */
+export interface MotionMarkerEvent {
+  marker: string;
+  /** 'pack:<motion name>' for the pet pack's motions; otherwise the id of the plugin that added it. */
+  motion: string;
 }
 
 export interface PetHandle {
@@ -275,6 +282,7 @@ export interface PetHandle {
   on(event: 'clip', fn: (clipId: string) => void): Disposable;
   on(event: 'input', fn: (e: InputEvent) => void): Disposable;
   on(event: 'playback', fn: (e: PlaybackEvent) => void): Disposable;
+  on(event: 'motionMarker', fn: (e: MotionMarkerEvent) => void): Disposable;
   /** The most recently shown bubble (single-bubble renderers). */
   on(event: 'bubble', fn: (b: { owner: string; text: string } | null) => void): Disposable;
   /** Everything on screen, whenever a bubble shows, changes or hides. */

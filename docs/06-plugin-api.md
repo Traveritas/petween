@@ -125,7 +125,9 @@ interface PetHandle {
   readonly velocity: { x: number; y: number }
   readonly bounds: Rect                        // 当前画面在桌面上的包围盒
 
-  on(event: 'stateKey' | 'clip' | 'input' | 'playback', fn): Disposable
+  on(event: 'stateKey' | 'clip' | 'input' | 'playback' | 'motionMarker', fn): Disposable
+  // motionMarker：宠物身上任何动作（宠物包的或插件加的）播过一个标记时触发，
+  //   { marker: 标记名, motion: 来源 }；来源是 'pack:<动作名>' 或加这个动作的插件 id（03 §3.2）
   channel(name: 'state' | 'clip' | 'position' | 'bubble'): ChannelApi   // 02 §2
   motion: { add(source: MotionSource | MotionRef, opts: { layer; blend?; weight? }): MotionHandle }
 
@@ -168,7 +170,7 @@ interface PetHandle {
 **`particles` 的三种触发方式**：
 
 1. **进入状态**：设置里的「成功时 / 出错时」是用户默认值；宠物包可以在 `plugins.particles.onState` 里加、改或关掉（`null`），宠物包优先（04 §5）。键按点号前缀匹配，最长者胜（`success` 覆盖 `success.big`）。粒子等新画面真正换上时才放（最多等 1.5 秒），所以和换脸同步。
-2. **片段标记**：片段的 `markers` 里名字为 `particle:<特效>` 的标记，播到那一帧就放。
+2. **标记**：片段的 `markers` 里名字为 `particle:<特效>` 的标记，播到那一帧就放；动作（`keyframes`）上同名的标记播到那个时刻就放（`motionMarker` 事件）。
 3. **其他插件**：`ctx.services.use('particles')` 得到 `{ burst(宠物或坐标, 特效, { amount? }), define(id, spec), effects() }`。`define` 加的特效 id 用 `<插件 id>:<名字>`，插件停用时自己 dispose。
 
 系统开了「减少动态效果」时不放粒子。

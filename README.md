@@ -1,8 +1,10 @@
-# petween-next
+# petween
 
 跨 agent、可扩展的桌面宠物。宠物会对 Claude Code、Codex 等 AI 编程 agent 的活动做出反应；美术可以全部用 AI 生成（图片 / GIF / 短视频）；几乎所有功能都是插件，插件作者的自由度尽量高。
 
-本仓库是 [petween-desktop](../petween-desktop) 的重做：**先写文档定契约，再按契约移植旧代码**。
+本仓库是旧版 Petween 的重做：**先写文档定契约，再按契约移植旧代码**。旧版的三个仓库已停止维护：[petween-dsh](https://github.com/Traveritas/petween-dsh)（DeepSeek Harness 插件，原名 petween）、[petween-desktop](https://github.com/Traveritas/petween-desktop)（Electron 桌面版）、[petween-physics](https://github.com/Traveritas/petween-physics)（抛掷物理插件）。
+
+当前状态：开发中，仅支持 Windows。里程碑与每一步怎么看效果见 [路线图](docs/09-roadmap.md)。
 
 ## 文档
 

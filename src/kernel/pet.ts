@@ -24,8 +24,8 @@ import type {
   Rect,
   TransitionRef,
 } from '../api/types';
-import { opaqueBox, type AssetCache } from '../render/assets';
-import type { RenderPet } from '../render/dom2d';
+import { clipFrameCount, clipSource, type MediaCache } from '../render/media';
+import type { RenderLayer, RenderPet } from '../render/renderer';
 import { Appearance, type Target, type TransitionPlan } from './appearance';
 import { BubbleQueue, ExclusiveStack } from './channels';
 import { Emitter } from './emitter';
@@ -44,7 +44,7 @@ export interface LoadedPack {
 
 export interface PetEnv {
   registries: Registries;
-  assets: AssetCache;
+  media: MediaCache;
   reducedMotion(): boolean;
   log(level: 'info' | 'warn' | 'error', line: string): void;
   /** Something changed that needs a frame. */
@@ -113,6 +113,7 @@ export class Pet {
     this.appearance = new Appearance({
       play: (ref, layer) => this.startMotion(ref, layer, `pack:${typeof ref === 'string' ? ref : ref.type}`),
       plan: (ref) => this.plan(ref),
+      frameCount: (clip) => clipFrameCount(this.clipTypes, clip),
     });
     this.appearance.clipChange.on((id) => this.clipEv.emit(id));
     this.appearance.playback.on((e) => this.playbackEv.emit(e));
@@ -126,6 +127,8 @@ export class Pet {
     this.motions.onOverBudget = (owner) => env.log('warn', `motion from ${owner} stopped: over frame budget`);
     this.motions.onMarker = (marker, motion) => this.motionMarkerEv.emit({ marker, motion });
   }
+
+  private clipTypes = (id: string) => this.env.registries.clipTypes.get(id);
 
   get packInfo(): PetPackInfo {
     const p = this.loaded.pack;
@@ -297,30 +300,29 @@ export class Pet {
       y: p.y,
       transform,
       outline: this.outline,
-      layers: layers.map((l) => {
-        const count = l.clip.type === 'frames' ? Math.max(1, l.clip.frames?.count ?? 1) : 1;
-        return {
-          src: new URL(l.clip.source, this.loaded.baseUrl).href,
-          columns: l.clip.frames?.columns ?? count,
-          count,
+      layers: layers.flatMap((l): RenderLayer[] => {
+        const src = clipSource(this.clipTypes, l.clip, this.loaded.baseUrl);
+        if (!src) return [];
+        return [{
+          ...src,
           frame: l.frame,
           opacity: l.opacity,
           anchor: l.clip.anchor ?? DEFAULT_ANCHOR,
           scale: (l.clip.scale ?? 1) * packScale * this.scale,
-        };
+        }];
       }),
     };
   }
 
-  /** Asset, scale and frame of the picture on top right now. */
+  /** Media, scale and frame of the picture on top right now. */
   private shownPicture() {
     const t = this.appearance.current;
     if (!t) return null;
-    const count = t.clip.type === 'frames' ? Math.max(1, t.clip.frames?.count ?? 1) : 1;
-    const a = this.env.assets.get(new URL(t.clip.source, this.loaded.baseUrl).href, t.clip.frames?.columns ?? count, count);
+    const src = clipSource(this.clipTypes, t.clip, this.loaded.baseUrl);
+    const a = src && this.env.media.get(src);
     if (!a) return null;
     const s = (t.clip.scale ?? 1) * (this.loaded.pack.scale ?? 1) * this.scale;
-    return { a, s, anchor: t.clip.anchor ?? DEFAULT_ANCHOR, frame: Math.min(this.shownFrame, a.columns * a.rows - 1) };
+    return { a, s, anchor: t.clip.anchor ?? DEFAULT_ANCHOR, frame: Math.min(this.shownFrame, clipFrameCount(this.clipTypes, t.clip) - 1) };
   }
 
   /** Picture box on the desktop (before motion transforms). */
@@ -336,7 +338,7 @@ export class Pet {
   opaqueBounds(): Rect {
     const b = this.bounds();
     const pic = this.shownPicture();
-    const box = pic && opaqueBox(pic.a, pic.frame);
+    const box = pic && pic.a.opaqueBox(pic.frame);
     if (!pic || !box) return b;
     return { x: b.x + box.x * pic.s, y: b.y + box.y * pic.s, width: box.w * pic.s, height: box.h * pic.s };
   }

@@ -2,9 +2,10 @@
 // Runs in stage-0 only; other stages mirror what it renders (docs/01 §2).
 
 import type { Lease, PetHandle, PluginManifest, PluginModule, Point, Rect, StageLayer, TrayItemHandle, TrayItemOptions } from '../api/types';
-import { AssetCache } from '../render/assets';
+import { addRenderBuiltins, createRenderer, mediaCacheFor } from '../render/builtin';
 import { Coords, type StageInfo } from '../render/coords';
-import { Dom2dRenderer, type RenderPet } from '../render/dom2d';
+import { clipSource } from '../render/media';
+import type { Renderer, RenderPet } from '../render/renderer';
 import { BUILTIN_PLUGINS } from '../plugins';
 import { Admin } from './admin';
 import { AgentHub } from './agent';
@@ -42,8 +43,8 @@ export class Kernel {
   readonly registries = new Registries();
   private agent!: AgentHub;
   private plugins!: PluginManager;
-  private assets = new AssetCache();
-  private renderer!: Dom2dRenderer;
+  private media = mediaCacheFor(this.registries);
+  private renderer!: Renderer;
   private pets: Pet[] = [];
   private petAdded = new Emitter<Pet>();
   private petRemoved = new Emitter<Pet>();
@@ -90,8 +91,9 @@ export class Kernel {
   async boot() {
     this.paths = await this.host.paths();
     this.setLayout(await this.host.layout());
-    this.renderer = new Dom2dRenderer(this.root, this.assets, this.coords);
-    this.assets.onLoaded = () => this.wake();
+    addRenderBuiltins(this.registries);
+    this.renderer = createRenderer(this.registries, this.root, this.media, this.coords);
+    this.media.onLoaded = () => this.wake();
     this.settings = await new FileStore(this.host, joinPath(this.paths.settings, 'kernel.json')).load();
 
     this.agent = new AgentHub({
@@ -287,9 +289,13 @@ export class Kernel {
     for (const w of warnings) this.log('warn', `pack ${label}: ${w}`);
     // Decode every clip up front so bounds and hit masks are ready on first frame.
     await Promise.all(
-      Object.values(pack.clips).map((c) => {
-        const count = c.type === 'frames' ? Math.max(1, c.frames?.count ?? 1) : 1;
-        return this.assets.load(new URL(c.source, baseUrl).href, c.frames?.columns ?? count, count);
+      Object.entries(pack.clips).map(([id, c]) => {
+        const src = clipSource((t) => this.registries.clipTypes.get(t), c, baseUrl);
+        if (!src) {
+          this.log('warn', `pack ${label}: clip "${id}" has unknown type "${c.type}"; it will not show`);
+          return null;
+        }
+        return this.media.load(src);
       }),
     );
     return { pack, baseUrl };
@@ -366,7 +372,7 @@ export class Kernel {
     }
     const pet = new Pet(inst.id, loaded, inst.scale || 1, { x: inst.x, y: inst.y }, {
       registries: this.registries,
-      assets: this.assets,
+      media: this.media,
       reducedMotion: () => this.reduced.matches,
       log: this.log,
       wake: () => this.wake(),

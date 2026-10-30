@@ -24,9 +24,10 @@ export class ClipPlayback {
     readonly id: string,
     readonly clip: ClipDef,
     now: number,
+    /** From the clip's type (1 = still). */
     frameCount: number,
   ) {
-    this.count = clip.type === 'frames' ? Math.max(1, frameCount) : 1;
+    this.count = Math.max(1, frameCount);
     this.segment = this.range('enter') ? 'enter' : 'loop';
     this.segStart = now;
   }

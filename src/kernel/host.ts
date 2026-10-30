@@ -46,7 +46,7 @@ export interface HostEvents {
   'editor-closed': null;
   'pack-cli': { id: number; request: { args: string[]; cwd: string } };
   'admin-call': import('../shared/admin').AdminCall;
-  frame: import('../render/dom2d').RenderPet[];
+  frame: import('../render/renderer').RenderPet[];
 }
 
 export interface Host {

@@ -8,16 +8,17 @@ import { validatePack } from '../kernel/pack/resolve';
 import { Registries } from '../kernel/registry';
 import { Scope } from '../kernel/scope';
 import { BUILTIN_TRANSITIONS } from '../plugins/core';
-import { AssetCache } from '../render/assets';
+import { addRenderBuiltins, createRenderer, mediaCacheFor } from '../render/builtin';
 import { Coords } from '../render/coords';
-import { Dom2dRenderer, type RenderPet } from '../render/dom2d';
+import { clipSource } from '../render/media';
+import type { Renderer, RenderPet } from '../render/renderer';
 
 const SOLO_KEY = '__editor.motion';
 
 export class Preview {
   private registries = new Registries();
-  private assets = new AssetCache();
-  private renderer: Dom2dRenderer;
+  private media = mediaCacheFor(this.registries);
+  private renderer: Renderer;
   private pet: Pet | null = null;
   private view: PetHandle | null = null;
   private scope = new Scope();
@@ -36,7 +37,8 @@ export class Preview {
   constructor(private root: HTMLElement) {
     for (const m of BUILTIN_MOTION_TYPES) this.registries.motionTypes.add(m, 'core');
     for (const t of BUILTIN_TRANSITIONS) this.registries.transitionTypes.add(t, 'core');
-    this.renderer = new Dom2dRenderer(root, this.assets, this.coords());
+    addRenderBuiltins(this.registries);
+    this.renderer = createRenderer(this.registries, root, this.media, this.coords());
     this.resize = new ResizeObserver(() => {
       this.renderer.coords = this.coords();
       this.place();
@@ -65,7 +67,7 @@ export class Preview {
     if (!this.pet) {
       this.pet = new Pet('preview', loaded, this.zoom, { x: 0, y: 0 }, {
         registries: this.registries,
-        assets: this.assets,
+        media: this.media,
         reducedMotion: () => false,
         log: (level, line) => (level === 'error' ? console.error : console.log)(line),
         wake: () => {},
@@ -164,8 +166,8 @@ export class Preview {
       const rp = this.pet.tick(now, dt, this.view);
       rp.z = 2;
       const g = this.ghostClip;
-      if (g) {
-        const count = g.clip.type === 'frames' ? Math.max(1, g.clip.frames?.count ?? 1) : 1;
+      const gs = g && clipSource((t) => this.registries.clipTypes.get(t), g.clip, g.baseUrl);
+      if (g && gs) {
         out.push({
           id: 'ghost',
           z: 1,
@@ -173,7 +175,7 @@ export class Preview {
           y: rp.y,
           outline: false,
           transform: { x: 0, y: 0, rotate: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0, opacity: 1 },
-          layers: [{ src: new URL(g.clip.source, g.baseUrl).href, columns: g.clip.frames?.columns ?? count, count, frame: 0, opacity: g.opacity, anchor: g.clip.anchor ?? { x: 0.5, y: 0.96 }, scale: (g.clip.scale ?? 1) * (this.pet.loaded.pack.scale ?? 1) * this.zoom }],
+          layers: [{ ...gs, frame: 0, opacity: g.opacity, anchor: g.clip.anchor ?? { x: 0.5, y: 0.96 }, scale: (g.clip.scale ?? 1) * (this.pet.loaded.pack.scale ?? 1) * this.zoom }],
         });
       }
       out.push(rp);

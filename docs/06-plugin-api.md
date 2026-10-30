@@ -214,4 +214,4 @@ export default definePlugin({
 - **样式**：插件可以往舞台层里插 `<style>`（宿主关闭了 Tauri 对 `style-src` 的 CSP 改写，否则运行时注入的样式会被浏览器静默拦截）。
 - **clip 通道直接给片段**时，内联 `ClipDef.source` 用绝对 URL（插件自带资源走 `http://petplugin.localhost/<插件目录>/…`）。
 
-**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType`、`host.http`、`host.fs.watch`、`sidecar`、插件声明的状态键在设置页展示。
+**还没有实现、因此不在 apiVersion 1 里的**（加入时只增不改）：`stage.openWindow`、`register.clipType` / `register.renderer`（内核里已有注册表，开放前要先解决副屏和编辑器预览加载插件绘制代码的问题，见 01 §3）、`host.http`、`host.fs.watch`、`sidecar`、插件声明的状态键在设置页展示。

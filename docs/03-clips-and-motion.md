@@ -17,7 +17,7 @@
 ```ts
 interface Clip {
   id: string
-  type: 'still' | 'frames' | string   // string：插件注册的片段类型（注册表尚未实现，见 §2）
+  type: 'still' | 'frames' | string   // string：其他已登记的片段类型（目前只有内核能登记，见 01 §3）
   source: string            // 宠物包内的相对路径
   fps?: number              // frames / video
   /** frames 的精灵图布局；单帧尺寸 = 图宽 / columns。columns 缺省 = count（单行） */
@@ -42,7 +42,7 @@ AI 生成的素材格式五花八门，导入时统一处理：
 | 短视频（≤ 10s） | 解码为帧（可选降帧率） | `frames` |
 | 长视频（> 10s） | 只保留前 10s，同样解码为帧 | `frames` |
 
-`video` 片段类型**还没有实现**：导入管线把所有视频都转成帧序列，播放器和渲染器也不认识 `video`。保留 `<video>` 能省内存，代价是拿不到命中掩码、也不能跳段 / 对齐标记；以后要做，得先加 `clipTypes` 注册表（01 §3）。所以目前 `Clip.type` 实际只有 `still` / `frames` 两种。
+`video` 片段类型**还没有实现**：导入管线把所有视频都转成帧序列，播放器和渲染器也不认识 `video`。保留 `<video>` 能省内存，代价是拿不到命中掩码、也不能跳段 / 对齐标记；要做就在 `clipTypes` 注册表（01 §3）里登记一个新类型。目前 `Clip.type` 实际只有 `still` / `frames` 两种。
 
 转成帧序列的理由：所有素材都能**暂停、调速、跳段、对齐标记点**，透明通道跨平台一致，命中掩码可以从透明通道直接算出来。代价是内存，所以对时长和分辨率设上限（默认长边 ≤ 512px、≤ 10s）。
 

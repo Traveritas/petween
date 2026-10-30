@@ -40,6 +40,8 @@ export interface AppearanceDeps {
   /** Start a motion on a layer; null when the reference cannot be resolved. */
   play(ref: MotionRef, layer: 'base' | 'transition'): { handle: MotionHandle; markers: string[] } | null;
   plan(ref: TransitionRef | undefined): TransitionPlan;
+  /** Frames on a clip's playback clock (its clip type decides). */
+  frameCount(clip: ClipDef): number;
 }
 
 export interface ShownLayer {
@@ -61,8 +63,6 @@ interface Flow {
   enterDone: boolean;
   plan: TransitionPlan;
 }
-
-const frameCount = (c: ClipDef) => (c.type === 'frames' ? (c.frames?.count ?? 1) : 1);
 
 function sameTarget(a: Target, b: Target): boolean {
   if (a.kind === 'state' && b.kind === 'state') return a.resolvedKey === b.resolvedKey && a.clipId === b.clipId;
@@ -105,7 +105,7 @@ export class Appearance {
     this.target = t;
 
     if (!this.shown) {
-      this.shown = { pb: new ClipPlayback(t.clipId, t.clip, now, frameCount(t.clip)), target: t };
+      this.shown = { pb: new ClipPlayback(t.clipId, t.clip, now, this.deps.frameCount(t.clip)), target: t };
       this.clipChange.emit(t.clipId);
       this.flow = this.newFlow(t, 'enter');
       this.flow.swapped = true;
@@ -237,7 +237,7 @@ export class Appearance {
       return;
     }
     if (crossfadeMs > 0) this.fade = { pb: cur.pb, start: now, ms: crossfadeMs, frame: 0 };
-    this.shown = { pb: new ClipPlayback(to.clipId, to.clip, now, frameCount(to.clip)), target: to };
+    this.shown = { pb: new ClipPlayback(to.clipId, to.clip, now, this.deps.frameCount(to.clip)), target: to };
     this.clipChange.emit(to.clipId);
   }
 

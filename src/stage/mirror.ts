@@ -1,17 +1,20 @@
 // A non-primary stage: renders what the kernel sends and reports pointer input back (docs/01 §2).
 
-import { AssetCache } from '../render/assets';
+import { addRenderBuiltins, createRenderer, mediaCacheFor } from '../render/builtin';
 import { Coords, type StageInfo } from '../render/coords';
-import { Dom2dRenderer } from '../render/dom2d';
+import type { RenderPet } from '../render/renderer';
 import type { Host, RemoteInput } from '../kernel/host';
+import { Registries } from '../kernel/registry';
 
 const KERNEL = 'stage-0';
 const HOVER_PAD = 6;
 
 export async function startMirror(host: Host, label: string, root: HTMLElement) {
   const coordsFor = (layout: StageInfo[]) => new Coords(layout, layout.find((s) => s.label === label) ?? layout[0]);
-  const assets = new AssetCache();
-  const renderer = new Dom2dRenderer(root, assets, coordsFor(await host.layout()));
+  const registries = new Registries();
+  addRenderBuiltins(registries);
+  const media = mediaCacheFor(registries);
+  const renderer = createRenderer(registries, root, media, coordsFor(await host.layout()));
   let cursor = { x: -1e6, y: -1e6 };
   let hover: string | null = null;
   let hit = false;
@@ -32,8 +35,8 @@ export async function startMirror(host: Host, label: string, root: HTMLElement) 
     }
   };
 
-  let last: Parameters<Dom2dRenderer['render']>[0] = [];
-  assets.onLoaded = () => renderer.render(last);
+  let last: RenderPet[] = [];
+  media.onLoaded = () => renderer.render(last);
   await host.on('frame', (pets) => {
     last = pets;
     renderer.render(pets);

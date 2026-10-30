@@ -55,7 +55,7 @@ export class Admin {
   private registryOwners(id: string) {
     const out: string[] = [];
     const r = this.d.registries;
-    for (const [name, reg] of [['connector', r.connectors], ['brain', r.brains], ['binding', r.bindingRules], ['motion', r.motionTypes], ['transition', r.transitionTypes]] as const) {
+    for (const [name, reg] of [['connector', r.connectors], ['brain', r.brains], ['binding', r.bindingRules], ['motion', r.motionTypes], ['transition', r.transitionTypes], ['clip', r.clipTypes], ['renderer', r.renderers]] as const) {
       for (const def of reg.list()) if (reg.ownerOf(def.id) === id) out.push(`${name}:${def.id}`);
     }
     return out;

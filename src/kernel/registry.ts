@@ -1,6 +1,8 @@
 // Extension-point registries (docs/01 §3). Built-in and plugin entries register the same way.
 
 import type { BindingRuleDef, BrainDef, ConnectorDef, Disposable, MotionType, TransitionTypeDef } from '../api/types';
+import type { AnyClipType } from '../render/clip-types';
+import type { RendererDef } from '../render/renderer';
 import { Emitter } from './emitter';
 import { toDisposable } from './scope';
 
@@ -43,4 +45,7 @@ export class Registries {
   readonly motionTypes = new Registry<MotionType>('motionTypes');
   readonly transitionTypes = new Registry<TransitionTypeDef>('transitionTypes');
   readonly bindingRules = new Registry<BindingRuleDef>('bindingRules');
+  /** Not in the plugin API yet (docs/06 §8): only the kernel registers, see render/builtin.ts. */
+  readonly clipTypes = new Registry<AnyClipType>('clipTypes');
+  readonly renderers = new Registry<RendererDef>('renderers');
 }

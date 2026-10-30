@@ -1,37 +1,17 @@
 // The v1 renderer (docs/01 §3 `renderers`: dom2d). Draws RenderPets into one stage and hit-tests them.
+// Each layer is one positioned element; its clip type fills it (clip-types.ts).
 // All sizes are in global units; each stage converts with its own scale, so mixed-DPI monitors agree.
 
 import type { Point } from '../api/types';
-import type { Transform } from '../kernel/motion/compose';
-import { alphaAt, type AssetCache } from './assets';
+import type { ClipMedia, Dom2dClipView } from './clip-types';
 import type { Coords } from './coords';
-
-export interface RenderLayer {
-  src: string;
-  columns: number;
-  count: number;
-  frame: number;
-  opacity: number;
-  anchor: Point;
-  /** Global px per image px. */
-  scale: number;
-}
-
-/** Serializable frame description of one pet (also sent to mirror stages). */
-export interface RenderPet {
-  id: string;
-  z: number;
-  /** Anchor position, global. */
-  x: number;
-  y: number;
-  transform: Transform;
-  layers: RenderLayer[];
-  /** Rescue mode: whole box is clickable and outlined. */
-  outline: boolean;
-}
+import type { RenderPet, Renderer, RendererDef, RendererEnv } from './renderer';
 
 interface LayerView {
   el: HTMLDivElement;
+  type: string;
+  view: Dom2dClipView | null;
+  media: ClipMedia | null;
   m: DOMMatrix | null;
   w: number;
   h: number;
@@ -46,12 +26,12 @@ interface PetView {
 
 const ALPHA_HIT = 32;
 
-export class Dom2dRenderer {
+export class Dom2dRenderer implements Renderer {
   private views = new Map<string, PetView>();
 
   constructor(
     private root: HTMLElement,
-    private assets: AssetCache,
+    private env: RendererEnv,
     public coords: Coords,
   ) {}
 
@@ -73,10 +53,15 @@ export class Dom2dRenderer {
     }
     for (const [id, v] of this.views) {
       if (!seen.has(id)) {
-        v.root.remove();
+        this.removeView(v);
         this.views.delete(id);
       }
     }
+  }
+
+  private removeView(v: PetView) {
+    for (const lv of v.layers) lv.view?.dispose?.();
+    v.root.remove();
   }
 
   private drawLayers(v: PetView, p: RenderPet) {
@@ -84,9 +69,13 @@ export class Dom2dRenderer {
       const el = document.createElement('div');
       el.className = 'clip';
       v.root.appendChild(el);
-      v.layers.push({ el, m: null, w: 0, h: 0, styleKey: '' });
+      v.layers.push({ el, type: '', view: null, media: null, m: null, w: 0, h: 0, styleKey: '' });
     }
-    while (v.layers.length > p.layers.length) v.layers.pop()!.el.remove();
+    while (v.layers.length > p.layers.length) {
+      const lv = v.layers.pop()!;
+      lv.view?.dispose?.();
+      lv.el.remove();
+    }
 
     const k = this.coords.cssPerGlobal;
     const at = this.coords.toLocal({ x: p.x, y: p.y });
@@ -94,10 +83,20 @@ export class Dom2dRenderer {
     const vw = innerWidth, vh = innerHeight;
     p.layers.forEach((l, i) => {
       const lv = v.layers[i];
-      const a = this.assets.get(l.src, l.columns, l.count);
+      if (lv.type !== l.type) {
+        lv.view?.dispose?.();
+        const def = this.env.clipTypes(l.type);
+        lv.view = def ? def.dom2d(lv.el) : null;
+        lv.type = l.type;
+        lv.media = null;
+        lv.styleKey = '';
+      }
+      const a = lv.view ? this.env.media.get(l) : undefined;
       if (!a) {
         lv.el.style.display = 'none';
         lv.m = null;
+        lv.media = null;
+        lv.styleKey = '';
         return;
       }
       const w = a.frameW * l.scale * k;
@@ -115,27 +114,23 @@ export class Dom2dRenderer {
       // Cull when the box is clearly off this stage.
       const r = Math.max(w, h) * Math.max(Math.abs(t.scaleX), Math.abs(t.scaleY), 1) * 1.5;
       const visible = at.x + r > 0 && at.x - r < vw && at.y + r > 0 && at.y - r < vh;
-      const col = l.frame % a.columns;
-      const row = Math.floor(l.frame / a.columns);
       const opacity = Math.max(0, Math.min(1, t.opacity * l.opacity));
-      const key = [visible, a.displayUrl, w, h, col, row, m.toString(), opacity, p.outline].join('|');
-      if (key === lv.styleKey) return;
+      const key = [visible, w, h, l.frame, m.toString(), opacity, p.outline].join('|');
+      if (key === lv.styleKey && a === lv.media) return;
       lv.styleKey = key;
+      lv.media = a;
       const s = lv.el.style;
       s.display = visible ? '' : 'none';
       if (!visible) return;
       s.width = `${w}px`;
       s.height = `${h}px`;
-      s.backgroundImage = `url("${a.displayUrl}")`;
-      s.backgroundSize = `${a.columns * w}px ${a.rows * h}px`;
-      s.backgroundPosition = `${-col * w}px ${-row * h}px`;
       s.transform = m.toString();
       s.opacity = String(opacity);
       s.outline = p.outline ? '2px dashed rgba(120, 110, 140, 0.8)' : '';
+      lv.view!.draw(a, l.frame, w, h);
     });
   }
 
-  /** Topmost pet under a stage-local CSS point. `padPx` widens the test (hysteresis while hovering). */
   hitTest(pt: Point, padPx = 0, prefer: string | null = null): string | null {
     const order = [...this.views.values()].sort((a, b) => b.last.z - a.last.z);
     for (const v of order) {
@@ -153,22 +148,26 @@ export class Dom2dRenderer {
     const i = v.layers.length - 1;
     const lv = v.layers[i];
     const l = v.last.layers[i];
-    if (!lv?.m || !l) return false;
-    const a = this.assets.get(l.src, l.columns, l.count);
-    if (!a) return false;
+    const a = lv?.media;
+    if (!lv?.m || !l || !a) return false;
     const inv = lv.m.inverse();
     const probes = pad > 0 ? [[0, 0], [pad, 0], [-pad, 0], [0, pad], [0, -pad], [pad, pad], [-pad, -pad], [pad, -pad], [-pad, pad]] : [[0, 0]];
     for (const [dx, dy] of probes) {
       const q = inv.transformPoint(new DOMPoint(pt.x + dx, pt.y + dy));
       if (q.x < 0 || q.y < 0 || q.x >= lv.w || q.y >= lv.h) continue;
       if (v.last.outline) return true;
-      if (alphaAt(a, l.frame, (q.x / lv.w) * a.frameW, (q.y / lv.h) * a.frameH) > ALPHA_HIT) return true;
+      if (a.alphaAt(l.frame, (q.x / lv.w) * a.frameW, (q.y / lv.h) * a.frameH) > ALPHA_HIT) return true;
     }
     return false;
   }
 
   clear() {
-    for (const v of this.views.values()) v.root.remove();
+    for (const v of this.views.values()) this.removeView(v);
     this.views.clear();
   }
 }
+
+export const dom2d: RendererDef = {
+  id: 'dom2d',
+  create: (root, env, coords) => new Dom2dRenderer(root, env, coords),
+};

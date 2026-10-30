@@ -56,12 +56,15 @@
 | `connectors` | agent 接入（把 hook 变成信号） | claude-code、codex、zcode、dsh |
 | `brains` | 大脑（信号 → 状态键） | default（稳定化规则） |
 | `motionTypes` | 动作类型 | keyframes、spring、noise、sine |
-| `clipTypes` | 片段类型（播放器） | still、frames、video |
+| `clipTypes` | 片段类型（帧数、加载、尺寸与透明度、怎么画） | still、frames（video 尚未实现） |
 | `transitionTypes` | 片段之间的过渡方式 | cut、crossfade、onMarker、afterLoop |
 | `bindingRules` | 会话 → 宠物 的绑定规则 | single、perSession |
 | `renderers` | 渲染器（v1 只有一个） | dom2d |
 
-`clipTypes` 和 `renderers` 两张注册表**还没有实现**：目前片段类型固定在播放器里（`still` / `frames`），渲染器写死在 `src/render/dom2d.ts`。加进来时按 06 §8 的「只增不改」处理，接口形状见上表。
+`clipTypes` 和 `renderers` 两张注册表（2026-10-30）**目前只有内核能登记**，还不在插件 API 里（06 §8）。原因：副屏舞台和编辑器预览不跑插件，插件登记的片段类型在那里没有代码可用；要开放给插件，得先定「插件的绘制代码怎么也加载到副屏和预览里」。内置的 `still` / `frames` 和 `dom2d` 由内核、每个副屏、编辑器预览各自登记（`src/render/builtin.ts`，所有者 `kernel`）。
+
+- **片段类型**（`src/render/clip-types.ts`）：`frameCount(clip)` 给播放时钟（分段、标记、循环都按帧号算，与类型无关）；`layout(clip)` 是加载和绘制需要的可序列化参数（随渲染指令发给副屏）；`load(url, layout)` 返回加载好的画面，提供单帧尺寸、`alphaAt`（命中检测）、`opaqueBox`（碰撞）；`dom2d(el)` 负责往 dom2d 的一个图层元素里画内容（元素的位置、变换、透明度由渲染器管）。宠物包里类型未登记的片段：加载时记一条警告，不显示。
+- **渲染器**（`src/render/renderer.ts`）：`render(pets)`、`hitTest(pt)`、`clear()`；目前固定用 `dom2d`，以后在设置里选（06 §5 L4）。
 
 ## 4. 每只宠物的管线
 

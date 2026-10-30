@@ -18,6 +18,7 @@ function harness(motions: Record<string, { type: string; [k: string]: unknown }>
       started.push(`${layer}:${typeof ref === 'string' ? ref : type}`);
       return { handle: stack.add(source, { layer }, 'pack', params), markers: Object.values(source.markers ?? {}) };
     },
+    frameCount: (c) => (c.type === 'frames' ? (c.frames?.count ?? 1) : 1),
     plan: (ref) => ({ crossfadeMs: typeof ref === 'string' ? (plans[ref] ?? 0) : 0, waitFor: ref === 'afterLoop' ? 'loop-end' : undefined }),
   };
   const ap = new Appearance(deps);

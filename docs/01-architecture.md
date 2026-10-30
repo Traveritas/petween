@@ -53,13 +53,15 @@
 
 | 注册表 | 登记什么 | 内置实现 |
 |---|---|---|
-| `connectors` | agent 接入（把 hook 变成信号） | claude-code、codex |
+| `connectors` | agent 接入（把 hook 变成信号） | claude-code、codex、zcode、dsh |
 | `brains` | 大脑（信号 → 状态键） | default（稳定化规则） |
 | `motionTypes` | 动作类型 | keyframes、spring、noise、sine |
 | `clipTypes` | 片段类型（播放器） | still、frames、video |
 | `transitionTypes` | 片段之间的过渡方式 | cut、crossfade、onMarker、afterLoop |
 | `bindingRules` | 会话 → 宠物 的绑定规则 | single、perSession |
 | `renderers` | 渲染器（v1 只有一个） | dom2d |
+
+`clipTypes` 和 `renderers` 两张注册表**还没有实现**：目前片段类型固定在播放器里（`still` / `frames`），渲染器写死在 `src/render/dom2d.ts`。加进来时按 06 §8 的「只增不改」处理，接口形状见上表。
 
 ## 4. 每只宠物的管线
 

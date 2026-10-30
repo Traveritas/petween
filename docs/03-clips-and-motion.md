@@ -17,7 +17,7 @@
 ```ts
 interface Clip {
   id: string
-  type: 'still' | 'frames' | 'video' | string   // string：插件注册的片段类型
+  type: 'still' | 'frames' | string   // string：插件注册的片段类型（注册表尚未实现，见 §2）
   source: string            // 宠物包内的相对路径
   fps?: number              // frames / video
   /** frames 的精灵图布局；单帧尺寸 = 图宽 / columns。columns 缺省 = count（单行） */
@@ -40,7 +40,9 @@ AI 生成的素材格式五花八门，导入时统一处理：
 | PNG / JPG / WebP 静态图 | 原样（JPG 无透明，提示用户） | `still` |
 | GIF / APNG / 动态 WebP | 解码为帧 | `frames`（WebP spritesheet + 元数据） |
 | 短视频（≤ 10s） | 解码为帧（可选降帧率） | `frames` |
-| 长视频 | 保留，播放时用 `<video>` | `video`（带透明需 WebM VP9 alpha；macOS 需另备 HEVC alpha，v1 只保证 Windows） |
+| 长视频（> 10s） | 只保留前 10s，同样解码为帧 | `frames` |
+
+`video` 片段类型**还没有实现**：导入管线把所有视频都转成帧序列，播放器和渲染器也不认识 `video`。保留 `<video>` 能省内存，代价是拿不到命中掩码、也不能跳段 / 对齐标记；以后要做，得先加 `clipTypes` 注册表（01 §3）。所以目前 `Clip.type` 实际只有 `still` / `frames` 两种。
 
 转成帧序列的理由：所有素材都能**暂停、调速、跳段、对齐标记点**，透明通道跨平台一致，命中掩码可以从透明通道直接算出来。代价是内存，所以对时长和分辨率设上限（默认长边 ≤ 512px、≤ 10s）。
 
@@ -163,5 +165,5 @@ B 的循环动作（base 层）                └─────────→
 ## 6. 性能约束
 
 - 动作在渲染循环里求值，单个 `evaluate` 应在 0.1ms 内完成。内核统计每个动作的耗时，**连续 30 帧超过 1ms** 的动作会被停用并记日志（浏览器计时精度约 0.1ms，所以硬阈值放宽）；抛异常的动作立即停用。
-- 舞台不可见（全屏游戏、锁屏）时暂停渲染循环，所有动作的时间冻结。
+- 舞台不可见（全屏游戏、锁屏）时暂停渲染循环，所有动作的时间冻结。**尚未实现**：WebView 在前台窗口盖住时不会触发 `visibilitychange`，需要在宿主侧检测遮挡；目前只能靠「什么都不动时停止渲染循环」省电。
 - `reducedMotion` 为真时，内置动作类型自动降低强度或静止（sine / noise / 带 repeat 的 keyframes 静止，其余 keyframes / spring 降到 30%）；插件动作应自行遵守。

@@ -19,11 +19,11 @@ export type HookKind =
 
 // ---------- tool classification (real names are kept; only `kind` is coarse) ----------
 
-const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'write_file', 'ApplyPatch']);
-const COMMAND = new Set(['Bash', 'PowerShell', 'shell', 'local_shell', 'shell_command', 'exec_command']);
-const READ = new Set(['Read', 'read_file', 'view', 'NotebookRead']);
-const SEARCH = new Set(['Grep', 'Glob', 'LS', 'grep', 'search', 'list_dir', 'ToolSearch']);
-const WEB = new Set(['WebFetch', 'WebSearch', 'web_search', 'fetch']);
+const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'write_file', 'ApplyPatch', 'write', 'edit', 'edit_file', 'str_replace_editor']);
+const COMMAND = new Set(['Bash', 'PowerShell', 'shell', 'local_shell', 'shell_command', 'exec_command', 'pwsh', 'bash']);
+const READ = new Set(['Read', 'read_file', 'view', 'NotebookRead', 'read', 'read_image']);
+const SEARCH = new Set(['Grep', 'Glob', 'LS', 'grep', 'search', 'list_dir', 'ToolSearch', 'glob']);
+const WEB = new Set(['WebFetch', 'WebSearch', 'web_search', 'web_fetch', 'fetch']);
 
 export function toolKind(name: string): NonNullable<AgentEvent['tool']>['kind'] {
   if (EDIT.has(name)) return 'edit';

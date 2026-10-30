@@ -26,15 +26,15 @@
 ## v1 范围
 
 - 平台：**Windows 优先**；macOS 次之（需开启私有 API 以支持透明窗口，不上 App Store）；Linux 尽力而为。
-- Agent：Claude Code、Codex 两个内置接入插件；接入层对第三方开放。
+- Agent：Claude Code、Codex、zcode、DeepSeek Harness（DSH）四个内置接入插件；接入层对第三方开放。
 - 美术：静态图、GIF、短视频（导入时统一转为帧序列）。
 - 动作：K 帧、弹簧、噪声、正弦四种内置动作类型；插件可注册新类型。
 - 多宠物：数据模型和 API 全面支持；UI 提供「一只管全部」「每个会话一只」两种绑定规则。
-- 内置插件：Claude Code 接入、Codex 接入、默认大脑、气泡、漫游（roamer）、物理（拖拽/抛掷）、统计 HUD。
+- 内置插件：Claude Code / Codex / zcode / DSH 接入、默认大脑、气泡、物理（拖拽/抛掷）、统计 HUD、粒子。漫游（roamer）暂缓，作者以后重新设计（09）。
 
 ## 明确不做（v1）
 
-- Live2D / Spine / 3D 渲染器。接口（L4 渲染器槽）留着，不实现。
+- Live2D / Spine / 3D 渲染器。接口（L4 渲染器槽）留着，不实现（渲染器注册表本身也还没做，见 01 §3）。
 - 插件沙盒、插件市场、在线账号。
 - 内置 Node 运行时。需要 Node 的插件自带可执行文件（L4 sidecar）。
 - 导入时自动抠图（以后可做成插件）。

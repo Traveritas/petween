@@ -14,6 +14,8 @@ my-cat/                     （导出时打包为 my-cat.petpack = zip）
 └─ thumbnail.webp
 ```
 
+`source/` 和 `thumbnail.webp` 目前**都不会被写入**：导入管线只产出 `clips/` 里的精灵图，`petween --pack export` 也**只打包 `pet.json` 和片段用到的文件**（理由见 §7「纯数据」）。两者都是可选的扩展位，加进来时按「加可选字段不递增 format」处理。
+
 ## 2. pet.json
 
 ```jsonc

@@ -38,13 +38,15 @@ plugins/roamer/
       { "key": "roamer.doze",  "label": "打瞌睡" }
     ],
     "motionTypes": ["roamer:wobble"],
-    "channels": ["state", "position", "motion"],   // 会写哪些通道（检查器与开关用）
+    "channels": ["state", "position", "motion"],   // 会写哪些通道（检查器与开关用；目前只是声明）
     "sidecar": { "command": "bin/helper.exe" }     // L4，可选
   }
 }
 ```
 
 `contributes.stateKeys` 让宠物包编辑器在插件**没启动**时也能列出它的状态键。
+
+`contributes.channels` / `motionTypes` 现在**只是声明**，还没有消费方：通道检查器直接读实时数据，按通道的写权开关也还没做（02 §2）。声明它们没有坏处，以后接上时不用改插件。
 
 ## 3. 生命周期
 
@@ -86,7 +88,7 @@ interface PluginContext {
     connector(def: ConnectorDef): Disposable
     brain(def: BrainDef): Disposable
     motionType(def: MotionType): Disposable
-    clipType(def: ClipTypeDef): Disposable
+    clipType(def: ClipTypeDef): Disposable        // 尚未实现，见 §8
     transitionType(def: TransitionTypeDef): Disposable
     bindingRule(def: BindingRuleDef): Disposable
   }
@@ -94,7 +96,7 @@ interface PluginContext {
   // —— 舞台与界面 ——
   stage: {
     addLayer(opts: { z: number; hitTest?: (x: number, y: number) => boolean }): StageLayer  // 拿到一个 DOM 容器
-    openWindow(opts: WindowOptions): PluginWindow                                          // 独立窗口
+    openWindow(opts: WindowOptions): PluginWindow                                          // 独立窗口，尚未实现，见 §8
   }
   tray: { addItem(item: TrayItem): Disposable }
 
@@ -159,6 +161,7 @@ interface PetHandle {
 | `claude-code` | L4（connector） | Claude Code hook 接入（设置 `configDirs` 可装进多个配置目录） |
 | `codex` | L4（connector） | Codex hook 接入 |
 | `zcode` | L4（connector） | zcode hook 接入 |
+| `dsh` | L4（connector） | DeepSeek Harness 接入（`$DSH_HOME` 桥接插件 + home 补丁；需重启 DSH，见 05 §1.2） |
 | `brain-default` | L4（brain） | 稳定化规则 + 状态键派生（05 §4） |
 | `bubble` | L3 | 气泡渲染（`bubble` 通道的消费者）：v0 的排布（每会话一列、回复在左、完成在下、列位置记忆）和 7 种外观、出入场动画，按气泡类型分别设置 |
 | `physics` | L2 | 拖拽、抛掷、重力、撞墙回弹、贴地滑行（撞墙/滑行表情走 `physics.hit` / `physics.slide` 状态键） |

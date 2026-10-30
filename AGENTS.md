@@ -4,7 +4,16 @@
 
 ## 当前状态
 
-M0、M1（含气泡补完）、M2、M3a 已完成，待作者实测的见 [docs/09](docs/09-roadmap.md)；roamer 暂缓（作者以后重做）。下一步 M3b 动作编辑。宠物包命令行与给 agent 的指南见 [docs/10](docs/10-agent-guide.md)。
+M0、M1、M1 补完（气泡）、M2 已完成；M3a 宠物包编辑器、M3b 动作编辑已于 2026-10-27 由作者验收。Claude Code / zcode 的真实 hook 已验收，**Codex 的还没**；多显示器暂时无法验收（作者没有第二块屏）。另加 `dsh` connector（2026-10-24，待 DSH 真机验收）。roamer 暂缓（作者以后重做）。下一个里程碑待作者定，见 [docs/09](docs/09-roadmap.md)。宠物包命令行与给 agent 的指南见 [docs/10](docs/10-agent-guide.md)。
+
+构建注意：本机没有 MSVC 的 `link.exe`，Rust 走 `x86_64-pc-windows-gnu`。打安装包要把 `D:\mingw64\bin` 放进 PATH，并把 `CARGO_TARGET_DIR` 指到**不含空格**的目录（路径含空格会让 `windres` 失败），例如：
+
+```powershell
+$env:PATH = "D:\mingw64\bin;$env:USERPROFILE\.cargo\bin;" + $env:PATH
+$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
+$env:CARGO_TARGET_DIR = "C:\petween-build"
+npm run tauri build -- --target x86_64-pc-windows-gnu
+```
 
 ## 先读文档
 

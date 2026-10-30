@@ -6,6 +6,7 @@ import brainDefault, { manifest as brainDefaultManifest } from './brain-default'
 import claudeCode, { manifest as claudeCodeManifest } from './claude-code';
 import codex, { manifest as codexManifest } from './codex';
 import core, { manifest as coreManifest } from './core';
+import dsh, { manifest as dshManifest } from './dsh';
 import particles, { manifest as particlesManifest } from './particles';
 import perSession, { manifest as perSessionManifest } from './per-session';
 import physics, { manifest as physicsManifest } from './physics';
@@ -18,6 +19,7 @@ export const BUILTIN_PLUGINS: { manifest: PluginManifest; module: PluginModule }
   { manifest: claudeCodeManifest, module: claudeCode },
   { manifest: codexManifest, module: codex },
   { manifest: zcodeManifest, module: zcode },
+  { manifest: dshManifest, module: dsh },
   { manifest: perSessionManifest, module: perSession },
   { manifest: physicsManifest, module: physics },
   { manifest: bubbleManifest, module: bubble },

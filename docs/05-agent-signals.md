@@ -25,6 +25,19 @@ AgentEvent（事件总线主题 agent.event）
 
 connector 启动时检查已安装的 hook 是否指向当前 exe，不是就自动重写（程序搬家或升级后不会失联）。
 
+### 1.2 DSH：宿主插件当转发器
+
+DSH（DeepSeek Harness）没有可执行 hook 这种扩展点，它的扩展方式是 Cordis 宿主插件。`dsh` connector 因此换一个等价的转发器：
+
+- 接入时把 `petween-bridge.mjs` 写到 `$DSH_HOME`，并在 home 级 `$DSH_HOME/cordis.patch.yml` 里追加一条 `insert` 行（`name: './petween-bridge.mjs'`，按补丁文件旁边的路径解析）。home 补丁对该机器上所有 DSH profile 生效，桌面端也读。
+- 桥接插件只监听 DSH 的 `session/event` / `session/disposed`，把需要的字段（事件名、turn/step、工具名与参数、approval、turn 结束原因）压成一个小 JSON，POST 到 `127.0.0.1:<hook-port>/hook/dsh`。端口从 `<app data>/hook-port` 读，和 `petween.exe --hook` 读的是同一个文件。
+- 事件语义（tool kind、waiting、turn-end outcome、会话开始/结束）全部在 `dsh` connector 里解释；桥接插件不懂宠物。
+- 断开时只删桥接文件和补丁里的 petween 段；如果补丁只剩注释，写成 `[]`（空文件会让 DSH 启动失败）。正在运行的 DSH 里已加载的旧桥接会发现自己被删除而停止发送，不用立刻重启。
+- 补丁在 DSH 启动时组合，所以接入/更新后要重启 DSH（DSH 自己开了补丁热重载时可能不用）。
+- 子会话（subagent）不转发，避免每个子代理都变成一只宠物。
+
+DSH 的 home 补丁是用户层，不写 profile 的 `package.json` / `cordis.patch.yml`；这样不会和 DSH 的插件管理器抢同一份文件。
+
 ## 2. 归一化事件
 
 ```ts
